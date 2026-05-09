@@ -1,0 +1,84 @@
+"""Smoke tests for /health endpoint and prompt registry."""
+
+from __future__ import annotations
+
+from collections.abc import Generator
+from unittest.mock import MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+def _mock_engine_connect() -> MagicMock:
+    """Context manager that simulates a successful DB connection."""
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.execute = MagicMock(return_value=None)
+    mock_engine = MagicMock()
+    mock_engine.connect = MagicMock(return_value=mock_conn)
+    return mock_engine
+
+
+@pytest.fixture
+def client_with_mocks() -> Generator[TestClient, None, None]:
+    """TestClient with all external dependencies mocked."""
+    from app.main import app
+
+    mock_engine = _mock_engine_connect()
+
+    # Mock qdrant + ollama HTTP calls
+    async def mock_get(url: str, **_kwargs: object) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = 200
+        return resp
+
+    with (
+        patch("app.main.engine", mock_engine),
+        patch("httpx.AsyncClient.get", mock_get),
+    ):
+        yield TestClient(app)
+
+
+def test_health_returns_200(client_with_mocks: TestClient) -> None:
+    r = client_with_mocks.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert "status" in body
+    assert "checks" in body
+
+
+def test_prompt_registry_get_latest() -> None:
+    from app.prompts.registry import get_prompt
+
+    pt = get_prompt("query_rewriter")
+    assert pt.name == "query_rewriter"
+    assert "{query}" in pt.template
+
+
+def test_prompt_registry_get_by_version() -> None:
+    from app.prompts.registry import get_prompt
+
+    pt = get_prompt("document_grader", "v1")
+    assert pt.version == "v1"
+
+
+def test_prompt_registry_missing_raises() -> None:
+    from app.prompts.registry import get_prompt
+
+    with pytest.raises(KeyError):
+        get_prompt("nonexistent_prompt")
+
+
+def test_guard_result_model() -> None:
+    from app.models import GuardResult
+
+    g = GuardResult(allowed=True, reason="ok")
+    assert g.allowed is True
+
+
+def test_router_decision_model() -> None:
+    from app.models import RouterDecision
+
+    rd = RouterDecision(collection="docs", confidence=0.95, reason="exact match")
+    assert rd.collection == "docs"

@@ -1,0 +1,8 @@
+services:
+  app:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./app:/app/app
+      - ./data/raw:/app/data/raw
+      - ./data/processed:/app/data/processed
+      - ./data/index_config:/app/data/index_config

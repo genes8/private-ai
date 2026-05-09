@@ -1,0 +1,57 @@
+from datetime import UTC
+
+
+def test_private_ai_state_defaults_are_isolated() -> None:
+    from app.models import Message, PrivateAIState
+
+    first = PrivateAIState(session_id="s1", user_id="u1")
+    second = PrivateAIState(session_id="s2", user_id="u2")
+
+    first.messages.append(Message(role="user", content="hello"))
+    first.errors.append("example")
+
+    assert len(first.messages) == 1
+    assert second.messages == []
+    assert second.errors == []
+    assert first.messages[0].created_at.tzinfo == UTC
+
+
+def test_database_metadata_contains_phase_one_tables() -> None:
+    import app.db.models  # noqa: F401
+    from app.db import Base
+
+    expected_tables = {
+        "users",
+        "sessions",
+        "documents",
+        "document_chunks",
+        "semantic_cache",
+        "audit_logs",
+        "agent_runs",
+        "query_feedback",
+        "ingestion_jobs",
+        "human_review_queue",
+    }
+
+    assert expected_tables.issubset(set(Base.metadata.tables))
+
+
+def test_document_and_semantic_cache_columns_match_plan() -> None:
+    from app.db.models import Document, DocumentChunk, IngestionStatus, SemanticCache
+
+    document_columns = set(Document.__table__.columns.keys())
+    chunk_columns = set(DocumentChunk.__table__.columns.keys())
+    cache_columns = set(SemanticCache.__table__.columns.keys())
+
+    assert {"version", "active_version"}.issubset(document_columns)
+    assert "chunk_version" in chunk_columns
+    assert {"source_document_ids", "source_chunk_ids"}.issubset(cache_columns)
+    assert IngestionStatus.needs_review.value == "needs_review"
+
+
+def test_settings_parse_allowed_origins() -> None:
+    from app.config import Settings
+
+    settings = Settings(allowed_origins="http://localhost:5173, https://example.com")
+
+    assert settings.allowed_origins_list == ["http://localhost:5173", "https://example.com"]
