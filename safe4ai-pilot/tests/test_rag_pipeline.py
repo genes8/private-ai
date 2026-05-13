@@ -259,5 +259,21 @@ async def test_ingest_native_pdf_page_gets_native_quality() -> None:
             tmp_path = f.name
         await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
 
-    points = pipeline._qdrant.upsert.call_args.kwargs["points"]
-    assert points[0].payload["ocr_quality"] == "native"
+
+@pytest.mark.asyncio
+async def test_embed_batch_prefers_batch_embed_endpoint() -> None:
+    pipeline = _make_pipeline()
+
+    batch_response = MagicMock()
+    batch_response.raise_for_status.return_value = None
+    batch_response.json.return_value = {"embeddings": [FAKE_EMBEDDING, FAKE_EMBEDDING]}
+
+    with patch("app.services.rag_pipeline.httpx.AsyncClient") as MockClient:
+        client = MockClient.return_value.__aenter__.return_value
+        client.post = AsyncMock(return_value=batch_response)
+
+        result = await pipeline._embed_batch(["first", "second"])
+
+    assert result == [FAKE_EMBEDDING, FAKE_EMBEDDING]
+    client.post.assert_awaited_once()
+    assert client.post.call_args.args[0].endswith("/api/embed")

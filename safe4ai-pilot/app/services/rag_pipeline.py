@@ -214,20 +214,34 @@ class RagPipeline:
         async with httpx.AsyncClient() as client:
             for i in range(0, len(texts), _EMBED_BATCH):
                 batch = texts[i : i + _EMBED_BATCH]
-                responses = await asyncio.gather(
-                    *[
-                        client.post(
-                            f"{self._ollama_url}/api/embeddings",
-                            json={"model": self._embedding_model, "prompt": text},
-                            timeout=60.0,
-                        )
-                        for text in batch
-                    ]
-                )
-                for resp in responses:
+                try:
+                    resp = await client.post(
+                        f"{self._ollama_url}/api/embed",
+                        json={"model": self._embedding_model, "input": batch},
+                        timeout=120.0,
+                    )
                     resp.raise_for_status()
                     body: dict[str, Any] = resp.json()
-                    results.append(body["embedding"])
+                    embeddings = body.get("embeddings")
+                    if not isinstance(embeddings, list):
+                        raise ValueError("Ollama embed response did not include an embeddings list")
+                    results.extend([[float(value) for value in embedding] for embedding in embeddings])
+                    continue
+                except (httpx.HTTPStatusError, ValueError, TypeError):
+                    responses = await asyncio.gather(
+                        *[
+                            client.post(
+                                f"{self._ollama_url}/api/embeddings",
+                                json={"model": self._embedding_model, "prompt": text},
+                                timeout=60.0,
+                            )
+                            for text in batch
+                        ]
+                    )
+                    for fallback_resp in responses:
+                        fallback_resp.raise_for_status()
+                        fallback_body: dict[str, Any] = fallback_resp.json()
+                        results.append(fallback_body["embedding"])
         return results
 
     async def _ocr_page(self, image_path: str) -> tuple[str, str]:

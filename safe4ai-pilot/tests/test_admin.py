@@ -389,13 +389,26 @@ class TestUserManagement:
         admin = _make_admin_user()
         target = _make_pilot_user("user-99")
         db = _mock_db_with_admin(admin)
-        db.get.side_effect = lambda model, pk: admin if pk == "admin-1" else target
+        deleted_user = _make_pilot_user("deleted-user")
+        deleted_user.email = "deleted@redacted.local"
+
+        def _get(model: Any, pk: str) -> Any:
+            if pk == "admin-1":
+                return admin
+            if pk == "deleted-user":
+                return deleted_user
+            return target
+
+        db.get.side_effect = _get
 
         with patch("pathlib.Path.mkdir"):
             client = _make_test_client(db, admin)
             resp = client.delete("/admin/users/user-99")
 
         assert resp.status_code == 204
+        assert target.is_active is False
+        assert str(target.email).startswith("deactivated+user-99@redacted.local")
+        db.commit.assert_called()
         from app.main import app
         app.dependency_overrides.clear()
 
@@ -438,6 +451,21 @@ class TestUserManagement:
             resp = client.delete("/admin/users/nonexistent-user")
 
         assert resp.status_code == 404
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_cannot_deactivate_admin_user(self) -> None:
+        admin = _make_admin_user()
+        other_admin = _make_admin_user("admin-2")
+        db = _mock_db_with_admin(admin)
+        db.get.side_effect = lambda model, pk: admin if pk == "admin-1" else other_admin
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.delete("/admin/users/admin-2")
+
+        assert resp.status_code == 400
+        assert "admin users" in resp.json()["detail"]
         from app.main import app
         app.dependency_overrides.clear()
 

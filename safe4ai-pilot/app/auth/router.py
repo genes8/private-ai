@@ -25,7 +25,7 @@ limiter: Limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_LOCK_THRESHOLD = 10
+_LOCK_THRESHOLD = 20
 _LOCK_MINUTES = 15
 _CSRF_COOKIE_NAME = "csrf_token"
 _MIN_PASSWORD_LENGTH = 12

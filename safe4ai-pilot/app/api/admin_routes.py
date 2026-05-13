@@ -31,7 +31,9 @@ from app.db.models import (
     IngestionJob,
     IngestionJobStatus,
     IngestionStatus,
+    QueryFeedback,
     ReviewStatus,
+    Session as DbSession,
     SemanticCache,
     User,
     UserRole,
@@ -51,6 +53,8 @@ _QDRANT_COLLECTION = "documents"
 _UPLOAD_READ_CHUNK_SIZE = 1024 * 1024
 _MAX_BACKGROUND_INGESTION_TASKS = 4
 _INGESTION_TASK_SEMAPHORE = asyncio.Semaphore(_MAX_BACKGROUND_INGESTION_TASKS)
+_DELETED_USER_ID = "deleted-user"
+_DELETED_USER_EMAIL = "deleted@redacted.local"
 
 
 # ---------------------------------------------------------------------------
@@ -410,8 +414,41 @@ def deactivate_user(
         raise HTTPException(status_code=404, detail="User not found")
     if user.role == UserRole.admin:
         raise HTTPException(status_code=400, detail="Cannot deactivate admin users")
+    deleted_user = _ensure_deleted_user(db)
+    db.query(Document).filter(Document.uploaded_by == user_id).update(
+        {Document.uploaded_by: deleted_user.id},
+        synchronize_session=False,
+    )
+    db.query(DbSession).filter(DbSession.user_id == user_id).delete()
+    db.query(QueryFeedback).filter(QueryFeedback.user_id == user_id).delete()
+    db.query(HumanReviewQueue).filter(HumanReviewQueue.user_id == user_id).delete()
+    db.query(AuditLog).filter(AuditLog.user_id == user_id).update(
+        {AuditLog.user_id: None},
+        synchronize_session=False,
+    )
     user.is_active = False
+    user.email = f"deactivated+{user.id}@redacted.local"
+    user.password_hash = hash_password(secrets.token_urlsafe(24))
+    user.failed_login_count = 0
+    user.locked_until = None
     db.commit()
+
+
+def _ensure_deleted_user(db: Session) -> User:
+    deleted_user = db.get(User, _DELETED_USER_ID)
+    if deleted_user is not None:
+        return deleted_user
+
+    deleted_user = User(
+        id=_DELETED_USER_ID,
+        email=_DELETED_USER_EMAIL,
+        password_hash=hash_password(secrets.token_urlsafe(24)),
+        role=UserRole.pilot_user,
+        is_active=False,
+    )
+    db.add(deleted_user)
+    db.flush()
+    return deleted_user
 
 
 # ---------------------------------------------------------------------------

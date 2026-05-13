@@ -63,7 +63,7 @@ docker compose up -d
 - Token expiry: **8 hours** (`JWT_EXPIRY_HOURS`)
 - JWT signed with `SECRET_KEY` (HS256 algorithm)
 - Rate-limited: **5 login attempts per minute** per IP
-- Brute-force lockout: **10 failed attempts** → account locked **15 minutes**
+- Brute-force lockout: **20 failed attempts** → account locked **15 minutes**
 - Minimum password length: **12 characters** (enforced server-side)
 
 ### Seed account
@@ -149,7 +149,7 @@ All admin pages share:
 6. **If invalid**: Sees red error banner "Invalid credentials. Try again."
 7. **Edge cases**:
    - Empty fields show inline validation: "Enter a valid email" / "Password is required"
-   - Rate-limited (5/min) → FastAPI 429 "Too Many Requests"
+   - Rate-limited (10/min) → FastAPI 429 "Too Many Requests"
    - Brute-force lockout → 429 "Account temporarily locked"
 
 ### Journey 2: Chatting (Happy Path)

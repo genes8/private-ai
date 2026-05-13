@@ -22,3 +22,4 @@ data/raw/
 data/processed/
 evaluation/eval_results/
 HF_HOME/
+node_modules/

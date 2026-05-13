@@ -29,6 +29,7 @@ FAKE_GENERATE_RESPONSE = {
     "done": True,
 }
 FAKE_EMBED_RESPONSE = {"embedding": FAKE_EMBEDDING}
+FAKE_BATCH_EMBED_RESPONSE = {"embeddings": [FAKE_EMBEDDING]}
 FAKE_TAGS_RESPONSE = {"models": [{"name": "qwen3.5:9b"}, {"name": "nomic-embed-text"}]}
 
 
@@ -37,6 +38,19 @@ class MockOllamaTransport(httpx.BaseTransport):
         path = request.url.path
         if path == "/api/generate":
             return httpx.Response(200, json=FAKE_GENERATE_RESPONSE)
+        if path == "/api/embed":
+            payload = {}
+            if request.content:
+                payload = request.read().decode()
+                try:
+                    body = __import__("json").loads(payload)
+                    inputs = body.get("input", [])
+                except Exception:
+                    inputs = []
+            else:
+                inputs = []
+            count = len(inputs) if isinstance(inputs, list) else 1
+            return httpx.Response(200, json={"embeddings": [FAKE_EMBEDDING for _ in range(count)]})
         if path == "/api/embeddings":
             return httpx.Response(200, json=FAKE_EMBED_RESPONSE)
         if path == "/api/tags":

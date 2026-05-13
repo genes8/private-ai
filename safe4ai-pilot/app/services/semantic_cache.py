@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 
 import httpx
-from sqlalchemy import text
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from app.db.models import SemanticCache as SemanticCacheModel
@@ -40,26 +40,28 @@ class SemanticCache:
 
     async def lookup(self, query: str) -> dict[str, Any] | None:
         embedding = await self._embed(query)
-        embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+        distance = SemanticCacheModel.query_embedding.cosine_distance(embedding)
+        stmt = (
+            select(
+                SemanticCacheModel.id,
+                SemanticCacheModel.response_json,
+                SemanticCacheModel.citations_json,
+            )
+            .where((1 - distance) >= self._threshold)
+            .order_by(distance)
+            .limit(1)
+        )
 
-        row = self._db.execute(
-            text(
-                "SELECT id, response_json, citations_json "
-                "FROM semantic_cache "
-                "WHERE 1 - (query_embedding <=> CAST(:embedding AS vector)) >= :threshold "
-                "ORDER BY query_embedding <=> CAST(:embedding AS vector) "
-                "LIMIT 1"
-            ),
-            {"embedding": embedding_str, "threshold": self._threshold},
-        ).fetchone()
+        row = self._db.execute(stmt).fetchone()
 
         if row is None:
             return None
 
         # Increment hit count
         self._db.execute(
-            text("UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE id = :id"),
-            {"id": row[0]},
+            update(SemanticCacheModel)
+            .where(SemanticCacheModel.id == row[0])
+            .values(hit_count=SemanticCacheModel.hit_count + 1)
         )
         self._db.commit()
 

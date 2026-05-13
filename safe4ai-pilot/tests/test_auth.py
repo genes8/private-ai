@@ -123,7 +123,7 @@ def test_login_account_locked(test_client: TestClient) -> None:
     locked_until = datetime.now(UTC) + timedelta(minutes=10)
     user = _make_user(
         password_hash=hashed,
-        failed_login_count=10,
+        failed_login_count=20,
         locked_until=locked_until,
     )
     db = _mock_db_with_user(user)

@@ -94,7 +94,7 @@ async def test_invalidate_by_document() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lookup_uses_explicit_vector_cast() -> None:
+async def test_lookup_uses_vector_distance_expression() -> None:
     db = MagicMock()
     db.execute.return_value.fetchone.return_value = None
     cache = _make_cache(db=db)
@@ -102,5 +102,7 @@ async def test_lookup_uses_explicit_vector_cast() -> None:
     with patch.object(cache, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)):
         await cache.lookup("what is X?")
 
-    sql = str(db.execute.call_args[0][0])
-    assert "CAST(:embedding AS vector)" in sql
+    stmt = db.execute.call_args[0][0]
+    sql = str(stmt)
+    assert "semantic_cache.query_embedding" in sql
+    assert "<=>" in sql
