@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import numpy as np
+import structlog
 from sentence_transformers import CrossEncoder
 
 from app.models import RankedChunk, RetrievedChunk
 
 _MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
+logger = structlog.get_logger(__name__)
+
 
 class Reranker:
-    def __init__(self) -> None:
-        self._model: CrossEncoder = CrossEncoder(_MODEL_NAME)
+    def __init__(self, model_name: str = _MODEL_NAME, enabled: bool = True) -> None:
+        self._enabled = enabled
+        self._model: CrossEncoder | None = None
+        if enabled:
+            try:
+                self._model = CrossEncoder(model_name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reranker_model_load_failed", model_name=model_name, error=str(exc))
+                self._enabled = False
 
     def rerank(
         self,
@@ -20,6 +30,10 @@ class Reranker:
     ) -> list[RankedChunk]:
         if not chunks:
             return []
+
+        if not self._enabled or self._model is None:
+            ranked = sorted(chunks, key=lambda chunk: chunk.score, reverse=True)[:top_n]
+            return [RankedChunk(**chunk.model_dump(), rerank_score=chunk.score) for chunk in ranked]
 
         pairs = [(query, chunk.content) for chunk in chunks]
         predict = getattr(self._model, "predict")

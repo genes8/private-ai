@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
+import os
 import tempfile
 import uuid
 from pathlib import Path
@@ -10,6 +12,7 @@ from typing import Any
 import docx2txt
 import httpx
 import openpyxl
+import structlog
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pdf2image import convert_from_path
 from pypdf import PdfReader
@@ -21,6 +24,9 @@ from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
 from app.db.models import Document, DocumentChunk
 from app.models import Citation, RankedChunk
+from app.security.content_filter import ContentFilter
+
+logger = structlog.get_logger(__name__)
 
 _CHUNK_SIZE = 800
 _CHUNK_OVERLAP = 150
@@ -42,6 +48,12 @@ class RagPipeline:
         qdrant_url: str,
         collection: str,
         db_session: Session,
+        *,
+        chunk_size: int = _CHUNK_SIZE,
+        chunk_overlap: int = _CHUNK_OVERLAP,
+        rerank_top_n: int = 6,
+        min_rerank_score: float = _MIN_RERANK_SCORE,
+        vision_model: str = "qwen2.5vl:7b",
     ) -> None:
         self._retriever = retriever
         self._reranker = reranker
@@ -51,8 +63,12 @@ class RagPipeline:
         self._qdrant = QdrantClient(url=qdrant_url)
         self._collection = collection
         self._db = db_session
+        self._rerank_top_n = rerank_top_n
+        self._min_rerank_score = min_rerank_score
+        self._vision_model = vision_model
+        self._content_filter = ContentFilter()
         self._splitter = RecursiveCharacterTextSplitter(
-            chunk_size=_CHUNK_SIZE, chunk_overlap=_CHUNK_OVERLAP
+            chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
 
     # ------------------------------------------------------------------
@@ -65,6 +81,8 @@ class RagPipeline:
         doc_id: str,
         filename: str,
         uploaded_by: str,
+        *,
+        document_version: int = 1,
     ) -> None:
         ext = Path(file_path).suffix.lower()
 
@@ -72,25 +90,30 @@ class RagPipeline:
             pages, low_confidence_count = await self._load_pdf(file_path)
         elif ext == ".docx":
             text = docx2txt.process(file_path)
-            pages = [(text, 0)]
+            pages = [(text, 0, "native")]
             low_confidence_count = 0
         elif ext == ".xlsx":
-            pages = self._load_xlsx(file_path)
+            pages = [(t, p, "native") for t, p in self._load_xlsx(file_path)]
             low_confidence_count = 0
         else:
             text = Path(file_path).read_text(encoding="utf-8", errors="replace")
-            pages = [(text, 0)]
+            pages = [(text, 0, "native")]
             low_confidence_count = 0
 
         # Chunk all pages
         all_chunks: list[dict[str, Any]] = []
-        for text, page_number in pages:
+        for text, page_number, ocr_quality in pages:
             if not text.strip():
                 continue
             splits = self._splitter.split_text(text)
             for idx, split in enumerate(splits):
                 all_chunks.append(
-                    {"content": split, "page_number": page_number, "chunk_index": idx}
+                    {
+                        "content": split,
+                        "page_number": page_number,
+                        "chunk_index": idx,
+                        "ocr_quality": ocr_quality,
+                    }
                 )
 
         if not all_chunks:
@@ -98,7 +121,13 @@ class RagPipeline:
             self._db.commit()
             return
 
-        contents = [c["content"] for c in all_chunks]
+        clean_chunks = [c for c in all_chunks if not self._content_filter.is_pii(c["content"])]
+        if not clean_chunks:
+            self._set_status(doc_id, "skipped")
+            self._db.commit()
+            return
+
+        contents = [c["content"] for c in clean_chunks]
         embeddings = await self._embed_batch(contents)
 
         points = [
@@ -108,12 +137,13 @@ class RagPipeline:
                 payload={
                     "doc_id": doc_id,
                     "filename": filename,
-                    "page_number": all_chunks[i]["page_number"],
-                    "chunk_index": all_chunks[i]["chunk_index"],
-                    "content": all_chunks[i]["content"],
+                    "page_number": clean_chunks[i]["page_number"],
+                    "chunk_index": clean_chunks[i]["chunk_index"],
+                    "content": clean_chunks[i]["content"],
+                    "ocr_quality": clean_chunks[i]["ocr_quality"],
                 },
             )
-            for i in range(len(all_chunks))
+            for i in range(len(clean_chunks))
         ]
 
         self._qdrant.upsert(collection_name=self._collection, points=points)
@@ -123,8 +153,9 @@ class RagPipeline:
             chunk = DocumentChunk(
                 id=str(uuid.uuid4()),
                 document_id=doc_id,
-                chunk_index=all_chunks[i]["chunk_index"],
-                content_preview=all_chunks[i]["content"][:200],
+                chunk_index=clean_chunks[i]["chunk_index"],
+                chunk_version=document_version,
+                content_preview=clean_chunks[i]["content"][:200],
                 qdrant_point_id=str(point.id),
             )
             self._db.add(chunk)
@@ -134,7 +165,7 @@ class RagPipeline:
         needs_review = (
             total_pages > 0 and low_confidence_count / total_pages > _LOW_CONFIDENCE_RATIO
         )
-        self._set_status(doc_id, "needs_review" if needs_review else "ready")
+        self._set_status(doc_id, "skipped" if needs_review else "indexed")
         self._db.commit()
 
         # Update BM25 index
@@ -149,9 +180,9 @@ class RagPipeline:
         doc_ids: list[str] | None = None,
     ) -> tuple[str, list[Citation]]:
         chunks = await self._retriever.retrieve(query, doc_ids, collection=collection)
-        ranked: list[RankedChunk] = self._reranker.rerank(query, chunks, top_n=6)
+        ranked: list[RankedChunk] = self._reranker.rerank(query, chunks, top_n=self._rerank_top_n)
 
-        if not ranked or max(c.rerank_score for c in ranked) < _MIN_RERANK_SCORE:
+        if not ranked or max(c.rerank_score for c in ranked) < self._min_rerank_score:
             return _NO_ANSWER, []
 
         citations = [
@@ -183,12 +214,17 @@ class RagPipeline:
         async with httpx.AsyncClient() as client:
             for i in range(0, len(texts), _EMBED_BATCH):
                 batch = texts[i : i + _EMBED_BATCH]
-                for text in batch:
-                    resp = await client.post(
-                        f"{self._ollama_url}/api/embeddings",
-                        json={"model": self._embedding_model, "prompt": text},
-                        timeout=60.0,
-                    )
+                responses = await asyncio.gather(
+                    *[
+                        client.post(
+                            f"{self._ollama_url}/api/embeddings",
+                            json={"model": self._embedding_model, "prompt": text},
+                            timeout=60.0,
+                        )
+                        for text in batch
+                    ]
+                )
+                for resp in responses:
                     resp.raise_for_status()
                     body: dict[str, Any] = resp.json()
                     results.append(body["embedding"])
@@ -204,7 +240,7 @@ class RagPipeline:
             extract_resp = await client.post(
                 f"{self._ollama_url}/api/generate",
                 json={
-                    "model": "qwen2.5vl:7b",
+                    "model": self._vision_model,
                     "prompt": (
                         "Extract all text from this document page exactly as it appears. "
                         "Preserve structure, headers, tables, and lists. "
@@ -222,7 +258,7 @@ class RagPipeline:
             quality_resp = await client.post(
                 f"{self._ollama_url}/api/generate",
                 json={
-                    "model": "qwen2.5vl:7b",
+                    "model": self._vision_model,
                     "prompt": (
                         "Rate your confidence in the text extraction: high/medium/low. "
                         'Return JSON {"confidence": "...", "reason": "..."}.'
@@ -256,16 +292,16 @@ class RagPipeline:
             resp.raise_for_status()
             return str(resp.json().get("response", ""))
 
-    async def _load_pdf(self, file_path: str) -> tuple[list[tuple[str, int]], int]:
-        """Returns (pages, low_confidence_count). pages is list of (text, page_num)."""
+    async def _load_pdf(self, file_path: str) -> tuple[list[tuple[str, int, str]], int]:
+        """Returns (pages, low_confidence_count). pages is list of (text, page_num, ocr_quality)."""
         reader = PdfReader(file_path)
-        pages: list[tuple[str, int]] = []
+        pages: list[tuple[str, int, str]] = []
         low_confidence_count = 0
 
         for page_num, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
             if len(text.strip()) >= _OCR_THRESHOLD:
-                pages.append((text, page_num))
+                pages.append((text, page_num, "native"))
             else:
                 # Try vision OCR via pdf2image
                 try:
@@ -273,17 +309,29 @@ class RagPipeline:
                         file_path, dpi=200, first_page=page_num, last_page=page_num
                     )
                     if images:
-                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                            images[0].save(tmp.name, "PNG")
-                            ocr_text, confidence = await self._ocr_page(tmp.name)
-                        pages.append((ocr_text, page_num))
+                        tmp_path = ""
+                        try:
+                            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                                images[0].save(tmp.name, "PNG")
+                                tmp_path = tmp.name
+                            ocr_text, confidence = await self._ocr_page(tmp_path)
+                        finally:
+                            if tmp_path and os.path.exists(tmp_path):
+                                os.unlink(tmp_path)
+                        pages.append((ocr_text, page_num, confidence))
                         if confidence == "low":
                             low_confidence_count += 1
                     else:
-                        pages.append((text, page_num))
+                        pages.append((text, page_num, "low"))
                         low_confidence_count += 1
-                except Exception:
-                    pages.append((text, page_num))
+                except Exception as exc:
+                    logger.warning(
+                        "pdf_page_ocr_failed",
+                        file_path=file_path,
+                        page_number=page_num,
+                        error=str(exc),
+                    )
+                    pages.append((text, page_num, "low"))
                     low_confidence_count += 1
 
         return pages, low_confidence_count

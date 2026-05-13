@@ -129,6 +129,34 @@ def test_content_filter_is_not_pii_clean() -> None:
     assert not cf.is_pii("This is clean text with no PII.")
 
 
+def test_content_filter_blocks_configured_term() -> None:
+    from app.security.content_filter import ContentFilter
+
+    cf = ContentFilter(blocked_terms=["confidential", "top secret"])
+    blocked = _make_chunk("This document is CONFIDENTIAL.", chunk_id="blocked")
+    clean = _make_chunk("General policy information.", chunk_id="clean")
+    result = cf.filter_blocked_sections([blocked, clean])
+    assert "blocked" not in [c.chunk_id for c in result]
+    assert "clean" in [c.chunk_id for c in result]
+
+
+def test_content_filter_no_blocked_terms_returns_all() -> None:
+    from app.security.content_filter import ContentFilter
+
+    cf = ContentFilter()
+    chunks = [_make_chunk("some text", chunk_id=f"c{i}") for i in range(3)]
+    result = cf.filter_blocked_sections(chunks)
+    assert len(result) == 3
+
+
+def test_content_filter_default_init_no_args() -> None:
+    from app.security.content_filter import ContentFilter
+
+    cf = ContentFilter()
+    result = cf.filter_chunks([_make_chunk("clean text")])
+    assert len(result) == 1
+
+
 # ---------------------------------------------------------------------------
 # OutputFilter
 # ---------------------------------------------------------------------------

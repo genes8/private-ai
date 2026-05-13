@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import secrets
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -15,6 +16,7 @@ from app.auth.middleware import encode_token, verify_password
 from app.config import settings
 from app.db import get_db
 from app.db.models import User
+from app.services.app_config_store import load_app_config
 
 logger = structlog.get_logger(__name__)
 
@@ -25,7 +27,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 _LOCK_THRESHOLD = 10
 _LOCK_MINUTES = 15
-_COOKIE_MAX_AGE = 8 * 60 * 60  # 8 hours in seconds
+_CSRF_COOKIE_NAME = "csrf_token"
 _MIN_PASSWORD_LENGTH = 12
 
 _INVALID_CREDS_DETAIL = "Invalid credentials"
@@ -37,7 +39,7 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/login")
-@limiter.limit("5/minute")
+@limiter.limit("10/minute")
 async def login(
     request: Request,
     body: LoginRequest,
@@ -73,9 +75,9 @@ async def login(
         # Increment failure counter (if user exists)
         if user is not None:
             count = (user.failed_login_count or 0) + 1
-            setattr(user, "failed_login_count", count)
+            user.failed_login_count = count
             if count >= _LOCK_THRESHOLD:
-                setattr(user, "locked_until", datetime.now(UTC) + timedelta(minutes=_LOCK_MINUTES))
+                user.locked_until = datetime.now(UTC) + timedelta(minutes=_LOCK_MINUTES)
                 logger.warning("account_locked", user_id=user.id)
             db.commit()
 
@@ -83,10 +85,14 @@ async def login(
 
     # --- Success ---
     assert user is not None  # noqa: S101  # guaranteed: password_ok=True requires user is not None
-    setattr(user, "failed_login_count", 0)
+    user.failed_login_count = 0
     db.commit()
 
-    token = encode_token(str(user.id), str(user.role))
+    config = load_app_config(db)
+    session_hours = int(config.get("session_hours", 24) or 24)
+    cookie_max_age = session_hours * 60 * 60
+    token = encode_token(str(user.id), str(user.role), expiry_hours=session_hours)
+    csrf_token = secrets.token_urlsafe(32)
 
     response = Response(
         content='{"message": "logged in"}',
@@ -96,8 +102,16 @@ async def login(
     response.set_cookie(
         key="access_token",
         value=token,
-        max_age=_COOKIE_MAX_AGE,
+        max_age=cookie_max_age,
         httponly=True,
+        samesite="strict",
+        secure=settings.enforce_https,
+    )
+    response.set_cookie(
+        key=_CSRF_COOKIE_NAME,
+        value=csrf_token,
+        max_age=cookie_max_age,
+        httponly=False,
         samesite="strict",
         secure=settings.enforce_https,
     )
@@ -118,6 +132,14 @@ async def logout() -> Response:
         value="",
         max_age=0,
         httponly=True,
+        samesite="strict",
+        secure=settings.enforce_https,
+    )
+    response.set_cookie(
+        key=_CSRF_COOKIE_NAME,
+        value="",
+        max_age=0,
+        httponly=False,
         samesite="strict",
         secure=settings.enforce_https,
     )

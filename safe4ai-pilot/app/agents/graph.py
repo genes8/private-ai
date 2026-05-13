@@ -1,0 +1,352 @@
+from __future__ import annotations
+
+import contextlib
+from collections.abc import Generator
+from typing import Any
+
+import httpx
+import structlog
+from langgraph.graph import END, StateGraph
+from opentelemetry import trace as otel_trace
+
+from app.agents.adaptive_router import decide_next_step, route_after_grade
+from app.agents.document_grader import grade_chunks
+from app.agents.query_decomposer import decompose_query
+from app.components.hybrid_retriever import HybridRetriever
+from app.components.reranker import Reranker
+from app.models import Citation, GradedChunk, PrivateAIState, RankedChunk
+from app.prompts.registry import get_prompt
+from app.security.content_filter import ContentFilter
+from app.security.input_guard import InputGuard
+from app.security.output_filter import OutputFilter
+
+logger = structlog.get_logger(__name__)
+
+_node_tracer = otel_trace.get_tracer("safe4ai.graph.nodes")
+
+
+@contextlib.contextmanager
+def _node_span(name: str, state: PrivateAIState) -> Generator[otel_trace.Span, None, None]:
+    """Child span for a single graph node. Inherits context from the parent pipeline span."""
+    with _node_tracer.start_as_current_span(name) as span:
+        span.set_attribute("session_id", state.session_id)
+        span.set_attribute("trace_id", state.trace_id)
+        span.set_attribute("node", name)
+        yield span
+
+_NO_ANSWER = "I don't have enough information in the provided documents to answer this question."
+
+# Max retrieve passes before the self-correction loop is cut off
+_MAX_RETRIEVAL_ATTEMPTS = 2
+
+
+def build_graph(
+    *,
+    retriever: HybridRetriever,
+    reranker: Reranker,
+    ollama_url: str,
+    ollama_model: str,
+    retrieval_top_k: int = 6,
+    http_client: httpx.AsyncClient | None = None,
+) -> Any:
+    """Build and compile the LangGraph StateGraph for the RAG pipeline."""
+    guard = InputGuard()
+    output_filter = OutputFilter()
+    content_filter = ContentFilter()
+
+    async def intake_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("intake", state):
+            if not state.messages:
+                return {"current_step": "fallback", "errors": ["No messages in state"]}
+            query = state.messages[-1].content
+            result = guard.check(query)
+            if not result.allowed:
+                return {
+                    "current_step": "fallback",
+                    "errors": state.errors + [result.reason],
+                }
+            return {"current_step": "rewrite"}
+
+    async def rewrite_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("rewrite", state):
+            query = state.messages[-1].content if state.messages else ""
+            template = get_prompt("query_rewriter", "v1")
+            prompt = template.template.format(query=query)
+            try:
+                c = http_client or httpx.AsyncClient()
+                owned = http_client is None
+                try:
+                    resp = await c.post(
+                        f"{ollama_url}/api/generate",
+                        json={"model": ollama_model, "prompt": prompt, "stream": False},
+                        timeout=30.0,
+                    )
+                    resp.raise_for_status()
+                    rewritten: str = resp.json().get("response", "").strip()
+                finally:
+                    if owned:
+                        await c.aclose()
+                return {"rewritten_query": rewritten or query, "current_step": "retrieve"}
+            except Exception as exc:
+                logger.warning("rewrite_node_failed", error=str(exc))
+                return {"rewritten_query": query, "current_step": "retrieve"}
+
+    async def retrieve_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("retrieve", state) as span:
+            query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            try:
+                raw_chunks = await retriever.retrieve(query, top_k=retrieval_top_k)
+                ranked: list[RankedChunk] = reranker.rerank(query, raw_chunks, top_n=retrieval_top_k)
+                ranked = content_filter.filter_chunks(ranked)
+                max_score = max((c.rerank_score for c in ranked), default=0.0)
+                span.set_attribute("chunk_count", len(ranked))
+                return {
+                    "retrieved_chunks": ranked,
+                    "retrieval_score_max": max_score,
+                    "retrieval_attempts": state.retrieval_attempts + 1,
+                    "current_step": "grade",
+                }
+            except Exception as exc:
+                span.record_exception(exc)
+                return {
+                    "retrieval_attempts": state.retrieval_attempts + 1,
+                    "current_step": "grade",
+                    "errors": state.errors + [str(exc)],
+                }
+
+    async def grade_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("grade", state) as span:
+            query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            graded = await grade_chunks(
+                query,
+                state.retrieved_chunks,
+                ollama_url=ollama_url,
+                model=ollama_model,
+                client=http_client,
+            )
+            relevant_count = sum(1 for c in graded if c.relevant)
+            span.set_attribute("relevant_chunks", relevant_count)
+            # LLM-driven routing with sync threshold fallback
+            routing_state = state.model_copy(update={"graded_chunks": graded})
+            try:
+                decision = await decide_next_step(
+                    routing_state,
+                    ["generate", "decompose"],
+                    ollama_url=ollama_url,
+                    model=ollama_model,
+                    client=http_client,
+                )
+            except Exception as exc:
+                logger.warning("grade_routing_failed", error=str(exc))
+                decision = route_after_grade(routing_state)
+            # Safety: if LLM returns "generate" but sync rule disagrees, trust the rule
+            if decision == "generate" and route_after_grade(routing_state) == "decompose":
+                decision = "decompose"
+            span.set_attribute("routing_decision", decision)
+            return {"graded_chunks": graded, "current_step": decision}
+
+    async def decompose_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("decompose", state) as span:
+            query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            sub_queries = await decompose_query(
+                query,
+                ollama_url=ollama_url,
+                model=ollama_model,
+                client=http_client,
+            )
+            span.set_attribute("sub_query_count", len(sub_queries))
+
+            all_graded: list[GradedChunk] = []
+            for sub_q in sub_queries:
+                try:
+                    raw = await retriever.retrieve(sub_q, top_k=retrieval_top_k)
+                    ranked: list[RankedChunk] = reranker.rerank(sub_q, raw, top_n=min(3, retrieval_top_k))
+                    graded = await grade_chunks(
+                        sub_q,
+                        ranked,
+                        ollama_url=ollama_url,
+                        model=ollama_model,
+                        client=http_client,
+                    )
+                    all_graded.extend(graded)
+                except Exception as exc:
+                    logger.warning("decompose_sub_query_failed", sub_query=sub_q, error=str(exc))
+                    continue
+
+            needs_review = not any(c.relevant for c in all_graded)
+            max_score = max((c.rerank_score for c in all_graded), default=0.0)
+            return {
+                "sub_queries": sub_queries,
+                "graded_chunks": all_graded,
+                "retrieval_score_max": max_score,
+                "requires_human_review": needs_review,
+                "current_step": "generate",
+            }
+
+    async def generate_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("generate", state):
+            query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            relevant = [c for c in state.graded_chunks if c.relevant]
+
+            if not relevant:
+                return {
+                    "draft_answer": _NO_ANSWER,
+                    "citations": [],
+                    "generation_context": [],
+                    "current_step": "output_filter",
+                }
+
+            context = "\n\n".join(
+                f"[{c.filename} p.{c.page_number}]: {c.content}" for c in relevant
+            )
+            template = get_prompt("rag_answer", "v1")
+            prompt = template.template.format(context=context, query=query)
+
+            try:
+                c = http_client or httpx.AsyncClient()
+                owned = http_client is None
+                try:
+                    resp = await c.post(
+                        f"{ollama_url}/api/generate",
+                        json={"model": ollama_model, "prompt": prompt, "stream": False},
+                        timeout=120.0,
+                    )
+                    resp.raise_for_status()
+                    answer: str = resp.json().get("response", "").strip()
+                finally:
+                    if owned:
+                        await c.aclose()
+            except Exception as exc:
+                return {
+                    "draft_answer": _NO_ANSWER,
+                    "citations": [],
+                    "errors": state.errors + [str(exc)],
+                    "current_step": "output_filter",
+                }
+
+            citations = [
+                Citation(
+                    filename=c.filename,
+                    page_number=c.page_number,
+                    excerpt=c.content[:200],
+                    score=c.rerank_score,
+                )
+                for c in relevant
+            ]
+            return {
+                "draft_answer": answer,
+                "citations": citations,
+                "generation_context": relevant,
+                "current_step": "output_filter",
+            }
+
+    async def output_filter_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("output_filter", state):
+            relevant = state.generation_context or [c for c in state.graded_chunks if c.relevant]
+            if not relevant or not state.draft_answer or state.draft_answer == _NO_ANSWER:
+                return {"current_step": "quality_gate"}
+            ranked_fields = set(RankedChunk.model_fields)
+            source_ranked = [
+                RankedChunk(**{k: v for k, v in c.model_dump().items() if k in ranked_fields})
+                for c in relevant
+            ]
+            guard_result = output_filter.check(state.draft_answer, source_ranked)
+            if not guard_result.allowed:
+                return {
+                    "draft_answer": _NO_ANSWER,
+                    "citations": [],
+                    "requires_human_review": True,
+                    "errors": state.errors + [guard_result.reason],
+                    "current_step": "quality_gate",
+                }
+            return {"current_step": "quality_gate"}
+
+    async def quality_gate_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("quality_gate", state) as span:
+            has_relevant = any(c.relevant for c in state.graded_chunks)
+            grounded = (
+                bool(state.draft_answer)
+                and state.draft_answer != _NO_ANSWER
+                and has_relevant
+            )
+            # Self-correction loop guard: after _MAX_RETRIEVAL_ATTEMPTS, don't route back
+            if state.retrieval_attempts >= _MAX_RETRIEVAL_ATTEMPTS:
+                allowed = ["respond", "fallback"]
+            else:
+                allowed = ["respond", "retrieve", "fallback"]
+
+            routing_state = state.model_copy(update={"grounded": grounded})
+            try:
+                decision = await decide_next_step(
+                    routing_state,
+                    allowed,
+                    ollama_url=ollama_url,
+                    model=ollama_model,
+                    client=http_client,
+                )
+            except Exception as exc:
+                logger.warning("quality_gate_routing_failed", error=str(exc))
+                decision = "respond" if grounded else "fallback"
+            # Safety: never route ungrounded state to respond regardless of LLM output
+            if decision == "respond" and not grounded:
+                decision = "fallback"
+            span.set_attribute("grounded", grounded)
+            span.set_attribute("routing_decision", decision)
+            return {"grounded": grounded, "current_step": decision}
+
+    async def respond_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("respond", state):
+            return {"status": "completed", "current_step": "respond"}
+
+    async def fallback_node(state: PrivateAIState) -> dict[str, Any]:
+        with _node_span("fallback", state):
+            answer = state.draft_answer or _NO_ANSWER
+            return {
+                "draft_answer": answer,
+                "status": "completed",
+                "current_step": "fallback",
+                "requires_human_review": state.requires_human_review or bool(state.errors),
+            }
+
+    builder: StateGraph[PrivateAIState, PrivateAIState, PrivateAIState] = StateGraph(PrivateAIState)
+
+    builder.add_node("intake", intake_node)
+    builder.add_node("rewrite", rewrite_node)
+    builder.add_node("retrieve", retrieve_node)
+    builder.add_node("grade", grade_node)
+    builder.add_node("decompose", decompose_node)
+    builder.add_node("generate", generate_node)
+    builder.add_node("output_filter", output_filter_node)
+    builder.add_node("quality_gate", quality_gate_node)
+    builder.add_node("respond", respond_node)
+    builder.add_node("fallback", fallback_node)
+
+    builder.set_entry_point("intake")
+
+    # intake: guard pass → rewrite; guard reject → fallback
+    builder.add_conditional_edges(
+        "intake",
+        lambda state: state.current_step,
+        {"rewrite": "rewrite", "fallback": "fallback"},
+    )
+    builder.add_edge("rewrite", "retrieve")
+    builder.add_edge("retrieve", "grade")
+    # grade: LLM routes to generate (≥2 relevant) or decompose (<2)
+    builder.add_conditional_edges(
+        "grade",
+        lambda state: state.current_step,
+        {"generate": "generate", "decompose": "decompose"},
+    )
+    builder.add_edge("decompose", "generate")
+    builder.add_edge("generate", "output_filter")
+    builder.add_edge("output_filter", "quality_gate")
+    # quality_gate: LLM routes to respond, retrieve (self-correction), or fallback
+    builder.add_conditional_edges(
+        "quality_gate",
+        lambda state: state.current_step,
+        {"respond": "respond", "retrieve": "retrieve", "fallback": "fallback"},
+    )
+    builder.add_edge("respond", END)
+    builder.add_edge("fallback", END)
+
+    return builder.compile()

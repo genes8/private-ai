@@ -120,6 +120,27 @@ async def test_update_bm25_index() -> None:
 
 
 @pytest.mark.asyncio
+async def test_remove_from_bm25_prunes_document_chunks() -> None:
+    retriever = _make_retriever()
+    retriever.update_bm25_index(
+        ["c1", "c2"],
+        ["alpha beta", "target words"],
+        [_make_payload("c1", "doc-1"), _make_payload("c2", "doc-2")],
+    )
+
+    retriever.remove_from_bm25("doc-1")
+
+    with (
+        patch.object(retriever, "_qdrant") as mock_qdrant,
+        patch.object(retriever, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)),
+    ):
+        mock_qdrant.query_points.return_value = _make_query_response([])
+        results = await retriever.retrieve("target words")
+
+    assert [r.chunk_id for r in results] == ["c2"]
+
+
+@pytest.mark.asyncio
 async def test_retrieve_returns_sparse_only_payloads_and_applies_doc_filter() -> None:
     retriever = _make_retriever()
     retriever.update_bm25_index(

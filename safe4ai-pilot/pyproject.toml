@@ -74,6 +74,7 @@ select = ["E", "F", "I", "UP", "S"]
 "scripts/migrate.py" = ["S603"]
 "scripts/backup.py" = ["S603", "S607"]
 "tests/**/*.py" = ["S101"]
+"evaluation/**/*.py" = ["E501", "S608", "S112"]
 
 [tool.mypy]
 strict = true
@@ -86,6 +87,9 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 env = [
     "OTEL_SDK_DISABLED=true",
+]
+filterwarnings = [
+    "ignore::langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
 ]
 markers = [
     "integration: tests that require Docker/Testcontainers or real services",

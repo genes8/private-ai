@@ -1,31 +1,56 @@
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
+from secrets import compare_digest
 
 import httpx
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from qdrant_client import QdrantClient
+from qdrant_client import models as qmodels
 from secure import Secure
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
+from app.api.admin_routes import router as admin_router
+from app.api.chat_routes import router as chat_router
 from app.api.observability_routes import router as observability_router
 from app.auth.router import limiter as auth_limiter
 from app.auth.router import router as auth_router
 from app.config import settings
-from app.db import engine
+from app.db import Base, SessionLocal, engine
+from app.services.runtime_config import build_runtime_components
 from scripts.audit_cleanup import schedule_cleanup
 
 logger = structlog.get_logger(__name__)
 
 secure_headers = Secure()
+_QDRANT_COLLECTION = "documents"
+_QDRANT_VECTOR_SIZE = 768
 
 
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    asyncio.create_task(_prewarm_ollama())
+    from app.services.ingestion_service import recover_stuck_jobs
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    Base.metadata.create_all(bind=engine)
+    _ensure_documents_columns()
+    _ensure_qdrant_collection()
+
+    with SessionLocal() as db:
+        recover_stuck_jobs(db)
+        runtime, retriever, reranker, graph = build_runtime_components(db)
+    _app.state.retriever = retriever
+    _app.state.reranker = reranker
+    _app.state.graph = graph
+
+    asyncio.create_task(_prewarm_ollama(runtime.generation_model))
     schedule_cleanup(_app)
     yield
 
@@ -40,8 +65,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
 
@@ -59,27 +84,94 @@ async def limit_body_size(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > (settings.max_upload_size_mb + 10) * 1024 * 1024:
-        return Response(status_code=413, content="Request body too large")
+    max_body_bytes = settings.max_upload_size_mb * 1024 * 1024
+    if content_length:
+        try:
+            length = int(content_length)
+        except ValueError:
+            return Response(status_code=400, content="Invalid content-length header")
+        if length > max_body_bytes:
+            return Response(status_code=413, content="Request body too large")
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def protect_csrf(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    unsafe_methods = {"POST", "PUT", "PATCH", "DELETE"}
+    if request.method in unsafe_methods and request.url.path != "/auth/login":
+        origin = request.headers.get("origin")
+        if origin and origin not in settings.allowed_origins_list:
+            response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+            response.headers.update(secure_headers.headers())
+            return response
+
+        if request.cookies.get("access_token"):
+            csrf_cookie = request.cookies.get("csrf_token")
+            csrf_header = request.headers.get("X-CSRF-Token")
+            if not csrf_cookie or not csrf_header or not compare_digest(csrf_header, csrf_cookie):
+                response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+                response.headers.update(secure_headers.headers())
+                return response
     return await call_next(request)
 
 
 app.include_router(auth_router)
+app.include_router(chat_router)
 app.include_router(observability_router)
+app.include_router(admin_router)
 
 
-async def _prewarm_ollama() -> None:
+async def _prewarm_ollama(model: str) -> None:
     """Hit Ollama with an empty prompt so the model is loaded before first real query."""
     await asyncio.sleep(5)  # give Ollama container time to be fully ready
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             await client.post(
                 f"{settings.ollama_url}/api/generate",
-                json={"model": settings.ollama_model, "prompt": "", "stream": False},
+                json={"model": model, "prompt": "", "stream": False},
             )
-        logger.info("ollama_prewarm_complete", model=settings.ollama_model)
+        logger.info("ollama_prewarm_complete", model=model)
     except Exception as exc:
         logger.warning("ollama_prewarm_failed", error=str(exc))
+
+
+def _ensure_qdrant_collection() -> None:
+    """Create the default document collection on first boot if it is missing."""
+    try:
+        client = QdrantClient(url=settings.qdrant_url)
+        if client.collection_exists(_QDRANT_COLLECTION):
+            return
+        client.create_collection(
+            collection_name=_QDRANT_COLLECTION,
+            vectors_config=qmodels.VectorParams(
+                size=_QDRANT_VECTOR_SIZE,
+                distance=qmodels.Distance.COSINE,
+            ),
+        )
+        logger.info(
+            "qdrant_collection_created",
+            collection=_QDRANT_COLLECTION,
+            vector_size=_QDRANT_VECTOR_SIZE,
+        )
+    except Exception as exc:
+        logger.warning("qdrant_collection_ensure_failed", error=str(exc))
+
+
+def _ensure_documents_columns() -> None:
+    """Backfill document columns that older volumes may not have."""
+    statements = [
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS active_version INTEGER DEFAULT 1",
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+    except Exception as exc:
+        logger.warning("document_columns_ensure_failed", error=str(exc))
 
 
 @app.get("/health")

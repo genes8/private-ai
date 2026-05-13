@@ -46,7 +46,7 @@ def test_document_and_semantic_cache_columns_match_plan() -> None:
     assert {"version", "active_version"}.issubset(document_columns)
     assert "chunk_version" in chunk_columns
     assert {"source_document_ids", "source_chunk_ids"}.issubset(cache_columns)
-    assert IngestionStatus.needs_review.value == "needs_review"
+    assert IngestionStatus.skipped.value == "skipped"
 
 
 def test_settings_parse_allowed_origins() -> None:
@@ -55,3 +55,11 @@ def test_settings_parse_allowed_origins() -> None:
     settings = Settings(allowed_origins="http://localhost:5173, https://example.com")
 
     assert settings.allowed_origins_list == ["http://localhost:5173", "https://example.com"]
+
+
+def test_settings_default_allowed_origin_matches_vite_dev_port() -> None:
+    from app.config import Settings
+
+    settings = Settings()
+
+    assert settings.allowed_origins_list == ["http://localhost:3000"]

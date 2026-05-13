@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.auth.middleware import require_role
+from app.auth.middleware import get_current_user, require_role
 from app.config import settings
 from app.db import get_db
 from app.db.models import FeedbackRating, User
@@ -24,13 +24,14 @@ class FeedbackRequest(BaseModel):
 
 
 @router.post("/feedback")
-async def submit_feedback(body: FeedbackRequest, db: Session = Depends(get_db)) -> dict[str, str]:
-    """Submit user feedback for a query response.
-
-    Note: user_id will come from auth middleware in Phase 3A; hardcoded to 'anonymous' for now.
-    """
+async def submit_feedback(
+    body: FeedbackRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Submit user feedback for a query response."""
     store = FeedbackStore(db)
-    fid = store.store(body.session_id, "anonymous", body.trace_id, body.rating, body.comment)
+    fid = store.store(body.session_id, str(current_user.id), body.trace_id, body.rating, body.comment)
     return {"id": fid}
 
 
@@ -41,7 +42,7 @@ async def list_feedback(
 ) -> list[dict[str, Any]]:
     """Return the most recent feedback entries (admin only)."""
     store = FeedbackStore(db)
-    return store.list_for_admin(db)
+    return store.list_for_admin()
 
 
 @router.get("/admin/stats/cost")

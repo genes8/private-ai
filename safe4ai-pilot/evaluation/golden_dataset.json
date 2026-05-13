@@ -1,0 +1,144 @@
+[
+  {
+    "id": "gd-001",
+    "question": "What is the employee annual leave entitlement?",
+    "expected_answer": "Employees are entitled to 20 days of annual leave per year.",
+    "expected_citations": [{"filename": "hr_policy.pdf", "page": 3}],
+    "difficulty": "easy"
+  },
+  {
+    "id": "gd-002",
+    "question": "How many sick days are employees allowed per year?",
+    "expected_answer": "Employees are allowed 10 sick days per year with a medical certificate required after 3 consecutive days.",
+    "expected_citations": [{"filename": "hr_policy.pdf", "page": 4}],
+    "difficulty": "easy"
+  },
+  {
+    "id": "gd-003",
+    "question": "What is the process for submitting an expense report?",
+    "expected_answer": "Expense reports must be submitted within 30 days of the expense using the company expense form, signed by the direct manager.",
+    "expected_citations": [{"filename": "finance_policy.pdf", "page": 2}],
+    "difficulty": "medium"
+  },
+  {
+    "id": "gd-004",
+    "question": "What are the data retention requirements for customer records?",
+    "expected_answer": "Customer records must be retained for a minimum of 7 years from the date of last transaction in accordance with GDPR and local regulations.",
+    "expected_citations": [{"filename": "data_governance.pdf", "page": 5}],
+    "difficulty": "medium"
+  },
+  {
+    "id": "gd-005",
+    "question": "Who is responsible for approving capital expenditure over €50,000?",
+    "expected_answer": "Capital expenditure over €50,000 requires approval from the CFO and the Board of Directors.",
+    "expected_citations": [{"filename": "finance_policy.pdf", "page": 7}],
+    "difficulty": "medium"
+  },
+  {
+    "id": "gd-006",
+    "question": "What is the notice period for senior management roles?",
+    "expected_answer": "Senior management roles require a 90-day notice period for resignation or termination.",
+    "expected_citations": [{"filename": "hr_policy.pdf", "page": 8}],
+    "difficulty": "easy"
+  },
+  {
+    "id": "gd-007",
+    "question": "How should conflicts of interest be disclosed, and what are the consequences of non-disclosure?",
+    "expected_answer": "Conflicts of interest must be disclosed in writing to the employee's manager and HR within 5 business days of awareness. Non-disclosure may result in disciplinary action up to and including termination.",
+    "expected_citations": [{"filename": "code_of_conduct.pdf", "page": 2}, {"filename": "hr_policy.pdf", "page": 11}],
+    "difficulty": "hard"
+  },
+  {
+    "id": "gd-008",
+    "question": "What remote work allowance is provided to employees?",
+    "expected_answer": "Employees are entitled to a one-time home office setup allowance of €500 and a monthly internet subsidy of €30.",
+    "expected_citations": [{"filename": "remote_work_policy.pdf", "page": 1}],
+    "difficulty": "easy"
+  },
+  {
+    "id": "gd-009",
+    "question": "What are the requirements for a valid software licence procurement?",
+    "expected_answer": "Software licences must be procured through the IT department using the approved vendor list. Employees must not purchase or install software independently. Licences must be documented in the asset register.",
+    "expected_citations": [{"filename": "it_policy.pdf", "page": 3}],
+    "difficulty": "medium"
+  },
+  {
+    "id": "gd-010",
+    "question": "What is the escalation process when a data breach is suspected?",
+    "expected_answer": "A suspected data breach must be reported to the Data Protection Officer within 24 hours. The DPO must notify the relevant supervisory authority within 72 hours if the breach is confirmed and poses a risk to individuals.",
+    "expected_citations": [{"filename": "data_governance.pdf", "page": 9}],
+    "difficulty": "hard"
+  },
+  {
+    "id": "gd-011",
+    "question": "What is the company's policy on accepting gifts from suppliers?",
+    "expected_answer": "Employees may accept gifts of nominal value (under €50) that do not influence business decisions. Gifts above €50 must be declined or surrendered to HR.",
+    "expected_citations": [{"filename": "code_of_conduct.pdf", "page": 4}],
+    "difficulty": "medium"
+  },
+  {
+    "id": "gd-012",
+    "question": "How often must fire evacuation drills be conducted?",
+    "expected_answer": "Fire evacuation drills must be conducted at least twice per year per office location.",
+    "expected_citations": [{"filename": "health_safety_policy.pdf", "page": 2}],
+    "difficulty": "easy"
+  },
+  {
+    "id": "gd-013",
+    "question": "What security clearance is required to access the data centre?",
+    "expected_answer": "Access to the data centre requires Level 2 security clearance, two-factor authentication, and must be logged in the physical access register.",
+    "expected_citations": [{"filename": "it_policy.pdf", "page": 7}],
+    "difficulty": "medium"
+  },
+  {
+    "id": "gd-014",
+    "question": "What is the weather forecast for next week?",
+    "expected_answer": null,
+    "expected_citations": [],
+    "difficulty": "easy",
+    "is_out_of_scope": true
+  },
+  {
+    "id": "gd-015",
+    "question": "Who won the last World Cup?",
+    "expected_answer": null,
+    "expected_citations": [],
+    "difficulty": "easy",
+    "is_out_of_scope": true
+  },
+  {
+    "id": "gd-016",
+    "question": "What is the minimum password length for internal systems AND how frequently must passwords be rotated?",
+    "expected_answer": "Passwords must be at least 12 characters long and must be rotated every 90 days. Reuse of the last 10 passwords is prohibited.",
+    "expected_citations": [{"filename": "it_policy.pdf", "page": 4}, {"filename": "it_policy.pdf", "page": 5}],
+    "difficulty": "hard"
+  },
+  {
+    "id": "gd-017",
+    "question": "Under what conditions can an employee be placed on a performance improvement plan (PIP)?",
+    "expected_answer": "A PIP may be initiated when an employee consistently fails to meet defined performance objectives over a 90-day period. The PIP must include specific measurable goals, a support plan, and a review timeline of 60 days.",
+    "expected_citations": [{"filename": "hr_policy.pdf", "page": 14}],
+    "difficulty": "hard"
+  },
+  {
+    "id": "gd-018",
+    "question": "What is the company's stance on using personal devices for work?",
+    "expected_answer": "Personal devices may be used for work purposes only after enrolling in the Mobile Device Management (MDM) system. All work data on personal devices is subject to remote wipe in the event of loss or termination.",
+    "expected_citations": [{"filename": "it_policy.pdf", "page": 6}],
+    "difficulty": "medium"
+  },
+  {
+    "id": "gd-019",
+    "question": "What parental leave entitlements apply to primary and secondary caregivers?",
+    "expected_answer": "Primary caregivers are entitled to 26 weeks of parental leave, 12 of which are paid at full salary. Secondary caregivers are entitled to 4 weeks of paid leave.",
+    "expected_citations": [{"filename": "hr_policy.pdf", "page": 6}],
+    "difficulty": "medium"
+  },
+  {
+    "id": "gd-020",
+    "question": "How should a manager handle a complaint of workplace harassment?",
+    "expected_answer": "The manager must acknowledge the complaint within 24 hours, escalate to HR immediately, maintain confidentiality, and not conduct their own investigation. HR will appoint an independent investigator within 5 business days.",
+    "expected_citations": [{"filename": "code_of_conduct.pdf", "page": 6}, {"filename": "hr_policy.pdf", "page": 13}],
+    "difficulty": "hard"
+  }
+]

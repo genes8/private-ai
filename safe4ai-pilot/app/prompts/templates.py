@@ -52,4 +52,29 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         input_variables=["conversation"],
     ),
+    PromptTemplate(
+        name="rag_answer",
+        version="v1",
+        template=(
+            "Answer the following question using ONLY the provided context. "
+            "If the context does not contain enough information, say so.\n\n"
+            "Context:\n{context}\n\n"
+            "Question: {query}"
+        ),
+        input_variables=["context", "query"],
+    ),
+    PromptTemplate(
+        name="adaptive_router",
+        version="v1",
+        template=(
+            "You are a pipeline router for a document Q&A system.\n"
+            "Current state:\n"
+            "- Query: {query}\n"
+            "- Current step: {current_step}\n"
+            "- Context: {context}\n\n"
+            "Choose the next step from: {allowed_steps}\n"
+            'Return JSON: {{"decision": "...", "reasoning": "...", "suggested_focus": "..."}}'
+        ),
+        input_variables=["query", "current_step", "context", "allowed_steps"],
+    ),
 ]

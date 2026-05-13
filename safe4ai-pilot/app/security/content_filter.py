@@ -11,7 +11,8 @@ from app.models import RankedChunk
 logger = structlog.get_logger(__name__)
 
 PII_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),  # SSN
+    re.compile(r"\b\d{3}[ -]\d{2}[ -]\d{4}\b"),  # SSN: ###-##-#### or ### ## ####
+    re.compile(r"\b\d{9}\b"),  # SSN without separators
     re.compile(r"\b(?:\d{4}[- ]){3}\d{4}\b"),  # Credit card
     re.compile(r"\b[A-Z]{1,2}\d{6,9}\b"),  # Passport
 ]
@@ -22,6 +23,9 @@ def _contains_pii(text: str) -> bool:
 
 
 class ContentFilter:
+    def __init__(self, blocked_terms: list[str] | None = None) -> None:
+        self._blocked_terms = [t.lower() for t in (blocked_terms or [])]
+
     def filter_chunks(self, chunks: list[RankedChunk]) -> list[RankedChunk]:
         """Remove chunks whose content contains PII, logging each exclusion."""
         clean: list[RankedChunk] = []
@@ -31,6 +35,24 @@ class ContentFilter:
                     "pii_chunk_excluded",
                     chunk_id=chunk.chunk_id,
                     doc_id=chunk.doc_id,
+                )
+            else:
+                clean.append(chunk)
+        return clean
+
+    def filter_blocked_sections(self, chunks: list[RankedChunk]) -> list[RankedChunk]:
+        """Remove chunks whose content matches any configured blocked term."""
+        if not self._blocked_terms:
+            return chunks
+        clean: list[RankedChunk] = []
+        for chunk in chunks:
+            text_lower = chunk.content.lower()
+            matched = next((t for t in self._blocked_terms if t in text_lower), None)
+            if matched:
+                logger.warning(
+                    "blocked_term_chunk_excluded",
+                    chunk_id=chunk.chunk_id,
+                    term=matched,
                 )
             else:
                 clean.append(chunk)

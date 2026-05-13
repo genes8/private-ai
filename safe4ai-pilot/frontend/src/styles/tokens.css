@@ -1,0 +1,68 @@
+/* private-ai · design tokens */
+:root {
+  --ink:        #0b0d10;
+  --ink-2:      #16191e;
+  --ink-3:      #232730;
+  --ink-4:      #353a44;
+
+  --paper:      #fafaf7;
+  --paper-2:    #f4f1ea;
+  --paper-3:    #ebe7dd;
+  --surface:    #ffffff;
+  --surface-2:  #f7f5f0;
+
+  --line:       #e7e3d8;
+  --line-2:     #d6dde6;
+  --line-3:     #c2c8d2;
+
+  --text:       #14161a;
+  --text-2:     #4a4f57;
+  --text-3:     #7c8290;
+  --text-mute:  #9aa1ac;
+
+  --slate:      #7c8aa0;
+  --slate-2:    #a8b0bd;
+  --slate-3:    #c4cad4;
+
+  --blue:       #3b6cf2;
+  --blue-2:     #2a55d4;
+  --blue-soft:  #eaf0ff;
+  --blue-tint:  #f4f7ff;
+
+  --green:      #2f8f5e;
+  --green-soft: #e6f3ec;
+  --amber:      #b87a1a;
+  --amber-soft: #f9efd9;
+  --red:        #c0392b;
+  --red-soft:   #fbe9e6;
+
+  --font-sans:  "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:  "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-serif: "Instrument Serif", Georgia, serif;
+
+  --r-sm: 4px;
+  --r:    6px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+
+  --sh-1:   0 1px 0 rgba(20,22,26,.04), 0 1px 2px rgba(20,22,26,.05);
+  --sh-2:   0 1px 0 rgba(20,22,26,.04), 0 4px 12px rgba(20,22,26,.06), 0 1px 2px rgba(20,22,26,.04);
+  --sh-3:   0 12px 40px rgba(20,22,26,.12), 0 2px 6px rgba(20,22,26,.06);
+  --sh-pop: 0 1px 0 rgba(255,255,255,.6) inset, 0 12px 40px rgba(20,22,26,.16), 0 0 0 .5px rgba(20,22,26,.08);
+
+  /* Type scale */
+  --t-xs:      10.5px;
+  --t-sm:      11.5px;
+  --t-base:    13px;
+  --t-md:      13.5px;
+  --t-body:    14.5px;
+  --t-lg:      16px;
+  --t-h2:      19px;
+  --t-h1:      28px;
+  --t-display: 38px;
+
+  /* Spacing scale (4px base) */
+  --sp-1:  4px;  --sp-2:  8px;  --sp-3: 12px;
+  --sp-4: 16px;  --sp-5: 20px;  --sp-6: 24px;
+  --sp-8: 32px;  --sp-10: 40px; --sp-12: 48px;
+}

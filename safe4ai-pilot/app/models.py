@@ -57,6 +57,7 @@ class PrivateAIState(BaseModel):
         "grade",
         "decompose",
         "generate",
+        "output_filter",
         "quality_gate",
         "respond",
         "fallback",
@@ -81,3 +82,13 @@ class PrivateAIState(BaseModel):
     trace_id: str = ""
     cost_usd: float = 0.0
     errors: list[str] = Field(default_factory=list)
+
+    # human review flag — set by graph when answer quality is insufficient
+    requires_human_review: bool = False
+
+    # counts how many times retrieve_node has run; used as self-correction loop guard
+    retrieval_attempts: int = 0
+
+    # snapshot of the exact chunks supplied to generate_node for the current answer;
+    # output_filter_node validates against this rather than the live graded_chunks snapshot
+    generation_context: list[GradedChunk] = Field(default_factory=list)

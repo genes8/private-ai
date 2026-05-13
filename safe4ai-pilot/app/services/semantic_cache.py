@@ -92,12 +92,17 @@ class SemanticCache:
         self._db.commit()
 
     async def invalidate_by_document(self, doc_id: str) -> None:
-        # Delete rows where doc_id appears in source_document_ids JSON array
-        self._db.execute(
-            text(
-                "DELETE FROM semantic_cache "
-                "WHERE source_document_ids::jsonb @> CAST(:doc_id_json AS jsonb)"
-            ),
-            {"doc_id_json": f'["{doc_id}"]'},
-        )
-        self._db.commit()
+        invalidate_cache_for_document(self._db, doc_id)
+
+
+def invalidate_cache_for_document(db: Session, doc_id: str, *, commit: bool = True) -> None:
+    """Delete semantic cache entries that reference the given document."""
+    db.execute(
+        text(
+            "DELETE FROM semantic_cache "
+            "WHERE source_document_ids::jsonb @> CAST(:doc_id_json AS jsonb)"
+        ),
+        {"doc_id_json": f'["{doc_id}"]'},
+    )
+    if commit:
+        db.commit()

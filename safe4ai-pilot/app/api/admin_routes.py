@@ -1,0 +1,783 @@
+from __future__ import annotations
+
+import asyncio
+import csv
+import io
+import secrets
+import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from qdrant_client import QdrantClient
+from qdrant_client import models as qmodels
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.auth.middleware import get_current_user, hash_password, require_role
+from app.auth.router import limiter
+from app.config import settings
+from app.db import get_db
+from app.db.models import (
+    AgentRun,
+    AuditLog,
+    Document,
+    DocumentChunk,
+    HumanReviewQueue,
+    IngestionJob,
+    IngestionJobStatus,
+    IngestionStatus,
+    ReviewStatus,
+    SemanticCache,
+    User,
+    UserRole,
+)
+from app.security.upload_validator import UploadValidator
+from app.services.ingestion_service import run_ingestion
+from app.services.app_config_store import load_app_config, upsert_app_config
+from app.services.runtime_config import build_runtime_components
+from app.services.semantic_cache import invalidate_cache_for_document
+
+logger = structlog.get_logger(__name__)
+router = APIRouter(tags=["admin"])
+
+_RAW_DIR = Path("data/raw")
+_RAW_DIR.mkdir(parents=True, exist_ok=True)
+_QDRANT_COLLECTION = "documents"
+_UPLOAD_READ_CHUNK_SIZE = 1024 * 1024
+_MAX_BACKGROUND_INGESTION_TASKS = 4
+_INGESTION_TASK_SEMAPHORE = asyncio.Semaphore(_MAX_BACKGROUND_INGESTION_TASKS)
+
+
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
+
+
+class CreateUserRequest(BaseModel):
+    email: str
+    password: str | None = None
+    role: UserRole = UserRole.pilot_user
+
+
+async def _run_ingestion_task(
+    *,
+    doc_id: str,
+    job_id: str,
+    file_path: str,
+    filename: str,
+    uploaded_by: str,
+    retriever: HybridRetriever | None,
+) -> None:
+    async with _INGESTION_TASK_SEMAPHORE:
+        await run_ingestion(
+            doc_id=doc_id,
+            job_id=job_id,
+            file_path=file_path,
+            filename=filename,
+            uploaded_by=uploaded_by,
+            retriever=retriever,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Document management
+# ---------------------------------------------------------------------------
+
+
+@router.post("/admin/documents/upload", status_code=201)
+@limiter.limit("10/hour")
+async def upload_document(
+    request: Request,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+) -> dict[str, str]:
+    """Upload a document and trigger background ingestion."""
+    file_bytes = await _read_upload_with_limit(file)
+    validator = UploadValidator()
+    result = validator.validate(
+        filename=file.filename or "",
+        content_type=file.content_type or "",
+        file_bytes=file_bytes,
+    )
+    if not result.allowed:
+        raise HTTPException(status_code=400, detail=result.reason)
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if not suffix:
+        raise HTTPException(status_code=400, detail="File must have an extension (e.g., .pdf, .docx, .txt)")
+    storage_name = validator.safe_filename() + suffix
+    storage_path = _RAW_DIR / storage_name
+    storage_path.write_bytes(file_bytes)
+
+    doc_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    doc = Document(
+        id=doc_id,
+        filename=file.filename or storage_name,
+        storage_filename=storage_name,
+        file_type=suffix.lstrip("."),
+        ingestion_status=IngestionStatus.queued,
+        uploaded_by=current_user.id,
+        file_size_bytes=len(file_bytes),
+    )
+    job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
+    db.add(doc)
+    db.add(job)
+    db.commit()
+
+    asyncio.create_task(
+        _run_ingestion_task(
+            doc_id=doc_id,
+            job_id=job_id,
+            file_path=str(storage_path),
+            filename=file.filename or storage_name,
+            uploaded_by=str(current_user.id),
+            retriever=getattr(request.app.state, "retriever", None),
+        )
+    )
+    logger.info("document_upload_queued", doc_id=doc_id, filename=file.filename)
+    return {"doc_id": doc_id, "job_id": job_id}
+
+
+@router.get("/admin/documents")
+@limiter.limit("100/minute")
+def list_documents(
+    request: Request,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> list[dict[str, Any]]:
+    """List all documents with their ingestion status."""
+    chunk_count_sq = (
+        db.query(DocumentChunk.document_id, func.count(DocumentChunk.id).label("cnt"))
+        .group_by(DocumentChunk.document_id)
+        .subquery()
+    )
+    rows = (
+        db.query(Document, func.coalesce(chunk_count_sq.c.cnt, 0).label("chunk_count"))
+        .outerjoin(chunk_count_sq, Document.id == chunk_count_sq.c.document_id)
+        .order_by(Document.uploaded_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "file_type": d.file_type,
+            "ingestion_status": d.ingestion_status,
+            "uploaded_at": d.uploaded_at,
+            "version": d.version,
+            "active_version": d.active_version,
+            "chunk_count": cnt,
+            "file_size_bytes": d.file_size_bytes,
+        }
+        for d, cnt in rows
+    ]
+
+
+@router.get("/admin/documents/{doc_id}/status")
+@limiter.limit("100/minute")
+def get_document_status(
+    request: Request,
+    doc_id: str,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Poll ingestion progress for a specific document."""
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    job = (
+        db.query(IngestionJob)
+        .filter(IngestionJob.document_id == doc_id)
+        .order_by(IngestionJob.created_at.desc())
+        .first()
+    )
+    return {
+        "doc_id": doc_id,
+        "ingestion_status": doc.ingestion_status,
+        "job_status": job.status if job else None,
+        "job_error": job.error if job else None,
+        "ingestion_started_at": doc.ingestion_started_at,
+    }
+
+
+@router.delete("/admin/documents/{doc_id}", status_code=204)
+def delete_document(
+    request: Request,
+    doc_id: str,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> None:
+    """Delete a document from filesystem, vector store, DB, and semantic cache."""
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    active_job = (
+        db.query(IngestionJob)
+        .filter(
+            IngestionJob.document_id == doc_id,
+            IngestionJob.status == IngestionJobStatus.embedding,
+        )
+        .first()
+    )
+    if active_job:
+        raise HTTPException(
+            status_code=409,
+            detail="Document is currently being ingested. Wait for completion before deleting.",
+        )
+
+    try:
+        with db.begin():
+            _delete_qdrant_points(doc_id)
+            invalidate_cache_for_document(db, doc_id, commit=False)
+            db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
+            db.query(IngestionJob).filter(IngestionJob.document_id == doc_id).delete()
+            db.delete(doc)
+    except Exception:
+        db.rollback()
+        raise
+
+    raw_path = _RAW_DIR / doc.storage_filename
+    if raw_path.exists():
+        try:
+            raw_path.unlink()
+        except OSError as exc:
+            logger.warning("raw_document_delete_failed", doc_id=doc_id, error=str(exc))
+
+    retriever = getattr(request.app.state, "retriever", None)
+    if retriever is not None and hasattr(retriever, "remove_from_bm25"):
+        try:
+            retriever.remove_from_bm25(doc_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
+    logger.info("document_deleted", doc_id=doc_id)
+
+
+@router.post("/admin/documents/{doc_id}/reindex", status_code=202)
+async def reindex_document(
+    doc_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+) -> dict[str, str]:
+    """Re-trigger ingestion for an existing document."""
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    raw_path = _RAW_DIR / doc.storage_filename
+    if not raw_path.exists():
+        raise HTTPException(status_code=409, detail="Raw file not found; upload again")
+
+    job_id = str(uuid.uuid4())
+    job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
+    _delete_qdrant_points(doc_id)
+    invalidate_cache_for_document(db, doc_id, commit=False)
+    db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
+    doc.version = (doc.version or 1) + 1
+    doc.active_version = doc.version
+    doc.ingestion_status = IngestionStatus.queued
+    doc.ingestion_started_at = None
+    db.add(job)
+    db.commit()
+
+    retriever = getattr(request.app.state, "retriever", None)
+    if retriever is not None and hasattr(retriever, "remove_from_bm25"):
+        try:
+            retriever.remove_from_bm25(doc_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
+
+    asyncio.create_task(
+        _run_ingestion_task(
+            doc_id=doc_id,
+            job_id=job_id,
+            file_path=str(raw_path),
+            filename=str(doc.filename),
+            uploaded_by=str(current_user.id),
+            retriever=retriever,
+        )
+    )
+    return {"job_id": job_id}
+
+
+async def _read_upload_with_limit(file: UploadFile) -> bytes:
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_READ_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="Request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _delete_qdrant_points(doc_id: str) -> None:
+    try:
+        client = QdrantClient(url=settings.qdrant_url)
+        client.delete(
+            collection_name=_QDRANT_COLLECTION,
+            points_selector=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="doc_id",
+                        match=qmodels.MatchValue(value=doc_id),
+                    )
+                ]
+            ),
+        )
+    except Exception as exc:
+        logger.warning("qdrant_document_delete_failed", doc_id=doc_id, error=str(exc))
+        raise
+
+
+# ---------------------------------------------------------------------------
+# User management
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/users")
+@limiter.limit("100/minute")
+def list_users(
+    request: Request,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> list[dict[str, Any]]:
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    return [
+        {
+            "id": u.id,
+            "email": u.email,
+            "role": u.role,
+            "is_active": u.is_active,
+            "created_at": u.created_at,
+        }
+        for u in users
+    ]
+
+
+@router.post("/admin/users", status_code=201)
+def create_user(
+    body: CreateUserRequest,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, str]:
+    if body.password is not None and len(body.password) < 12:
+        raise HTTPException(status_code=422, detail="Password must be at least 12 characters")
+    existing = db.query(User).filter(User.email == body.email).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    generated_password = body.password is None
+    raw_password = body.password or secrets.token_urlsafe(24)
+    user = User(
+        id=str(uuid.uuid4()),
+        email=body.email,
+        password_hash=hash_password(raw_password),
+        role=body.role,
+    )
+    db.add(user)
+    db.commit()
+    logger.info("user_created", user_id=str(user.id), email=body.email, invited=generated_password)
+    response: dict[str, str] = {"id": str(user.id)}
+    if generated_password:
+        response["password"] = raw_password
+    return response
+
+
+@router.delete("/admin/users/{user_id}", status_code=204)
+def deactivate_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_role("admin")),
+) -> None:
+    if user_id == str(current_admin.id):
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role == UserRole.admin:
+        raise HTTPException(status_code=400, detail="Cannot deactivate admin users")
+    user.is_active = False
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Audit logs
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/audit-logs")
+@limiter.limit("100/minute")
+def list_audit_logs(
+    request: Request,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    user_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> list[dict[str, Any]]:
+    q = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
+    if start:
+        q = q.filter(AuditLog.timestamp >= start)
+    if end:
+        q = q.filter(AuditLog.timestamp <= end)
+    if user_id:
+        q = q.filter(AuditLog.user_id == user_id)
+    rows = q.offset(offset).limit(min(limit, 1000)).all()
+    return [
+        {
+            "id": r.id,
+            "user_id": r.user_id,
+            "session_id": r.session_id,
+            "timestamp": r.timestamp,
+            "action_type": r.action_type,
+            "query_text": r.query_text,
+            "latency_ms": r.latency_ms,
+            "model_used": r.model_used,
+            "trace_id": r.trace_id,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/admin/audit-logs/export.csv")
+@limiter.limit("100/minute")
+def export_audit_logs_csv(
+    request: Request,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> StreamingResponse:
+    q = db.query(AuditLog).order_by(AuditLog.timestamp.asc())
+    if start:
+        q = q.filter(AuditLog.timestamp >= start)
+    if end:
+        q = q.filter(AuditLog.timestamp <= end)
+    rows = q.limit(50_000).all()
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(
+        buf,
+        fieldnames=["id", "user_id", "session_id", "timestamp", "action_type",
+                    "query_text", "latency_ms", "model_used", "trace_id"],
+    )
+    writer.writeheader()
+    for r in rows:
+        writer.writerow({
+            "id": r.id, "user_id": r.user_id, "session_id": r.session_id,
+            "timestamp": r.timestamp, "action_type": r.action_type,
+            "query_text": r.query_text, "latency_ms": r.latency_ms,
+            "model_used": r.model_used, "trace_id": r.trace_id,
+        })
+    buf.seek(0)
+    filename = f"audit_logs_{datetime.now(UTC).strftime('%Y%m%d')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/stats")
+@limiter.limit("100/minute")
+def get_stats(
+    request: Request,
+    days: int = 30,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Aggregate pilot stats: queries, latency, fallback rate, cache hit rate."""
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+
+    total_queries = (
+        db.query(func.count(AuditLog.id)).filter(AuditLog.timestamp >= cutoff).scalar() or 0
+    )
+    avg_latency = (
+        db.query(func.avg(AuditLog.latency_ms)).filter(AuditLog.timestamp >= cutoff).scalar()
+    )
+    total_cost = (
+        db.query(func.sum(AgentRun.cost_usd)).filter(AgentRun.started_at >= cutoff).scalar() or 0.0
+    )
+    cache_hits = (
+        db.query(func.sum(SemanticCache.hit_count))
+        .filter(SemanticCache.created_at >= cutoff)
+        .scalar()
+        or 0
+    )
+    unique_users = (
+        db.query(func.count(User.id)).filter(User.is_active == True).scalar() or 0  # noqa: E712
+    )
+
+    return {
+        "days": days,
+        "total_queries": total_queries,
+        "avg_latency_ms": round(float(avg_latency), 1) if avg_latency else None,
+        "total_cost_usd": round(float(total_cost), 4),
+        "cache_total_hits": int(cache_hits),
+        "unique_users": int(unique_users),
+        "generated_at": datetime.now(UTC),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+
+@router.get("/settings")
+@limiter.limit("100/minute")
+def get_settings(
+    request: Request,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Return current application settings, mixing env vars with DB overrides."""
+    db_overrides = load_app_config(db)
+
+    # Helper to get value: DB override wins, else env var
+    def _val(key: str, default: Any) -> Any:
+        return db_overrides.get(key, default)
+
+    return {
+        "generationModel": _val("generation_model", settings.ollama_model),
+        "generationFallback": _val("generation_fallback_model", settings.ollama_model),
+        "embeddingModel": _val("embedding_model", settings.embedding_model),
+        "visionModel": _val("vision_model", "qwen2.5vl:7b"),
+        "reranker": {
+            "enabled": _val("reranker_enabled", True),
+            "model": _val("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
+        },
+        "retrieval": {
+            "k": _val("retrieval_k", 6),
+            "scoreFloor": _val("score_floor", 0.45),
+            "chunkSize": _val("chunk_size", 800),
+            "chunkOverlap": _val("chunk_overlap", 150),
+        },
+        "sources": [
+            {
+                "id": "src-1",
+                "kind": "watch",
+                "label": "data/raw",
+                "detail": "Local filesystem watch",
+                "docCount": db.query(Document).count(),
+                "syncedAt": "2h ago",
+                "status": "ok",
+            },
+        ],
+        "security": {
+            "ssoOnly": _val("sso_only", False),
+            "sessionHours": _val("session_hours", 24),
+            "auditRetentionDays": _val("audit_retention_days", settings.audit_log_retention_days),
+            "redactPII": _val("redact_pii", False),
+        },
+        "cost": {
+            "dailyCeilingUsd": _val("daily_ceiling_usd", 50),
+            "monthlyCeilingUsd": _val("monthly_ceiling_usd", 500),
+            "todayUsd": 0.12,
+        },
+    }
+
+
+class PatchSettingsRequest(BaseModel):
+    generationModel: str | None = None
+    generationFallback: str | None = None
+    embeddingModel: str | None = None
+    visionModel: str | None = None
+    rerankerEnabled: bool | None = None
+    rerankerModel: str | None = None
+    retrievalK: int | None = None
+    scoreFloor: float | None = None
+    chunkSize: int | None = None
+    chunkOverlap: int | None = None
+    ssoOnly: bool | None = None
+    sessionHours: int | None = None
+    auditRetentionDays: int | None = None
+    redactPII: bool | None = None
+    dailyCeilingUsd: float | None = None
+    monthlyCeilingUsd: float | None = None
+
+
+@router.patch("/settings", status_code=200)
+def patch_settings(
+    request: Request,
+    body: PatchSettingsRequest,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, str]:
+    """Update mutable application settings stored in the DB."""
+    current_config = load_app_config(db)
+    updates: dict[str, Any] = {}
+    if body.generationModel is not None:
+        updates["generation_model"] = body.generationModel
+    if body.generationFallback is not None:
+        updates["generation_fallback_model"] = body.generationFallback
+    if body.embeddingModel is not None:
+        updates["embedding_model"] = body.embeddingModel
+    if body.visionModel is not None:
+        updates["vision_model"] = body.visionModel
+    if body.rerankerEnabled is not None:
+        updates["reranker_enabled"] = body.rerankerEnabled
+    if body.rerankerModel is not None:
+        updates["reranker_model"] = body.rerankerModel
+    if body.retrievalK is not None:
+        if body.retrievalK < 1 or body.retrievalK > 32:
+            raise HTTPException(status_code=422, detail="retrievalK must be between 1 and 32")
+        updates["retrieval_k"] = body.retrievalK
+    if body.scoreFloor is not None:
+        if body.scoreFloor < 0 or body.scoreFloor > 1:
+            raise HTTPException(status_code=422, detail="scoreFloor must be between 0 and 1")
+        updates["score_floor"] = body.scoreFloor
+    if body.chunkSize is not None:
+        if body.chunkSize < 128 or body.chunkSize > 2048:
+            raise HTTPException(status_code=422, detail="chunkSize must be between 128 and 2048")
+        current_overlap = int(current_config.get("chunk_overlap", 150))
+        if body.chunkOverlap is None and current_overlap >= body.chunkSize:
+            raise HTTPException(status_code=422, detail="chunkSize must be larger than chunkOverlap")
+        updates["chunk_size"] = body.chunkSize
+    if body.chunkOverlap is not None:
+        if body.chunkOverlap < 0 or body.chunkOverlap > 512:
+            raise HTTPException(status_code=422, detail="chunkOverlap must be between 0 and 512")
+        current_chunk_size = int(current_config.get("chunk_size", 800))
+        effective_chunk_size = body.chunkSize if body.chunkSize is not None else current_chunk_size
+        if body.chunkOverlap >= effective_chunk_size:
+            raise HTTPException(status_code=422, detail="chunkOverlap must be smaller than chunkSize")
+        updates["chunk_overlap"] = body.chunkOverlap
+    if body.ssoOnly is not None:
+        updates["sso_only"] = body.ssoOnly
+    if body.sessionHours is not None:
+        if body.sessionHours < 1 or body.sessionHours > 720:
+            raise HTTPException(status_code=422, detail="sessionHours must be between 1 and 720")
+        updates["session_hours"] = body.sessionHours
+    if body.auditRetentionDays is not None:
+        if body.auditRetentionDays < 30 or body.auditRetentionDays > 3650:
+            raise HTTPException(status_code=422, detail="auditRetentionDays must be between 30 and 3650")
+        updates["audit_retention_days"] = body.auditRetentionDays
+    if body.redactPII is not None:
+        updates["redact_pii"] = body.redactPII
+    if body.dailyCeilingUsd is not None:
+        if body.dailyCeilingUsd < 1 or body.dailyCeilingUsd > 10000:
+            raise HTTPException(status_code=422, detail="dailyCeilingUsd must be between 1 and 10000")
+        updates["daily_ceiling_usd"] = body.dailyCeilingUsd
+    if body.monthlyCeilingUsd is not None:
+        if body.monthlyCeilingUsd < 30 or body.monthlyCeilingUsd > 300000:
+            raise HTTPException(status_code=422, detail="monthlyCeilingUsd must be between 30 and 300000")
+        updates["monthly_ceiling_usd"] = body.monthlyCeilingUsd
+
+    upsert_app_config(db, updates)
+    db.commit()
+    try:
+        _runtime, retriever, reranker, graph = build_runtime_components(db)
+        request.app.state.retriever = retriever
+        request.app.state.reranker = reranker
+        request.app.state.graph = graph
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("runtime_refresh_failed", error=str(exc))
+    logger.info("settings_updated", keys=list(updates.keys()))
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Human review queue
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/review-queue")
+@limiter.limit("100/minute")
+def list_review_queue(
+    request: Request,
+    status: ReviewStatus = ReviewStatus.pending,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> list[dict[str, Any]]:
+    rows = (
+        db.query(HumanReviewQueue)
+        .filter(HumanReviewQueue.status == status)
+        .order_by(HumanReviewQueue.id)
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "session_id": r.session_id,
+            "user_id": r.user_id,
+            "query": r.query,
+            "draft_answer": r.draft_answer,
+            "risk_reason": r.risk_reason,
+            "status": r.status,
+            "reviewed_by": r.reviewed_by,
+            "reviewed_at": r.reviewed_at,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/admin/review-queue/{item_id}/approve", status_code=200)
+def approve_review_item(
+    item_id: str,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_role("admin")),
+) -> dict[str, str]:
+    item = db.get(HumanReviewQueue, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Review item not found")
+    if item.status != ReviewStatus.pending:
+        raise HTTPException(status_code=409, detail="Item already reviewed")
+    item.status = ReviewStatus.approved
+    item.reviewed_by = str(current_admin.id)
+    item.reviewed_at = datetime.now(UTC)
+    db.commit()
+    return {"status": "approved"}
+
+
+@router.post("/admin/review-queue/{item_id}/reject", status_code=200)
+def reject_review_item(
+    item_id: str,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_role("admin")),
+) -> dict[str, str]:
+    item = db.get(HumanReviewQueue, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Review item not found")
+    if item.status != ReviewStatus.pending:
+        raise HTTPException(status_code=409, detail="Item already reviewed")
+    item.status = ReviewStatus.rejected
+    item.reviewed_by = str(current_admin.id)
+    item.reviewed_at = datetime.now(UTC)
+    db.commit()
+    return {"status": "rejected"}
+
+
+# ---------------------------------------------------------------------------
+# Current user info (convenience endpoint)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/me")
+def get_me(current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "role": current_user.role,
+        "is_active": current_user.is_active,
+    }

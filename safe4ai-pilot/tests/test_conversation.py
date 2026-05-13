@@ -70,6 +70,52 @@ def test_save_session_updates_db() -> None:
     db.commit.assert_called_once()
 
 
+def test_load_session_raises_value_error_on_invalid_state() -> None:
+    db = MagicMock()
+    mock_row = MagicMock()
+    # current_step must be one of the Literal values; "invalid_step" triggers ValidationError
+    mock_row.state_json = {"session_id": "sess-1", "user_id": "u1", "current_step": "invalid_step"}
+    db.get.return_value = mock_row
+
+    manager = _make_manager(db=db)
+    with pytest.raises(ValueError, match="Invalid session state"):
+        manager.load_session("sess-1")
+
+
+def test_save_session_strips_control_characters() -> None:
+    db = MagicMock()
+    state = _make_state()
+    state.messages = [Message(role="user", content="Hello\x00World\x01!")]
+    mock_row = MagicMock()
+    db.get.return_value = mock_row
+
+    manager = _make_manager(db=db)
+    manager.save_session(state)
+
+    saved = mock_row.state_json
+    messages = saved.get("messages", [])
+    assert len(messages) == 1
+    assert "\x00" not in messages[0]["content"]
+    assert messages[0]["content"] == "HelloWorld!"
+
+
+def test_save_session_preserves_newlines() -> None:
+    """Tab and newline (\\t, \\n) are allowed; only unsafe control chars are stripped."""
+    db = MagicMock()
+    state = _make_state()
+    state.messages = [Message(role="user", content="Line1\nLine2\tTabbed")]
+    mock_row = MagicMock()
+    db.get.return_value = mock_row
+
+    manager = _make_manager(db=db)
+    manager.save_session(state)
+
+    saved = mock_row.state_json
+    content = saved["messages"][0]["content"]
+    assert "\n" in content
+    assert "\t" in content
+
+
 def test_get_recent_messages() -> None:
     db = MagicMock()
     state = _make_state()

@@ -24,11 +24,18 @@ class UserRole(str, enum.Enum):
 
 
 class IngestionStatus(str, enum.Enum):
-    pending = "pending"
-    ingesting = "ingesting"
-    ready = "ready"
+    queued = "queued"
+    embedding = "embedding"
+    indexed = "indexed"
     failed = "failed"
-    needs_review = "needs_review"
+    skipped = "skipped"
+
+
+class IngestionJobStatus(str, enum.Enum):
+    pending = "pending"
+    embedding = "embedding"
+    completed = "completed"
+    failed = "failed"
 
 
 class FeedbackRating(str, enum.Enum):
@@ -59,7 +66,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(String, primary_key=True)
-    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     state_json = Column(JSON, nullable=True)
@@ -73,12 +80,13 @@ class Document(Base):
     storage_filename = Column(String, nullable=False)
     file_type = Column(String, nullable=False)
     ingestion_status = Column(
-        Enum(IngestionStatus), nullable=False, default=IngestionStatus.pending
+        Enum(IngestionStatus), nullable=False, default=IngestionStatus.queued
     )
     uploaded_by = Column(String, ForeignKey("users.id"), nullable=False)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
     doc_metadata = Column(JSON, nullable=True)
     ingestion_started_at = Column(DateTime(timezone=True), nullable=True)
+    file_size_bytes = Column(Integer, nullable=True)
     version = Column(Integer, default=1)
     active_version = Column(Integer, default=1)
 
@@ -87,7 +95,7 @@ class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
     id = Column(String, primary_key=True)
-    document_id = Column(String, ForeignKey("documents.id"), nullable=False, index=True)
+    document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     chunk_index = Column(Integer, nullable=False)
     chunk_version = Column(Integer, default=1)
     content_preview = Column(String(500), nullable=True)
@@ -104,7 +112,7 @@ class SemanticCache(Base):
     citations_json = Column(JSON, nullable=True)
     source_document_ids = Column(JSON, nullable=True)
     source_chunk_ids = Column(JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     hit_count = Column(Integer, default=0)
 
 
@@ -142,7 +150,7 @@ class QueryFeedback(Base):
     id = Column(String, primary_key=True)
     trace_id = Column(String, nullable=False, index=True)
     session_id = Column(String, nullable=False)
-    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     rating = Column(Enum(FeedbackRating), nullable=False)
     comment = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -152,8 +160,8 @@ class IngestionJob(Base):
     __tablename__ = "ingestion_jobs"
 
     id = Column(String, primary_key=True)
-    document_id = Column(String, ForeignKey("documents.id"), nullable=False, index=True)
-    status = Column(String, nullable=False, default="pending")
+    document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(Enum(IngestionJobStatus), nullable=False, default=IngestionJobStatus.pending)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
     error = Column(Text, nullable=True)
@@ -164,11 +172,19 @@ class HumanReviewQueue(Base):
 
     id = Column(String, primary_key=True)
     session_id = Column(String, nullable=False)
-    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     query = Column(Text, nullable=False)
     draft_answer = Column(Text, nullable=True)
     citations_json = Column(JSON, nullable=True)
     risk_reason = Column(Text, nullable=True)
-    status = Column(Enum(ReviewStatus), nullable=False, default=ReviewStatus.pending)
+    status = Column(Enum(ReviewStatus), nullable=False, default=ReviewStatus.pending, index=True)
     reviewed_by = Column(String, nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AppConfig(Base):
+    __tablename__ = "app_config"
+
+    key = Column(String, primary_key=True)
+    value = Column(JSON, nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -34,6 +34,8 @@ between requests. The app also pre-warms Ollama on startup by calling
    cp .env.example .env
    ```
 
+   Then set `SECRET_KEY` in `.env` to a strong random 64-character hex string.
+
 2. Start the stack:
 
    ```bash

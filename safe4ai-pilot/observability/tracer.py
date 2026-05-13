@@ -4,7 +4,7 @@ import os
 from types import TracebackType
 
 import structlog
-from opentelemetry import trace
+from opentelemetry import context, trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -13,6 +13,7 @@ logger = structlog.get_logger(__name__)
 
 _VALID_STAGES: frozenset[str] = frozenset(
     {
+        "pipeline",
         "input_guard",
         "query_rewrite",
         "retrieval",
@@ -24,7 +25,8 @@ _VALID_STAGES: frozenset[str] = frozenset(
 )
 
 _endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-_exporter = OTLPSpanExporter(endpoint=_endpoint, insecure=True)
+_insecure = os.environ.get("OTEL_EXPORTER_INSECURE", "true").lower() == "true"
+_exporter = OTLPSpanExporter(endpoint=_endpoint, insecure=_insecure)
 _provider = TracerProvider()
 _provider.add_span_processor(BatchSpanProcessor(_exporter))
 trace.set_tracer_provider(_provider)
@@ -40,11 +42,14 @@ class PipelineSpan:
         self._stage = stage
         self._trace_id = trace_id
         self._span: trace.Span | None = None
+        self._token: object | None = None
 
     def __enter__(self) -> PipelineSpan:
         self._span = self._tracer.start_span(self._stage)
         self._span.set_attribute("trace_id", self._trace_id)
         self._span.set_attribute("stage", self._stage)
+        ctx = trace.set_span_in_context(self._span)
+        self._token = context.attach(ctx)
         return self
 
     def __exit__(
@@ -53,6 +58,8 @@ class PipelineSpan:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        if self._token is not None:
+            context.detach(self._token)  # type: ignore[arg-type]
         if self._span is not None:
             if exc_val is not None:
                 self._span.record_exception(exc_val)

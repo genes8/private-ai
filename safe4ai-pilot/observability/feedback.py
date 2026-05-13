@@ -48,10 +48,10 @@ class FeedbackStore:
         )
         return feedback_id
 
-    def list_for_admin(self, db: Session, limit: int = 100) -> list[dict[str, Any]]:
+    def list_for_admin(self, limit: int = 100) -> list[dict[str, Any]]:
         """Return the most recent feedback rows as plain dicts."""
         rows = (
-            db.query(QueryFeedback)
+            self._db.query(QueryFeedback)
             .order_by(QueryFeedback.created_at.desc())
             .limit(limit)
             .all()

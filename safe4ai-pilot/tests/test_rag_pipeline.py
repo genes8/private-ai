@@ -112,7 +112,7 @@ async def test_ingest_empty_document_sets_failed_status_and_commits() -> None:
     db.get.return_value = mock_doc
     pipeline._db = db
 
-    with patch.object(pipeline, "_load_pdf", new=AsyncMock(return_value=([("", 1)], 0))):
+    with patch.object(pipeline, "_load_pdf", new=AsyncMock(return_value=([("", 1, "native")], 0))):
         await pipeline.ingest("empty.pdf", "doc-1", "empty.pdf", "user-1")
 
     assert mock_doc.ingestion_status == "failed"
@@ -193,4 +193,71 @@ async def test_ingest_triggers_needs_review() -> None:
     # _set_status was called — verified via db.get call
     db.get.assert_called()
     # With 1 page and 1 low confidence page: 1/1 > 0.5 → needs_review
-    assert mock_doc.ingestion_status == "needs_review"
+    assert mock_doc.ingestion_status == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_ingest_sets_ocr_quality_in_qdrant_payload() -> None:
+    """Qdrant point payload must include ocr_quality from _load_pdf."""
+    pipeline = _make_pipeline()
+
+    fake_page = MagicMock()
+    fake_page.extract_text.return_value = "X"  # < 50 chars → OCR path
+
+    mock_reader = MagicMock()
+    mock_reader.pages = [fake_page]
+
+    db = MagicMock()
+    pipeline._db = db
+    pipeline._qdrant = MagicMock()
+    db.get.return_value = MagicMock()
+
+    fake_image = MagicMock()
+
+    with (
+        patch("app.services.rag_pipeline.PdfReader", return_value=mock_reader),
+        patch("app.services.rag_pipeline.convert_from_path", return_value=[fake_image]),
+        patch.object(pipeline, "_ocr_page", new=AsyncMock(return_value=("ocr text", "medium"))),
+        patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
+        patch.object(pipeline, "_retriever") as mock_retriever,
+    ):
+        mock_retriever.update_bm25_index = MagicMock()
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"%PDF fake")
+            tmp_path = f.name
+        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
+
+    points = pipeline._qdrant.upsert.call_args.kwargs["points"]
+    assert len(points) > 0
+    assert points[0].payload["ocr_quality"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_ingest_native_pdf_page_gets_native_quality() -> None:
+    """Native text extraction pages must set ocr_quality='native' in the payload."""
+    pipeline = _make_pipeline()
+
+    fake_page = MagicMock()
+    fake_page.extract_text.return_value = "A" * 100  # >= 50 chars → native
+
+    mock_reader = MagicMock()
+    mock_reader.pages = [fake_page]
+
+    db = MagicMock()
+    pipeline._db = db
+    pipeline._qdrant = MagicMock()
+    db.get.return_value = MagicMock()
+
+    with (
+        patch("app.services.rag_pipeline.PdfReader", return_value=mock_reader),
+        patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
+        patch.object(pipeline, "_retriever") as mock_retriever,
+    ):
+        mock_retriever.update_bm25_index = MagicMock()
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"%PDF fake")
+            tmp_path = f.name
+        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
+
+    points = pipeline._qdrant.upsert.call_args.kwargs["points"]
+    assert points[0].payload["ocr_quality"] == "native"

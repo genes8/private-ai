@@ -84,3 +84,21 @@ def test_auth_login_has_security_headers(client_with_mocks: TestClient) -> None:
 
     headers = {k.lower(): v for k, v in response.headers.items()}
     assert "x-content-type-options" in headers
+
+
+def test_body_limit_honors_configured_max_upload_size(client_with_mocks: TestClient) -> None:
+    """Request body middleware must reject bodies above configured max, without extra slack."""
+    from app.main import settings
+
+    original_limit = settings.max_upload_size_mb
+    settings.max_upload_size_mb = 0
+    try:
+        response = client_with_mocks.post(
+            "/auth/login",
+            content=b"x",
+            headers={"content-type": "application/octet-stream"},
+        )
+    finally:
+        settings.max_upload_size_mb = original_limit
+
+    assert response.status_code == 413

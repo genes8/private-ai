@@ -8,9 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.fixture
-def obs_client() -> TestClient:
-    """TestClient with the observability router and all external dependencies mocked."""
+def _make_test_app(role: str) -> TestClient:
     from fastapi import FastAPI
 
     from app.api.observability_routes import router as obs_router
@@ -24,17 +22,29 @@ def obs_client() -> TestClient:
         return mock_db
 
     def override_get_current_user() -> User:
-        admin = User()
-        setattr(admin, "id", "admin-1")
-        setattr(admin, "role", UserRole.admin)
-        setattr(admin, "is_active", True)
-        return admin
+        user = User()
+        setattr(user, "id", "user-1")
+        setattr(user, "role", UserRole(role))
+        setattr(user, "is_active", True)
+        return user
 
     test_app = FastAPI()
     test_app.include_router(obs_router)
     test_app.dependency_overrides[get_db] = override_get_db
     test_app.dependency_overrides[get_current_user] = override_get_current_user
     return TestClient(test_app)
+
+
+@pytest.fixture
+def obs_client() -> TestClient:
+    """TestClient authenticated as admin."""
+    return _make_test_app("admin")
+
+
+@pytest.fixture
+def obs_client_pilot() -> TestClient:
+    """TestClient authenticated as pilot_user (non-admin)."""
+    return _make_test_app("pilot_user")
 
 
 class TestSubmitFeedback:
@@ -59,6 +69,9 @@ class TestSubmitFeedback:
         body = resp.json()
         assert "id" in body
         assert body["id"] == "feedback-uuid-123"
+        mock_instance.store.assert_called_once_with(
+            "sess-1", "user-1", "trace-1", "positive", None
+        )
 
     def test_submit_feedback_negative_with_comment(self, obs_client: TestClient) -> None:
         with patch("app.api.observability_routes.FeedbackStore") as MockStore:
@@ -78,6 +91,9 @@ class TestSubmitFeedback:
 
         assert resp.status_code == 200
         assert resp.json()["id"] == "feedback-uuid-456"
+        mock_instance.store.assert_called_once_with(
+            "sess-2", "user-1", "trace-2", "negative", "Not helpful"
+        )
 
     def test_submit_feedback_invalid_rating(self, obs_client: TestClient) -> None:
         resp = obs_client.post(
@@ -157,4 +173,13 @@ class TestListFeedback:
         body = resp.json()
         assert isinstance(body, list)
         assert len(body) == 1
-        assert body[0]["id"] == "f1"
+
+
+class TestAdminAuthGuard:
+    def test_feedback_list_rejects_pilot_user(self, obs_client_pilot: TestClient) -> None:
+        resp = obs_client_pilot.get("/admin/feedback")
+        assert resp.status_code == 403
+
+    def test_cost_stats_rejects_pilot_user(self, obs_client_pilot: TestClient) -> None:
+        resp = obs_client_pilot.get("/admin/stats/cost")
+        assert resp.status_code == 403

@@ -1,0 +1,15 @@
+@import "./styles/tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { font-family: var(--font-sans); font-size: 13px; }
+body {
+  background: var(--paper);
+  color: var(--text);
+  line-height: 1.45;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}

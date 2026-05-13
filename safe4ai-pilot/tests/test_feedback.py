@@ -96,7 +96,7 @@ class TestFeedbackStore:
         mock_db.query.return_value = mock_query
 
         store = FeedbackStore(mock_db)
-        result = store.list_for_admin(mock_db, limit=100)
+        result = store.list_for_admin(limit=100)
 
         assert isinstance(result, list)
         assert len(result) == 2
@@ -116,6 +116,6 @@ class TestFeedbackStore:
         mock_db.query.return_value = mock_query
 
         store = FeedbackStore(mock_db)
-        result = store.list_for_admin(mock_db)
+        result = store.list_for_admin()
 
         assert result == []

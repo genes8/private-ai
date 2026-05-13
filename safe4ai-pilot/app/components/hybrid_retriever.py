@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -26,6 +27,19 @@ class HybridRetriever:
         self._bm25_chunk_ids: list[str] = []
         self._bm25_payloads: dict[str, dict[str, Any]] = {}
 
+    def _rebuild_bm25_index(self, entries: list[tuple[str, str, dict[str, Any]]]) -> None:
+        if not entries:
+            self._bm25 = None
+            self._bm25_chunk_ids = []
+            self._bm25_payloads = {}
+            return
+
+        chunk_ids = [chunk_id for chunk_id, _, _ in entries]
+        contents = [content for _, content, _ in entries]
+        self._bm25 = BM25Okapi([text.lower().split() for text in contents])
+        self._bm25_chunk_ids = chunk_ids
+        self._bm25_payloads = {chunk_id: payload for chunk_id, _, payload in entries}
+
     def update_bm25_index(
         self,
         chunk_ids: list[str],
@@ -33,11 +47,55 @@ class HybridRetriever:
         payloads: list[dict[str, Any]] | None = None,
     ) -> None:
         """Rebuild BM25 index with the given chunk IDs and their text contents."""
-        tokenized = [text.lower().split() for text in contents]
-        self._bm25 = BM25Okapi(tokenized)
-        self._bm25_chunk_ids = list(chunk_ids)
-        default_payloads = ({"content": text} for text in contents)
-        self._bm25_payloads = dict(zip(chunk_ids, payloads or default_payloads))
+        if not chunk_ids:
+            return
+
+        incoming_payloads = (
+            list(payloads) if payloads is not None else [{"content": text} for text in contents]
+        )
+        incoming_entries = [
+            (chunk_id, content, payload)
+            for chunk_id, content, payload in zip(chunk_ids, contents, incoming_payloads, strict=False)
+        ]
+
+        if self._bm25 is None or not self._bm25_chunk_ids:
+            self._rebuild_bm25_index(incoming_entries)
+            return
+
+        existing_entries: list[tuple[str, str, dict[str, Any]]] = []
+        for chunk_id in self._bm25_chunk_ids:
+            payload = self._bm25_payloads.get(chunk_id)
+            if payload is None:
+                continue
+            existing_entries.append(
+                (
+                    chunk_id,
+                    str(payload.get("content", "")),
+                    dict(payload),
+                )
+            )
+
+        self._rebuild_bm25_index(existing_entries + incoming_entries)
+
+    def remove_from_bm25(self, doc_id: str) -> None:
+        """Remove all BM25 entries for a document and rebuild the sparse index."""
+        if self._bm25 is None or not self._bm25_chunk_ids:
+            return
+
+        remaining_entries: list[tuple[str, str, dict[str, Any]]] = []
+        for chunk_id in self._bm25_chunk_ids:
+            payload = self._bm25_payloads.get(chunk_id, {})
+            if str(payload.get("doc_id", "")) == doc_id:
+                continue
+            remaining_entries.append(
+                (
+                    chunk_id,
+                    str(payload.get("content", "")),
+                    dict(payload),
+                )
+            )
+
+        self._rebuild_bm25_index(remaining_entries)
 
     async def _embed(self, query: str) -> list[float]:
         async with httpx.AsyncClient() as client:
@@ -74,7 +132,8 @@ class HybridRetriever:
                 ]
             )
 
-        response = self._qdrant.query_points(
+        response = await asyncio.to_thread(
+            self._qdrant.query_points,
             collection_name=collection or self._collection,
             query=embedding,
             limit=top_k,

@@ -147,12 +147,28 @@ def test_login_account_locked(test_client: TestClient) -> None:
 
 
 def test_logout_clears_cookie(test_client: TestClient) -> None:
+    token = encode_token("user-1", "pilot_user")
+    csrf_token = "test-csrf-token"
+    test_client.cookies.set("access_token", token)
+    test_client.cookies.set("csrf_token", csrf_token)
+    test_client.headers["X-CSRF-Token"] = csrf_token
+
     response = test_client.post("/auth/logout")
     assert response.status_code == 200
     assert response.json() == {"message": "logged out"}
     set_cookie = response.headers.get("set-cookie", "")
     assert "access_token" in set_cookie
+    assert "csrf_token" in set_cookie
     assert "max-age=0" in set_cookie.lower()
+
+
+def test_logout_requires_csrf_when_authenticated(test_client: TestClient) -> None:
+    token = encode_token("user-1", "pilot_user")
+    test_client.cookies.set("access_token", token)
+
+    response = test_client.post("/auth/logout")
+
+    assert response.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -181,12 +197,11 @@ def test_require_role_admin_blocks_pilot(test_client: TestClient) -> None:
     pilot_token = encode_token(str(pilot_user.id), str(pilot_user.role))
 
     app.dependency_overrides[get_db] = _override_get_db(db)
+    test_client.cookies.set("access_token", pilot_token)
     try:
-        response = test_client.get(
-            "/test-admin-only",
-            cookies={"access_token": pilot_token},
-        )
+        response = test_client.get("/test-admin-only")
     finally:
+        test_client.cookies.clear()
         app.dependency_overrides.pop(get_db, None)
 
     assert response.status_code == 403
