@@ -9,6 +9,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from app.db.models import SemanticCache as SemanticCacheModel
+from app.db.models import SemanticCacheHit
 from app.models import Citation
 
 
@@ -64,6 +65,7 @@ class SemanticCache:
             .where(SemanticCacheModel.id == row[0])
             .values(hit_count=SemanticCacheModel.hit_count + 1)
         )
+        self._db.add(SemanticCacheHit(id=str(uuid.uuid4()), cache_id=row[0]))
         self._db.commit()
 
         return {

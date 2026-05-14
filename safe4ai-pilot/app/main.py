@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from secrets import compare_digest
+from secrets import compare_digest, token_urlsafe
 
 import httpx
 import structlog
@@ -98,6 +98,18 @@ async def limit_body_size(
             return Response(status_code=400, content="Invalid content-length header")
         if length > max_body_bytes:
             return Response(status_code=413, content="Request body too large")
+    elif request.headers.get("transfer-encoding", "").lower() == "chunked":
+        # Chunked requests lack Content-Length; consume body with a size cap
+        try:
+            body = bytearray()
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > max_body_bytes:
+                    return Response(status_code=413, content="Request body too large")
+            # Rewind: replace the consumed body so downstream handlers can read it
+            request._body = bytes(body)
+        except Exception:
+            return Response(status_code=400, content="Failed to read request body")
     return await call_next(request)
 
 
@@ -231,7 +243,7 @@ def _ensure_deleted_user() -> None:
                 {
                     "user_id": _DELETED_USER_ID,
                     "email": _DELETED_USER_EMAIL,
-                    "password_hash": hash_password("deleted-user-disabled-password"),
+                    "password_hash": hash_password(token_urlsafe(24)),
                     "role": "pilot_user",
                 },
             )

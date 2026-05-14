@@ -338,6 +338,39 @@ class TestDocumentReindex:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_reindex_qdrant_failure_does_not_delete_db_chunks(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        doc = _make_document()
+        db.get.side_effect = lambda model, pk: admin if model is User else doc
+
+        document_chunk_query = MagicMock()
+        document_chunk_query.filter.return_value.delete.return_value = 1
+        ingestion_job_query = MagicMock()
+        ingestion_job_query.filter.return_value.first.return_value = None
+        generic_query = MagicMock()
+
+        def _query(model: Any) -> Any:
+            from app.db.models import DocumentChunk, IngestionJob
+            if model is IngestionJob:
+                return ingestion_job_query
+            if model is DocumentChunk:
+                return document_chunk_query
+            return generic_query
+
+        db.query.side_effect = _query
+
+        with patch("pathlib.Path.mkdir"), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("app.api.admin_routes._delete_qdrant_points", side_effect=RuntimeError("qdrant down")):
+            client = _make_test_client(db, admin)
+            resp = client.post("/admin/documents/doc-1/reindex")
+
+        assert resp.status_code == 502
+        document_chunk_query.filter.return_value.delete.assert_not_called()
+        from app.main import app
+        app.dependency_overrides.clear()
+
 
 class TestSettings:
     def test_get_settings_uses_live_cost_stats(self) -> None:
@@ -531,6 +564,81 @@ class TestUserManagement:
             )
 
         assert resp.status_code == 409
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_create_user_rejects_invalid_email_format(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.post(
+                "/admin/users",
+                json={"email": "bad email@example.com", "password": "strongpassword123", "role": "pilot_user"},
+            )
+
+        assert resp.status_code == 422
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_deactivate_user_deletes_agent_runs_for_user_sessions(self) -> None:
+        admin = _make_admin_user()
+        target = _make_pilot_user("user-77")
+        deleted_user = _make_pilot_user("00000000-0000-0000-0000-000000000001")
+        deleted_user.email = "deleted@redacted.local"
+
+        db = MagicMock()
+        db.get.side_effect = lambda model, pk: {
+            "admin-1": admin,
+            "user-77": target,
+            "00000000-0000-0000-0000-000000000001": deleted_user,
+        }.get(pk)
+
+        document_query = MagicMock()
+        document_query.filter.return_value.update.return_value = 1
+
+        session_query_for_ids = MagicMock()
+        session_query_for_ids.filter.return_value.all.return_value = [MagicMock(id="sess-1"), MagicMock(id="sess-2")]
+
+        agent_run_query = MagicMock()
+        agent_run_query.filter.return_value.delete.return_value = 2
+
+        session_delete_query = MagicMock()
+        session_delete_query.filter.return_value.delete.return_value = 2
+
+        feedback_query = MagicMock()
+        feedback_query.filter.return_value.delete.return_value = 0
+
+        review_query = MagicMock()
+        review_query.filter.return_value.delete.return_value = 0
+
+        audit_query = MagicMock()
+        audit_query.filter.return_value.update.return_value = 0
+
+        def _query(model: Any) -> Any:
+            from app.db.models import AgentRun, AuditLog, Document, HumanReviewQueue, QueryFeedback, Session as DbSession
+            mapping = {
+                Document: document_query,
+                DbSession: session_query_for_ids if not hasattr(_query, "_session_seen") else session_delete_query,
+                AgentRun: agent_run_query,
+                QueryFeedback: feedback_query,
+                HumanReviewQueue: review_query,
+                AuditLog: audit_query,
+            }
+            if model.__name__ == "Session":
+                if not hasattr(_query, "_session_seen"):
+                    _query._session_seen = True  # type: ignore[attr-defined]
+            return mapping[model]
+
+        db.query.side_effect = _query
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.delete("/admin/users/user-77")
+
+        assert resp.status_code == 204
+        agent_run_query.filter.return_value.delete.assert_called_once()
         from app.main import app
         app.dependency_overrides.clear()
 
@@ -917,6 +1025,74 @@ class TestStats:
             resp = client.get("/admin/stats")
 
         assert resp.status_code == 403
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_get_stats_counts_distinct_querying_users(self) -> None:
+        admin = _make_admin_user()
+        db = MagicMock()
+        db.get.return_value = admin
+
+        total_queries_q = MagicMock()
+        total_queries_q.filter.return_value.scalar.return_value = 12
+        avg_latency_q = MagicMock()
+        avg_latency_q.filter.return_value.scalar.return_value = 155.5
+        total_cost_q = MagicMock()
+        total_cost_q.filter.return_value.scalar.return_value = 3.25
+        cache_hits_q = MagicMock()
+        cache_hits_q.filter.return_value.scalar.return_value = 9
+        unique_users_q = MagicMock()
+        unique_users_q.filter.return_value.scalar.return_value = 4
+
+        db.query.side_effect = [
+            total_queries_q,
+            avg_latency_q,
+            total_cost_q,
+            cache_hits_q,
+            unique_users_q,
+        ]
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/stats?days=7")
+
+        assert resp.status_code == 200
+        assert resp.json()["unique_users"] == 4
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_get_stats_uses_cache_hit_events_for_period_hits(self) -> None:
+        admin = _make_admin_user()
+        db = MagicMock()
+        db.get.return_value = admin
+
+        total_queries_q = MagicMock()
+        total_queries_q.filter.return_value.scalar.return_value = 12
+        avg_latency_q = MagicMock()
+        avg_latency_q.filter.return_value.scalar.return_value = 155.5
+        total_cost_q = MagicMock()
+        total_cost_q.filter.return_value.scalar.return_value = 3.25
+        cache_hits_q = MagicMock()
+        cache_hits_q.filter.return_value.scalar.return_value = 9
+        unique_users_q = MagicMock()
+        unique_users_q.filter.return_value.scalar.return_value = 4
+
+        db.query.side_effect = [
+            total_queries_q,
+            avg_latency_q,
+            total_cost_q,
+            cache_hits_q,
+            unique_users_q,
+        ]
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/stats?days=7")
+
+        assert resp.status_code == 200
+        query_sql = str(db.query.call_args_list[3][0][0])
+        assert "semantic_cache_hits.id" in query_sql
+        assert resp.json()["cache_total_hits"] == 9
         from app.main import app
         app.dependency_overrides.clear()
 

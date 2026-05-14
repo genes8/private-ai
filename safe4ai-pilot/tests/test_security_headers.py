@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import Response
 
 from app.db import get_db
 
@@ -106,3 +108,72 @@ def test_body_limit_honors_configured_max_upload_size(client_with_mocks: TestCli
         settings.max_upload_size_mb = original_limit
 
     assert response.status_code == 413
+
+
+@pytest.mark.anyio
+async def test_chunked_body_limit_rejects_oversized_chunked_requests() -> None:
+    from app.main import limit_body_size, settings
+
+    original_limit = settings.max_upload_size_mb
+    settings.max_upload_size_mb = 0
+    chunks = [b"x"]
+
+    async def receive() -> dict[str, object]:
+        if chunks:
+            chunk = chunks.pop(0)
+            return {"type": "http.request", "body": chunk, "more_body": bool(chunks)}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/auth/login",
+        "headers": [(b"transfer-encoding", b"chunked")],
+    }
+    request = Request(scope, receive)
+
+    async def call_next(_request: Request) -> Response:
+        return Response(status_code=200)
+
+    try:
+        response = await limit_body_size(request, call_next)
+    finally:
+        settings.max_upload_size_mb = original_limit
+
+    assert response.status_code == 413
+
+
+@pytest.mark.anyio
+async def test_chunked_body_limit_rewinds_body_for_downstream_handlers() -> None:
+    from app.main import limit_body_size, settings
+
+    original_limit = settings.max_upload_size_mb
+    settings.max_upload_size_mb = 1
+    chunks = [b"abc", b"def"]
+    seen: dict[str, bytes] = {}
+
+    async def receive() -> dict[str, object]:
+        if chunks:
+            chunk = chunks.pop(0)
+            return {"type": "http.request", "body": chunk, "more_body": bool(chunks)}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/auth/login",
+        "headers": [(b"transfer-encoding", b"chunked")],
+    }
+    request = Request(scope, receive)
+
+    async def call_next(next_request: Request) -> Response:
+        seen["body"] = await next_request.body()
+        return Response(status_code=200)
+
+    try:
+        response = await limit_body_size(request, call_next)
+    finally:
+        settings.max_upload_size_mb = original_limit
+
+    assert response.status_code == 200
+    assert seen["body"] == b"abcdef"

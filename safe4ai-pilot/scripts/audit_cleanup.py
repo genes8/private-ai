@@ -52,7 +52,10 @@ def run_cleanup(
     cache_cutoff = now - timedelta(days=cache_retention_days)
 
     audit_result = db.execute(
-        delete(AuditLog).where(AuditLog.timestamp < audit_cutoff)
+        delete(AuditLog).where(
+            AuditLog.timestamp < audit_cutoff,
+            AuditLog.action_type != "system_cleanup",
+        )
     )
     audit_deleted: int = audit_result.rowcount
 

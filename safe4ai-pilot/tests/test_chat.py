@@ -140,3 +140,59 @@ def test_chat_rejects_session_owned_by_another_user(authed_client: TestClient) -
         )
 
     assert response.status_code == 404
+
+
+def test_chat_rejects_when_daily_cost_ceiling_reached(authed_client: TestClient) -> None:
+    with patch(
+        "app.services.app_config_store.load_app_config",
+        return_value={"daily_ceiling_usd": 10, "monthly_ceiling_usd": 500},
+    ), patch(
+        "app.api.chat_routes.CostTracker.get_stats",
+        return_value={"total_cost_usd": 10.0, "runs_count": 1, "by_day": []},
+    ):
+        response = authed_client.post("/chat", json={"question": "What is the answer?"})
+
+    assert response.status_code == 429
+    assert "Daily cost ceiling reached" in response.json()["detail"]
+
+
+def test_chat_stream_rejects_when_monthly_cost_ceiling_reached(authed_client: TestClient) -> None:
+    with patch(
+        "app.services.app_config_store.load_app_config",
+        return_value={"daily_ceiling_usd": 50, "monthly_ceiling_usd": 100},
+    ), patch(
+        "app.api.chat_routes.CostTracker.get_stats",
+        side_effect=[
+            {"total_cost_usd": 10.0, "runs_count": 1, "by_day": []},
+            {"total_cost_usd": 100.0, "runs_count": 20, "by_day": []},
+        ],
+    ):
+        response = authed_client.post("/chat/stream", json={"question": "What is the answer?"})
+
+    assert response.status_code == 429
+    assert "Monthly cost ceiling reached" in response.json()["detail"]
+
+
+def test_chat_recovers_from_corrupted_session_state(authed_client: TestClient) -> None:
+    final_state = _make_final_state(session_id="sess-new")
+
+    mock_graph = AsyncMock()
+    mock_graph.ainvoke = AsyncMock(return_value=final_state)
+
+    with patch(
+        "app.services.conversation.ConversationManager.load_session",
+        side_effect=[ValueError("Invalid session state"), PrivateAIState(session_id="sess-new", user_id="u1")],
+    ), patch(
+        "app.services.conversation.ConversationManager.new_session",
+        return_value="sess-new",
+    ), patch(
+        "app.services.conversation.ConversationManager.save_session",
+    ):
+        authed_client.app.state.graph = mock_graph  # type: ignore[union-attr]
+        response = authed_client.post(
+            "/chat",
+            json={"question": "Recover this", "session_id": "sess-old"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "sess-new"

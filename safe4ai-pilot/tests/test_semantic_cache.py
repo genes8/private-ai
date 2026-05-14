@@ -42,6 +42,23 @@ async def test_lookup_hit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_lookup_hit_records_cache_hit_event() -> None:
+    db = MagicMock()
+    fake_row = ("row-id-1", "This is the answer.", [{"filename": "doc.pdf"}])
+    db.execute.return_value.fetchone.return_value = fake_row
+
+    cache = _make_cache(db=db)
+
+    with patch.object(cache, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)):
+        await cache.lookup("what is X?")
+
+    assert db.add.call_count == 1
+    added_row = db.add.call_args[0][0]
+    assert added_row.cache_id == "row-id-1"
+    db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_lookup_miss() -> None:
     db = MagicMock()
     db.execute.return_value.fetchone.return_value = None

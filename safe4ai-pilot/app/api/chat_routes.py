@@ -83,6 +83,32 @@ def _record_cost(
         logger.warning("cost_tracking_failed", error=str(exc))
 
 
+def _check_cost_ceiling(db: Session) -> None:
+    """Raise 429 if the daily or monthly cost ceiling has been reached."""
+    try:
+        from app.services.app_config_store import load_app_config
+        db_overrides = load_app_config(db)
+        daily_ceiling = float(db_overrides.get("daily_ceiling_usd", 50))
+        monthly_ceiling = float(db_overrides.get("monthly_ceiling_usd", 500))
+        tracker = CostTracker(settings.cost_per_1k_tokens)
+        today_cost = tracker.get_stats(db, days=1)["total_cost_usd"]
+        if today_cost >= daily_ceiling:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Daily cost ceiling reached (${today_cost:.2f} / ${daily_ceiling:.2f})",
+            )
+        month_cost = tracker.get_stats(db, days=30)["total_cost_usd"]
+        if month_cost >= monthly_ceiling:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Monthly cost ceiling reached (${month_cost:.2f} / ${monthly_ceiling:.2f})",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("cost_ceiling_check_failed", error=str(exc))
+
+
 router = APIRouter(tags=["chat"])
 
 # LangGraph node → SSE step name (handoff spec)
@@ -124,7 +150,9 @@ def _resolve_session(
             if state.user_id != user_id:
                 raise HTTPException(status_code=404, detail="Session not found")
             return body.session_id, state
-        except KeyError:
+        except (KeyError, ValueError):
+            # KeyError: session not found — create a new one
+            # ValueError: session state corrupted — create a new one
             pass
     session_id = convo.new_session(user_id)
     return session_id, convo.load_session(session_id)
@@ -182,6 +210,8 @@ async def chat(
 ) -> Any:
     if not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
+
+    _check_cost_ceiling(db)
 
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
@@ -252,6 +282,8 @@ async def chat_stream(
 ) -> StreamingResponse:
     if not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
+
+    _check_cost_ceiling(db)
 
     graph = getattr(request.app.state, "graph", None)
     if graph is None:

@@ -108,26 +108,19 @@ class TestRecordRun:
 
 
 class TestGetStats:
-    def _make_run(self, cost: float, date_str: str) -> MagicMock:
-        run = MagicMock()
-        run.cost_usd = cost
-        run.started_at = datetime.fromisoformat(f"{date_str}T10:00:00+00:00")
-        return run
-
     def test_get_stats_returns_summary_structure(self, mock_db: MagicMock) -> None:
         from observability.cost_tracker import CostTracker
 
-        runs = [
-            self._make_run(0.002, "2026-05-01"),
-            self._make_run(0.003, "2026-05-01"),
-            self._make_run(0.005, "2026-05-02"),
-        ]
-
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = runs
-        mock_execute = MagicMock()
-        mock_execute.scalars.return_value = mock_scalars
-        mock_db.execute.return_value = mock_execute
+        # First call: aggregate query (.one()) returns total_cost, runs_count
+        agg_result = MagicMock()
+        agg_result.one.return_value = (0.01, 3)
+        # Second call: daily breakdown query iterates rows
+        day_result = MagicMock()
+        day_result.__iter__ = MagicMock(return_value=iter([
+            ("2026-05-01", 0.005, 2),
+            ("2026-05-02", 0.005, 1),
+        ]))
+        mock_db.execute.side_effect = [agg_result, day_result]
 
         tracker = CostTracker(cost_per_1k_tokens=0.002)
         stats = tracker.get_stats(mock_db, days=30)
@@ -142,11 +135,11 @@ class TestGetStats:
     def test_get_stats_empty_result(self, mock_db: MagicMock) -> None:
         from observability.cost_tracker import CostTracker
 
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = []
-        mock_execute = MagicMock()
-        mock_execute.scalars.return_value = mock_scalars
-        mock_db.execute.return_value = mock_execute
+        agg_result = MagicMock()
+        agg_result.one.return_value = (0.0, 0)
+        day_result = MagicMock()
+        day_result.__iter__ = MagicMock(return_value=iter([]))
+        mock_db.execute.side_effect = [agg_result, day_result]
 
         tracker = CostTracker(cost_per_1k_tokens=0.002)
         stats = tracker.get_stats(mock_db, days=30)
@@ -158,17 +151,15 @@ class TestGetStats:
     def test_get_stats_by_day_sorted(self, mock_db: MagicMock) -> None:
         from observability.cost_tracker import CostTracker
 
-        # Provide runs in reverse date order
-        runs = [
-            self._make_run(0.005, "2026-05-05"),
-            self._make_run(0.001, "2026-05-01"),
-        ]
-
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = runs
-        mock_execute = MagicMock()
-        mock_execute.scalars.return_value = mock_scalars
-        mock_db.execute.return_value = mock_execute
+        # SQL GROUP BY + ORDER BY returns sorted results
+        agg_result = MagicMock()
+        agg_result.one.return_value = (0.006, 2)
+        day_result = MagicMock()
+        day_result.__iter__ = MagicMock(return_value=iter([
+            ("2026-05-01", 0.001, 1),
+            ("2026-05-05", 0.005, 1),
+        ]))
+        mock_db.execute.side_effect = [agg_result, day_result]
 
         tracker = CostTracker(cost_per_1k_tokens=0.002)
         stats = tracker.get_stats(mock_db, days=30)

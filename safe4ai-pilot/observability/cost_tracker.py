@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import AgentRun
@@ -73,34 +73,39 @@ class CostTracker:
         """
         cutoff = datetime.now(UTC) - timedelta(days=days)
 
-        stmt = select(AgentRun).where(AgentRun.started_at >= cutoff)
-
+        base_filter = AgentRun.started_at >= cutoff
+        join_clause = None
         if user_id is not None:
-            # AgentRun has no direct user_id; filter via Session table
-            from app.db.models import Session as DBSession  # local import to avoid circular
+            from app.db.models import Session as DBSession
+            join_clause = (AgentRun.session_id == DBSession.id, DBSession.user_id == user_id)
 
-            stmt = stmt.join(DBSession, AgentRun.session_id == DBSession.id).where(
-                DBSession.user_id == user_id
-            )
+        # Total cost & count via SQL aggregation (no Python-side loading)
+        agg_stmt = select(
+            func.coalesce(func.sum(AgentRun.cost_usd), 0.0),
+            func.count(AgentRun.id),
+        ).where(base_filter)
+        if join_clause:
+            agg_stmt = agg_stmt.join(join_clause[0].clause).where(join_clause[1])
+        total_cost, runs_count = db.execute(agg_stmt).one()
+        total_cost = float(total_cost) if total_cost else 0.0
+        runs_count = int(runs_count) if runs_count else 0
 
-        rows: list[AgentRun] = list(db.execute(stmt).scalars().all())
+        # Per-day breakdown via SQL aggregation
+        day_stmt = select(
+            func.date(AgentRun.started_at).label("day"),
+            func.coalesce(func.sum(AgentRun.cost_usd), 0.0).label("day_cost"),
+            func.count(AgentRun.id).label("day_runs"),
+        ).where(base_filter).group_by(func.date(AgentRun.started_at)).order_by("day")
+        if join_clause:
+            day_stmt = day_stmt.join(join_clause[0].clause).where(join_clause[1])
 
-        total_cost = sum(r.cost_usd or 0.0 for r in rows)
-        runs_count = len(rows)
-
-        # Group by calendar date (UTC)
-        by_day_map: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            dt = row.started_at
-            # started_at may be naive (no tzinfo) when returned from DB depending on dialect
-            if dt is None:
-                continue
-            date_key = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
-            entry = by_day_map.setdefault(date_key, {"date": date_key, "cost_usd": 0.0, "runs": 0})
-            entry["cost_usd"] = round(entry["cost_usd"] + (row.cost_usd or 0.0), 6)
-            entry["runs"] += 1
-
-        by_day = sorted(by_day_map.values(), key=lambda x: x["date"])
+        by_day = []
+        for day, day_cost, day_runs in db.execute(day_stmt):
+            by_day.append({
+                "date": str(day),
+                "cost_usd": round(float(day_cost), 6),
+                "runs": int(day_runs),
+            })
 
         return {
             "total_cost_usd": round(total_cost, 6),

@@ -26,6 +26,7 @@ def test_database_metadata_contains_phase_one_tables() -> None:
         "documents",
         "document_chunks",
         "semantic_cache",
+        "semantic_cache_hits",
         "audit_logs",
         "agent_runs",
         "query_feedback",

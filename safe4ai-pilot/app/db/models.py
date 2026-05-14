@@ -122,6 +122,19 @@ class SemanticCache(Base):
     hit_count = Column(Integer, default=0)
 
 
+class SemanticCacheHit(Base):
+    __tablename__ = "semantic_cache_hits"
+
+    id = Column(String, primary_key=True)
+    cache_id = Column(
+        String,
+        ForeignKey("semantic_cache.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 

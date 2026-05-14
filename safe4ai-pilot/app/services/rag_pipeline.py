@@ -355,15 +355,18 @@ class RagPipeline:
 
     def _load_xlsx(self, file_path: str) -> list[tuple[str, int]]:
         wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-        pages: list[tuple[str, int]] = []
-        for sheet_idx, sheet in enumerate(wb.worksheets, start=1):
-            rows: list[str] = []
-            for row in sheet.iter_rows(values_only=True):
-                row_str = "\t".join(str(cell) if cell is not None else "" for cell in row)
-                if row_str.strip():
-                    rows.append(row_str)
-            pages.append(("\n".join(rows), sheet_idx))
-        return pages
+        try:
+            pages: list[tuple[str, int]] = []
+            for sheet_idx, sheet in enumerate(wb.worksheets, start=1):
+                rows: list[str] = []
+                for row in sheet.iter_rows(values_only=True):
+                    row_str = "\t".join(str(cell) if cell is not None else "" for cell in row)
+                    if row_str.strip():
+                        rows.append(row_str)
+                pages.append(("\n".join(rows), sheet_idx))
+            return pages
+        finally:
+            wb.close()
 
     def _set_status(self, doc_id: str, status: IngestionStatus) -> None:
         doc = self._db.get(Document, doc_id)

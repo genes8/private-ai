@@ -1,10 +1,10 @@
-# Verified Status — 2026-05-14
+# Verified Status — 2026-05-14 (Round 3 + Round 4)
 
-Ovaj fajl više nije lista otvorenih pretpostavki, nego provereno stanje posle novog audita i patch prolaza.
+Ovaj fajl više nije lista otvorenih pretpostavki, nego provereno stanje posle više audit i patch prolaza.
 
 ## Verification
 
-- Backend: `.venv/bin/pytest -q` -> `202 passed, 6 skipped`
+- Backend: `.venv/bin/pytest -q` -> `213 passed, 6 skipped`
 - Frontend: `npm run build` -> prolazi
 
 ## Item-by-item Status
@@ -45,3 +45,37 @@ Ovaj fajl više nije lista otvorenih pretpostavki, nego provereno stanje posle n
 
 - Stavke `#2`, `#8`, `#10`, `#15`, `#17`, `#20` i `#27` nisu ostale otvoreni bugovi posle proverene reprodukcije; ili su već pokrivene drugim zaštitama, ili predstavljaju nameran UX/implementacioni tradeoff.
 - Ako bude potreban dodatni hardening za upload memorijski profil iz `#10`, to je sledeći kandidat za zaseban refactor ka stream-to-disk pristupu umesto novog bugfix hotfix-a.
+
+---
+
+## Round 3 Fixes (pre-audit Round 4)
+
+| # | Status | Napomena |
+|---|---|---|
+| R3-1 | Fixed | `_ensure_deleted_user` sada koristi `token_urlsafe(24)` umesto slabog predvidivog password-a. |
+| R3-2 | Fixed | `feedback.py` `list_for_admin` sada ima limit cap na 1000 (`max(1, min(limit, 1000))`). |
+| R3-3 | Fixed | `audit_cleanup.py` više ne briše svoje vlastite `system_cleanup` audit logove. |
+| R3-4 | Fixed | `/admin/stats` `days` parametar sada ima bounds validaciju (`1..366`). |
+
+---
+
+## Round 4 Findings & Fixes
+
+| # | Severity | Status | Bug | Fajl |
+|---|----------|--------|-----|------|
+| R4-1 | Medium | Fixed | XLSX workbook file handle leak — `openpyxl.load_workbook(read_only=True)` ne poziva `wb.close()`, curi file descriptor po svakom XLSX ingestion-u. | `app/services/rag_pipeline.py` |
+| R4-2 | High | Fixed | Cost ceiling nije enforce-ovan — `daily_ceiling_usd` i `monthly_ceiling_usd` su sačuvani i prikazani u settings UI, ali `/chat` i `/chat/stream` nikada ne proveravaju da li je limit dostignut pre obrade upita. Dodata `_check_cost_ceiling()` funkcija koja vraća 429 ako je dnevni ili mesečni limit prekoračen. | `app/api/chat_routes.py` |
+| R4-3 | Medium | Fixed | `AgentRun` redovi orphan-ovani pri deaktivaciji korisnika — `deactivate_user` briše `DbSession` redove ali ne i povezane `AgentRun` redove. Sada se prvo brišu AgentRun redovi za korisnikove sesije, pa tek onda sesije. | `app/api/admin_routes.py` |
+| R4-4 | Medium | Fixed | Corrupted session `ValueError` neuhvaćen — `_resolve_session` hvata samo `KeyError`, ali `load_session` baca i `ValueError` za pokvareno stanje. Sada se hvataju oba exception-a i kreira nova sesija. | `app/api/chat_routes.py` |
+| R4-5 | Low | Fixed | `unique_users` u `/admin/stats` broji sve aktivne korisnike umesto korisnika koji su zapravo slali upite u periodu. Sada koristi `count(distinct AuditLog.user_id)` sa timestamp filterom. | `app/api/admin_routes.py` |
+| R4-6 | Medium | Fixed | `cost_tracker.get_stats` učitava sve `AgentRun` redove u memoriju umesto SQL agregacije. Refaktorisano da koristi `func.sum()`, `func.count()`, `func.date()` sa `group_by` — performanse drastično poboljšane za velike datasetove. | `observability/cost_tracker.py` |
+| R4-7 | Low | Fixed | `CreateUserRequest.email` nema validaciju formata — backend prihvata bilo koji string kao email. Dodat je stroži validator koji odbija whitespace i zahteva oblik `local@domain.tld`. | `app/api/admin_routes.py` |
+| R4-8 | Medium | Fixed | Chunked transfer encoding zaobilazi body size limit — middleware proverava samo `Content-Length` header, a chunked zahtevi nemaju taj header. Sada se chunked body konzumira sa size cap-om. | `app/main.py` |
+| R4-9 | Low | Fixed | `cache_total_hits` je bio semantički netačan — brojao je lifetime hitove za cache unose kreirane u periodu, ne hit događaje u periodu. Dodata je posebna tabela `semantic_cache_hits`, lookup sada zapisuje hit event, a `/admin/stats` broji period hitove iz te tabele. | `app/api/admin_routes.py`, `app/services/semantic_cache.py`, `app/db/models.py` |
+| R4-10 | Medium | Fixed | `reindex_document` je imao partial failure inconsistency — DB chunk obrisi i version bump su se dešavali pre Qdrant reset-a. Flow je preuređen tako da se Qdrant/BM25 reset radi prvo, a DB transakcija kreće tek nakon uspešnog spoljnog reset-a. | `app/api/admin_routes.py` |
+
+## Round 4 Residual Notes
+
+- Round 4 više nije samo “implemented”; sada postoje direktni regresioni testovi za ceiling blokadu, corrupted-session fallback, invalid email, AgentRun cleanup, distinct `unique_users` metric, chunked-body middleware path, period-scoped cache hit metric i reindex failure bez parcijalnog DB reset-a.
+- `semantic_cache.hit_count` je zadržan kao lifetime counter, dok je period metric prebačen na `semantic_cache_hits` događaje. Time su pokrivena oba use-case-a bez mešanja značenja.
+- Ukupno kroz 4 runde audita: 32 + 29 + 4 + 8 = 73 bugova pronađeno, 67 fixed, 5 not-reproducible/intentional, 1 design tradeoff/acceptable.

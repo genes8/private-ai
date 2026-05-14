@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import csv
 import io
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -14,7 +15,7 @@ import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from qdrant_client import QdrantClient
 from qdrant_client import models as qmodels
 from sqlalchemy.exc import IntegrityError
@@ -39,6 +40,7 @@ from app.db.models import (
     ReviewStatus,
     Session as DbSession,
     SemanticCache,
+    SemanticCacheHit,
     User,
     UserRole,
 )
@@ -51,6 +53,7 @@ from observability.cost_tracker import CostTracker
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["admin"])
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _RAW_DIR = Path("data/raw")
 _RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -71,6 +74,14 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str | None = None
     role: UserRole = UserRole.pilot_user
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, v: str) -> str:
+        v = v.strip()
+        if not _EMAIL_RE.fullmatch(v):
+            raise ValueError("Invalid email format")
+        return v
 
 
 def _validate_model_identifier(value: str, field_name: str) -> str:
@@ -421,6 +432,32 @@ async def reindex_document(
     if not raw_path.exists():
         raise HTTPException(status_code=409, detail="Raw file not found; upload again")
 
+    active_job = _lock_query(
+        db.query(IngestionJob).filter(
+            IngestionJob.document_id == doc_id,
+            IngestionJob.status.in_(
+                [IngestionJobStatus.embedding, IngestionJobStatus.pending]
+            ),
+        )
+    ).first()
+    if active_job:
+        raise HTTPException(
+            status_code=409,
+            detail="Document is currently being ingested. Wait for completion before reindexing.",
+        )
+
+    try:
+        _delete_qdrant_points(doc_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to reset vector index for reindex") from exc
+
+    retriever = getattr(request.app.state, "retriever", None)
+    if retriever is not None and hasattr(retriever, "remove_from_bm25"):
+        try:
+            retriever.remove_from_bm25(doc_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
+
     job_id = str(uuid.uuid4())
     with db.begin():
         active_job = _lock_query(
@@ -444,26 +481,6 @@ async def reindex_document(
         doc.ingestion_status = IngestionStatus.queued
         doc.ingestion_started_at = None
         db.add(job)
-    try:
-        _delete_qdrant_points(doc_id)
-    except Exception as exc:
-        failed_job = db.get(IngestionJob, job_id)
-        failed_doc = db.get(Document, doc_id)
-        if failed_job is not None:
-            failed_job.status = IngestionJobStatus.failed
-            failed_job.error = str(exc)[:2000]
-            failed_job.completed_at = datetime.now(UTC)
-        if failed_doc is not None:
-            failed_doc.ingestion_status = IngestionStatus.failed
-        db.commit()
-        raise HTTPException(status_code=502, detail="Failed to reset vector index for reindex") from exc
-
-    retriever = getattr(request.app.state, "retriever", None)
-    if retriever is not None and hasattr(retriever, "remove_from_bm25"):
-        try:
-            retriever.remove_from_bm25(doc_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
 
     _schedule_ingestion_task(
         request,
@@ -580,6 +597,11 @@ def deactivate_user(
         {Document.uploaded_by: deleted_user.id},
         synchronize_session=False,
     )
+    user_session_ids = [
+        s.id for s in db.query(DbSession).filter(DbSession.user_id == user_id).all()
+    ]
+    if user_session_ids:
+        db.query(AgentRun).filter(AgentRun.session_id.in_(user_session_ids)).delete(synchronize_session=False)
     db.query(DbSession).filter(DbSession.user_id == user_id).delete()
     db.query(QueryFeedback).filter(QueryFeedback.user_id == user_id).delete()
     db.query(HumanReviewQueue).filter(HumanReviewQueue.user_id == user_id).delete()
@@ -743,6 +765,8 @@ def get_stats(
     _admin: User = Depends(require_role("admin")),
 ) -> dict[str, Any]:
     """Aggregate pilot stats: queries, latency, fallback rate, cache hit rate."""
+    if days < 1 or days > 366:
+        raise HTTPException(status_code=422, detail="days must be between 1 and 366")
     cutoff = datetime.now(UTC) - timedelta(days=days)
 
     total_queries = (
@@ -755,13 +779,16 @@ def get_stats(
         db.query(func.sum(AgentRun.cost_usd)).filter(AgentRun.started_at >= cutoff).scalar() or 0.0
     )
     cache_hits = (
-        db.query(func.sum(SemanticCache.hit_count))
-        .filter(SemanticCache.created_at >= cutoff)
+        db.query(func.count(SemanticCacheHit.id))
+        .filter(SemanticCacheHit.created_at >= cutoff)
         .scalar()
         or 0
     )
     unique_users = (
-        db.query(func.count(User.id)).filter(User.is_active == True).scalar() or 0  # noqa: E712
+        db.query(func.count(func.distinct(AuditLog.user_id)))
+        .filter(AuditLog.timestamp >= cutoff, AuditLog.user_id.isnot(None))
+        .scalar()
+        or 0
     )
 
     return {

@@ -50,10 +50,11 @@ class FeedbackStore:
 
     def list_for_admin(self, limit: int = 100) -> list[dict[str, Any]]:
         """Return the most recent feedback rows as plain dicts."""
+        effective_limit = max(1, min(limit, 1000))
         rows = (
             self._db.query(QueryFeedback)
             .order_by(QueryFeedback.created_at.desc())
-            .limit(limit)
+            .limit(effective_limit)
             .all()
         )
         user_ids = {r.user_id for r in rows if r.user_id}
