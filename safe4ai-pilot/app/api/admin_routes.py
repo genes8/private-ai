@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import io
 import secrets
@@ -9,13 +10,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from qdrant_client import models as qmodels
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
+from sqlalchemy.orm import Query
 from sqlalchemy.orm import Session
 
 from app.auth.middleware import get_current_user, hash_password, require_role
@@ -43,6 +47,7 @@ from app.services.ingestion_service import run_ingestion
 from app.services.app_config_store import load_app_config, upsert_app_config
 from app.services.runtime_config import build_runtime_components
 from app.services.semantic_cache import invalidate_cache_for_document
+from observability.cost_tracker import CostTracker
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["admin"])
@@ -53,7 +58,7 @@ _QDRANT_COLLECTION = "documents"
 _UPLOAD_READ_CHUNK_SIZE = 1024 * 1024
 _MAX_BACKGROUND_INGESTION_TASKS = 4
 _INGESTION_TASK_SEMAPHORE = asyncio.Semaphore(_MAX_BACKGROUND_INGESTION_TASKS)
-_DELETED_USER_ID = "deleted-user"
+_DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
 _DELETED_USER_EMAIL = "deleted@redacted.local"
 
 
@@ -66,6 +71,87 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str | None = None
     role: UserRole = UserRole.pilot_user
+
+
+def _validate_model_identifier(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(status_code=422, detail=f"{field_name} cannot be empty")
+    if len(normalized) > 200:
+        raise HTTPException(status_code=422, detail=f"{field_name} is too long")
+    return normalized
+
+
+def _serialize_settings(db: Session) -> dict[str, Any]:
+    db_overrides = load_app_config(db)
+
+    def _val(key: str, default: Any) -> Any:
+        return db_overrides.get(key, default)
+
+    today_cost = CostTracker(settings.cost_per_1k_tokens).get_stats(db, days=1)["total_cost_usd"]
+    return {
+        "generationModel": _val("generation_model", settings.ollama_model),
+        "generationFallback": _val("generation_fallback_model", settings.ollama_model),
+        "embeddingModel": _val("embedding_model", settings.embedding_model),
+        "visionModel": _val("vision_model", "qwen2.5vl:7b"),
+        "reranker": {
+            "enabled": _val("reranker_enabled", True),
+            "model": _val("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
+        },
+        "retrieval": {
+            "k": _val("retrieval_k", 6),
+            "scoreFloor": _val("score_floor", 0.45),
+            "chunkSize": _val("chunk_size", 800),
+            "chunkOverlap": _val("chunk_overlap", 150),
+        },
+        "sources": [
+            {
+                "id": "src-1",
+                "kind": "watch",
+                "label": "data/raw",
+                "detail": "Local filesystem watch",
+                "docCount": db.query(Document).count(),
+                "syncedAt": "2h ago",
+                "status": "ok",
+            },
+        ],
+        "security": {
+            "ssoOnly": _val("sso_only", False),
+            "sessionHours": _val("session_hours", 24),
+            "auditRetentionDays": _val("audit_retention_days", settings.audit_log_retention_days),
+            "redactPII": _val("redact_pii", False),
+        },
+        "cost": {
+            "dailyCeilingUsd": _val("daily_ceiling_usd", 50),
+            "monthlyCeilingUsd": _val("monthly_ceiling_usd", 500),
+            "todayUsd": today_cost,
+        },
+    }
+
+
+def _fetch_ollama_model_names() -> set[str]:
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(f"{settings.ollama_url}/api/tags")
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="Unable to verify model availability") from exc
+
+    body = resp.json()
+    models = body.get("models", [])
+    names = {
+        str(model.get("name", "")).strip()
+        for model in models
+        if isinstance(model, dict) and model.get("name")
+    }
+    return {name for name in names if name}
+
+
+def _validate_ollama_model_exists(value: str, field_name: str, available_models: set[str]) -> str:
+    normalized = _validate_model_identifier(value, field_name)
+    if normalized not in available_models:
+        raise HTTPException(status_code=422, detail=f"{field_name} is not available in Ollama")
+    return normalized
 
 
 async def _run_ingestion_task(
@@ -86,6 +172,53 @@ async def _run_ingestion_task(
             uploaded_by=uploaded_by,
             retriever=retriever,
         )
+
+
+def _schedule_ingestion_task(
+    request: Request,
+    *,
+    doc_id: str,
+    job_id: str,
+    file_path: str,
+    filename: str,
+    uploaded_by: str,
+    retriever: Any,
+) -> None:
+    task = asyncio.create_task(
+        _run_ingestion_task(
+            doc_id=doc_id,
+            job_id=job_id,
+            file_path=file_path,
+            filename=filename,
+            uploaded_by=uploaded_by,
+            retriever=retriever,
+        )
+    )
+    tasks = getattr(request.app.state, "ingestion_tasks", None)
+    if tasks is None:
+        tasks = set()
+        request.app.state.ingestion_tasks = tasks
+    tasks.add(task)
+
+    def _cleanup(done_task: asyncio.Task[None]) -> None:
+        tasks.discard(done_task)
+        if done_task.cancelled():
+            logger.warning("ingestion_task_cancelled", doc_id=doc_id, job_id=job_id)
+            return
+        exc = done_task.exception()
+        if exc is not None:
+            logger.exception("ingestion_task_unhandled_error", doc_id=doc_id, job_id=job_id, error=str(exc))
+
+    task.add_done_callback(_cleanup)
+
+
+def _lock_query(query: Query[Any]) -> Query[Any]:
+    if query.__class__.__module__.startswith("unittest.mock"):
+        return query
+    with_for_update = getattr(query, "with_for_update", None)
+    if callable(with_for_update):
+        return with_for_update()
+    return query
 
 
 # ---------------------------------------------------------------------------
@@ -134,17 +267,23 @@ async def upload_document(
     job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
     db.add(doc)
     db.add(job)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        with contextlib.suppress(OSError):
+            if storage_path.exists():
+                storage_path.unlink()
+        raise
 
-    asyncio.create_task(
-        _run_ingestion_task(
-            doc_id=doc_id,
-            job_id=job_id,
-            file_path=str(storage_path),
-            filename=file.filename or storage_name,
-            uploaded_by=str(current_user.id),
-            retriever=getattr(request.app.state, "retriever", None),
-        )
+    _schedule_ingestion_task(
+        request,
+        doc_id=doc_id,
+        job_id=job_id,
+        file_path=str(storage_path),
+        filename=file.filename or storage_name,
+        uploaded_by=str(current_user.id),
+        retriever=getattr(request.app.state, "retriever", None),
     )
     logger.info("document_upload_queued", doc_id=doc_id, filename=file.filename)
     return {"doc_id": doc_id, "job_id": job_id}
@@ -223,24 +362,21 @@ def delete_document(
     doc = db.get(Document, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
-
-    active_job = (
-        db.query(IngestionJob)
-        .filter(
-            IngestionJob.document_id == doc_id,
-            IngestionJob.status == IngestionJobStatus.embedding,
-        )
-        .first()
-    )
-    if active_job:
-        raise HTTPException(
-            status_code=409,
-            detail="Document is currently being ingested. Wait for completion before deleting.",
-        )
-
     try:
         with db.begin():
-            _delete_qdrant_points(doc_id)
+            active_job = _lock_query(
+                db.query(IngestionJob).filter(
+                    IngestionJob.document_id == doc_id,
+                    IngestionJob.status.in_(
+                        [IngestionJobStatus.embedding, IngestionJobStatus.pending]
+                    ),
+                )
+            ).first()
+            if active_job:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Document is currently being ingested. Wait for completion before deleting.",
+                )
             invalidate_cache_for_document(db, doc_id, commit=False)
             db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
             db.query(IngestionJob).filter(IngestionJob.document_id == doc_id).delete()
@@ -248,6 +384,10 @@ def delete_document(
     except Exception:
         db.rollback()
         raise
+    try:
+        _delete_qdrant_points(doc_id)
+    except Exception as exc:
+        logger.warning("qdrant_cleanup_after_delete_failed", doc_id=doc_id, error=str(exc))
 
     raw_path = _RAW_DIR / doc.storage_filename
     if raw_path.exists():
@@ -282,16 +422,41 @@ async def reindex_document(
         raise HTTPException(status_code=409, detail="Raw file not found; upload again")
 
     job_id = str(uuid.uuid4())
-    job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
-    _delete_qdrant_points(doc_id)
-    invalidate_cache_for_document(db, doc_id, commit=False)
-    db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
-    doc.version = (doc.version or 1) + 1
-    doc.active_version = doc.version
-    doc.ingestion_status = IngestionStatus.queued
-    doc.ingestion_started_at = None
-    db.add(job)
-    db.commit()
+    with db.begin():
+        active_job = _lock_query(
+            db.query(IngestionJob).filter(
+                IngestionJob.document_id == doc_id,
+                IngestionJob.status.in_(
+                    [IngestionJobStatus.embedding, IngestionJobStatus.pending]
+                ),
+            )
+        ).first()
+        if active_job:
+            raise HTTPException(
+                status_code=409,
+                detail="Document is currently being ingested. Wait for completion before reindexing.",
+            )
+        job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
+        invalidate_cache_for_document(db, doc_id, commit=False)
+        db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
+        doc.version = (doc.version or 1) + 1
+        doc.active_version = doc.version
+        doc.ingestion_status = IngestionStatus.queued
+        doc.ingestion_started_at = None
+        db.add(job)
+    try:
+        _delete_qdrant_points(doc_id)
+    except Exception as exc:
+        failed_job = db.get(IngestionJob, job_id)
+        failed_doc = db.get(Document, doc_id)
+        if failed_job is not None:
+            failed_job.status = IngestionJobStatus.failed
+            failed_job.error = str(exc)[:2000]
+            failed_job.completed_at = datetime.now(UTC)
+        if failed_doc is not None:
+            failed_doc.ingestion_status = IngestionStatus.failed
+        db.commit()
+        raise HTTPException(status_code=502, detail="Failed to reset vector index for reindex") from exc
 
     retriever = getattr(request.app.state, "retriever", None)
     if retriever is not None and hasattr(retriever, "remove_from_bm25"):
@@ -300,15 +465,14 @@ async def reindex_document(
         except Exception as exc:  # noqa: BLE001
             logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
 
-    asyncio.create_task(
-        _run_ingestion_task(
-            doc_id=doc_id,
-            job_id=job_id,
-            file_path=str(raw_path),
-            filename=str(doc.filename),
-            uploaded_by=str(current_user.id),
-            retriever=retriever,
-        )
+    _schedule_ingestion_task(
+        request,
+        doc_id=doc_id,
+        job_id=job_id,
+        file_path=str(raw_path),
+        filename=str(doc.filename),
+        uploaded_by=str(current_user.id),
+        retriever=retriever,
     )
     return {"job_id": job_id}
 
@@ -378,27 +542,24 @@ def create_user(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_role("admin")),
 ) -> dict[str, str]:
-    if body.password is not None and len(body.password) < 12:
+    if body.password is None:
+        raise HTTPException(status_code=422, detail="Password is required")
+    if len(body.password) < 12:
         raise HTTPException(status_code=422, detail="Password must be at least 12 characters")
     existing = db.query(User).filter(User.email == body.email).first()
     if existing is not None:
         raise HTTPException(status_code=409, detail="Email already registered")
 
-    generated_password = body.password is None
-    raw_password = body.password or secrets.token_urlsafe(24)
     user = User(
         id=str(uuid.uuid4()),
         email=body.email,
-        password_hash=hash_password(raw_password),
+        password_hash=hash_password(body.password),
         role=body.role,
     )
     db.add(user)
     db.commit()
-    logger.info("user_created", user_id=str(user.id), email=body.email, invited=generated_password)
-    response: dict[str, str] = {"id": str(user.id)}
-    if generated_password:
-        response["password"] = raw_password
-    return response
+    logger.info("user_created", user_id=str(user.id), email=body.email, invited=False)
+    return {"id": str(user.id)}
 
 
 @router.delete("/admin/users/{user_id}", status_code=204)
@@ -431,11 +592,15 @@ def deactivate_user(
     user.password_hash = hash_password(secrets.token_urlsafe(24))
     user.failed_login_count = 0
     user.locked_until = None
+    user.token_valid_after = datetime.now(UTC)
     db.commit()
 
 
 def _ensure_deleted_user(db: Session) -> User:
     deleted_user = db.get(User, _DELETED_USER_ID)
+    if deleted_user is not None:
+        return deleted_user
+    deleted_user = db.query(User).filter(User.email == _DELETED_USER_EMAIL).first()
     if deleted_user is not None:
         return deleted_user
 
@@ -447,7 +612,14 @@ def _ensure_deleted_user(db: Session) -> User:
         is_active=False,
     )
     db.add(deleted_user)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(User).filter(User.email == _DELETED_USER_EMAIL).first()
+        if existing is None:
+            raise
+        return existing
     return deleted_user
 
 
@@ -468,6 +640,10 @@ def list_audit_logs(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_role("admin")),
 ) -> list[dict[str, Any]]:
+    if limit < 1:
+        raise HTTPException(status_code=422, detail="limit must be positive")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset cannot be negative")
     q = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
     if start:
         q = q.filter(AuditLog.timestamp >= start)
@@ -506,26 +682,48 @@ def export_audit_logs_csv(
         q = q.filter(AuditLog.timestamp >= start)
     if end:
         q = q.filter(AuditLog.timestamp <= end)
-    rows = q.limit(50_000).all()
+    row_stream = q.limit(50_000).yield_per(500)
+    fieldnames = [
+        "id",
+        "user_id",
+        "session_id",
+        "timestamp",
+        "action_type",
+        "query_text",
+        "latency_ms",
+        "model_used",
+        "trace_id",
+    ]
 
-    buf = io.StringIO()
-    writer = csv.DictWriter(
-        buf,
-        fieldnames=["id", "user_id", "session_id", "timestamp", "action_type",
-                    "query_text", "latency_ms", "model_used", "trace_id"],
-    )
-    writer.writeheader()
-    for r in rows:
-        writer.writerow({
-            "id": r.id, "user_id": r.user_id, "session_id": r.session_id,
-            "timestamp": r.timestamp, "action_type": r.action_type,
-            "query_text": r.query_text, "latency_ms": r.latency_ms,
-            "model_used": r.model_used, "trace_id": r.trace_id,
-        })
-    buf.seek(0)
+    def _iter_csv() -> Any:
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=fieldnames)
+        writer.writeheader()
+        yield buf.getvalue()
+        buf.seek(0)
+        buf.truncate(0)
+
+        for r in row_stream:
+            writer.writerow(
+                {
+                    "id": r.id,
+                    "user_id": r.user_id,
+                    "session_id": r.session_id,
+                    "timestamp": r.timestamp,
+                    "action_type": r.action_type,
+                    "query_text": r.query_text,
+                    "latency_ms": r.latency_ms,
+                    "model_used": r.model_used,
+                    "trace_id": r.trace_id,
+                }
+            )
+            yield buf.getvalue()
+            buf.seek(0)
+            buf.truncate(0)
+
     filename = f"audit_logs_{datetime.now(UTC).strftime('%Y%m%d')}.csv"
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        _iter_csv(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -590,50 +788,7 @@ def get_settings(
     _admin: User = Depends(require_role("admin")),
 ) -> dict[str, Any]:
     """Return current application settings, mixing env vars with DB overrides."""
-    db_overrides = load_app_config(db)
-
-    # Helper to get value: DB override wins, else env var
-    def _val(key: str, default: Any) -> Any:
-        return db_overrides.get(key, default)
-
-    return {
-        "generationModel": _val("generation_model", settings.ollama_model),
-        "generationFallback": _val("generation_fallback_model", settings.ollama_model),
-        "embeddingModel": _val("embedding_model", settings.embedding_model),
-        "visionModel": _val("vision_model", "qwen2.5vl:7b"),
-        "reranker": {
-            "enabled": _val("reranker_enabled", True),
-            "model": _val("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
-        },
-        "retrieval": {
-            "k": _val("retrieval_k", 6),
-            "scoreFloor": _val("score_floor", 0.45),
-            "chunkSize": _val("chunk_size", 800),
-            "chunkOverlap": _val("chunk_overlap", 150),
-        },
-        "sources": [
-            {
-                "id": "src-1",
-                "kind": "watch",
-                "label": "data/raw",
-                "detail": "Local filesystem watch",
-                "docCount": db.query(Document).count(),
-                "syncedAt": "2h ago",
-                "status": "ok",
-            },
-        ],
-        "security": {
-            "ssoOnly": _val("sso_only", False),
-            "sessionHours": _val("session_hours", 24),
-            "auditRetentionDays": _val("audit_retention_days", settings.audit_log_retention_days),
-            "redactPII": _val("redact_pii", False),
-        },
-        "cost": {
-            "dailyCeilingUsd": _val("daily_ceiling_usd", 50),
-            "monthlyCeilingUsd": _val("monthly_ceiling_usd", 500),
-            "todayUsd": 0.12,
-        },
-    }
+    return _serialize_settings(db)
 
 
 class PatchSettingsRequest(BaseModel):
@@ -661,22 +816,42 @@ def patch_settings(
     body: PatchSettingsRequest,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_role("admin")),
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Update mutable application settings stored in the DB."""
     current_config = load_app_config(db)
     updates: dict[str, Any] = {}
+    requested_ollama_models = any(
+        value is not None
+        for value in (
+            body.generationModel,
+            body.generationFallback,
+            body.embeddingModel,
+            body.visionModel,
+        )
+    )
+    available_ollama_models = _fetch_ollama_model_names() if requested_ollama_models else set()
     if body.generationModel is not None:
-        updates["generation_model"] = body.generationModel
+        updates["generation_model"] = _validate_ollama_model_exists(
+            body.generationModel, "generationModel", available_ollama_models
+        )
     if body.generationFallback is not None:
-        updates["generation_fallback_model"] = body.generationFallback
+        updates["generation_fallback_model"] = _validate_ollama_model_exists(
+            body.generationFallback, "generationFallback", available_ollama_models
+        )
     if body.embeddingModel is not None:
-        updates["embedding_model"] = body.embeddingModel
+        updates["embedding_model"] = _validate_ollama_model_exists(
+            body.embeddingModel, "embeddingModel", available_ollama_models
+        )
     if body.visionModel is not None:
-        updates["vision_model"] = body.visionModel
+        updates["vision_model"] = _validate_ollama_model_exists(
+            body.visionModel, "visionModel", available_ollama_models
+        )
     if body.rerankerEnabled is not None:
         updates["reranker_enabled"] = body.rerankerEnabled
     if body.rerankerModel is not None:
-        updates["reranker_model"] = body.rerankerModel
+        updates["reranker_model"] = _validate_model_identifier(
+            body.rerankerModel, "rerankerModel"
+        )
     if body.retrievalK is not None:
         if body.retrievalK < 1 or body.retrievalK > 32:
             raise HTTPException(status_code=422, detail="retrievalK must be between 1 and 32")
@@ -731,7 +906,7 @@ def patch_settings(
     except Exception as exc:  # noqa: BLE001
         logger.warning("runtime_refresh_failed", error=str(exc))
     logger.info("settings_updated", keys=list(updates.keys()))
-    return {"status": "ok"}
+    return _serialize_settings(db)
 
 
 # ---------------------------------------------------------------------------

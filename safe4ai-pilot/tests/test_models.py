@@ -49,6 +49,16 @@ def test_document_and_semantic_cache_columns_match_plan() -> None:
     assert IngestionStatus.skipped.value == "skipped"
 
 
+def test_document_uploaded_by_fk_has_delete_default_protection() -> None:
+    from app.db.models import Document
+
+    uploaded_by = Document.__table__.c.uploaded_by
+    fk = next(iter(uploaded_by.foreign_keys))
+
+    assert uploaded_by.server_default is not None
+    assert fk.ondelete == "SET DEFAULT"
+
+
 def test_settings_parse_allowed_origins() -> None:
     from app.config import Settings
 
@@ -63,3 +73,11 @@ def test_settings_default_allowed_origin_matches_vite_dev_port() -> None:
     settings = Settings()
 
     assert settings.allowed_origins_list == ["http://localhost:3000"]
+
+
+def test_runtime_config_coerce_bool_handles_string_zero() -> None:
+    from app.services.runtime_config import _coerce_bool
+
+    assert _coerce_bool("0", True) is False
+    assert _coerce_bool("false", True) is False
+    assert _coerce_bool("1", False) is True

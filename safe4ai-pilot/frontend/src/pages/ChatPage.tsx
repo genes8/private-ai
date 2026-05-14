@@ -33,14 +33,27 @@ export default function ChatPage() {
   const { docs } = useDocuments();
   const [composer, setComposer] = useState("");
   const [activeCitationId, setActiveCitationId] = useState<string | null>(null);
+  const [drawerMessageId, setDrawerMessageId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const totalChunks = docs.reduce((sum, d) => sum + d.chunks, 0);
   const totalDocs = docs.length;
 
-  const drawerSources: SseCite[] = messages
+  const latestAssistantWithSources = messages
     .filter((m) => m.role === "assistant" && m.sources.length > 0)
-    .at(-1)?.sources ?? [];
+    .at(-1);
+  const selectedDrawerMessage = messages.find(
+    (m) => m.id === drawerMessageId && m.role === "assistant" && m.sources.length > 0,
+  );
+  const drawerSources: SseCite[] = selectedDrawerMessage?.sources ?? latestAssistantWithSources?.sources ?? [];
+
+  async function handleCopy(content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch (error) {
+      console.error("clipboard_write_failed", error);
+    }
+  }
 
   function handleSubmit() {
     const q = composer.trim();
@@ -136,9 +149,12 @@ export default function ChatPage() {
                       streaming && msg.id === assistantMessages.at(-1)?.id
                     }
                     rated={msg.rated}
-                    onCopy={() => navigator.clipboard.writeText(msg.content)}
+                    onCopy={() => void handleCopy(msg.content)}
                     onRate={(r) => rate(msg.id, r)}
-                    onCitationOpen={(id) => setActiveCitationId((prev) => (prev === id ? null : id))}
+                    onCitationOpen={(id) => {
+                      setDrawerMessageId(msg.id);
+                      setActiveCitationId((prev) => (prev === id ? null : id));
+                    }}
                   />
                 )}
               </MessageBubble>
@@ -184,7 +200,7 @@ export default function ChatPage() {
 
       {/* Citation drawer — right side, auto-visible from last assistant message */}
       {drawerSources.length > 0 && (
-        <aside className="w-[360px] shrink-0 border-l border-line bg-surface-2 flex flex-col">
+        <aside className="hidden md:flex md:w-[320px] lg:w-[360px] shrink-0 border-l border-line bg-surface-2 flex-col">
           <div className="px-4 py-3 border-b border-line">
             <span className="text-[12px] font-semibold text-text-2">Sources</span>
           </div>

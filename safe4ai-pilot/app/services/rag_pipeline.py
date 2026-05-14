@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
-from app.db.models import Document, DocumentChunk
+from app.db.models import Document, DocumentChunk, IngestionStatus
 from app.models import Citation, RankedChunk
 from app.security.content_filter import ContentFilter
 
@@ -117,13 +117,13 @@ class RagPipeline:
                 )
 
         if not all_chunks:
-            self._set_status(doc_id, "failed")
+            self._set_status(doc_id, IngestionStatus.failed)
             self._db.commit()
             return
 
         clean_chunks = [c for c in all_chunks if not self._content_filter.is_pii(c["content"])]
         if not clean_chunks:
-            self._set_status(doc_id, "skipped")
+            self._set_status(doc_id, IngestionStatus.skipped)
             self._db.commit()
             return
 
@@ -165,7 +165,10 @@ class RagPipeline:
         needs_review = (
             total_pages > 0 and low_confidence_count / total_pages > _LOW_CONFIDENCE_RATIO
         )
-        self._set_status(doc_id, "skipped" if needs_review else "indexed")
+        self._set_status(
+            doc_id,
+            IngestionStatus.skipped if needs_review else IngestionStatus.indexed,
+        )
         self._db.commit()
 
         # Update BM25 index
@@ -362,7 +365,7 @@ class RagPipeline:
             pages.append(("\n".join(rows), sheet_idx))
         return pages
 
-    def _set_status(self, doc_id: str, status: str) -> None:
+    def _set_status(self, doc_id: str, status: IngestionStatus) -> None:
         doc = self._db.get(Document, doc_id)
         if doc is not None:
             setattr(doc, "ingestion_status", status)

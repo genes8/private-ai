@@ -32,10 +32,15 @@ const listUsers = () => apiFetch<User[]>("/admin/users");
 const deactivateUser = (id: string) =>
   apiFetch<void>(`/admin/users/${id}`, { method: "DELETE" });
 const inviteUser = (body: { email: string; role: string; password?: string }) =>
-  apiFetch<{ id: string; password?: string | null }>("/admin/users", {
+  apiFetch<{ id: string }>("/admin/users", {
     method: "POST",
     body: JSON.stringify(body),
   });
+
+function generateTemporaryPassword(): string {
+  const seed = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${seed}Aa!9`;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function nameFromEmail(email: string): string {
@@ -77,7 +82,7 @@ function InviteModal({
   onSubmit,
 }: {
   onClose: () => void;
-  onSubmit: (body: { email: string; role: string }) => Promise<{ id: string; password?: string | null }>;
+  onSubmit: (body: { email: string; role: string; password: string }) => Promise<{ id: string }>;
 }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<string>("pilot_user");
@@ -90,12 +95,9 @@ function InviteModal({
     setError(null);
     try {
       setSubmitting(true);
-      const result = await onSubmit({ email, role });
-      if (result.password) {
-        setGeneratedPassword(result.password);
-        return;
-      }
-      onClose();
+      const password = generateTemporaryPassword();
+      await onSubmit({ email, role, password });
+      setGeneratedPassword(password);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invite failed");
     } finally {
@@ -403,10 +405,11 @@ export default function UsersPage() {
                 <StatusPill isActive={u.is_active} />
               </div>
 
-              <div className="flex justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="flex justify-end">
                 {u.is_active && u.role !== "admin" && (
                   <button
                     onClick={() => setConfirmDeactivate(u)}
+                    aria-label={`Deactivate ${u.email}`}
                     title="Deactivate"
                     className="w-7 h-7 rounded hover:bg-paper-2 flex items-center justify-center"
                   >

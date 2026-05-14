@@ -4,6 +4,7 @@ export interface FeedbackItem {
   id: string;
   traceId: string;
   userId: string;
+  userEmail?: string;
   sessionId: string;
   ts: string;
   rating: "up" | "down";
@@ -20,6 +21,7 @@ export const submitFeedback = (
 interface RawFeedback {
   id: string;
   user_id: string;
+  user_email?: string | null;
   session_id: string;
   trace_id: string;
   rating: string;
@@ -34,6 +36,7 @@ export const listFeedback = () =>
         id: r.id,
         traceId: r.trace_id,
         userId: r.user_id,
+        userEmail: r.user_email ?? undefined,
         sessionId: r.session_id,
         ts: r.created_at,
         rating: r.rating === "positive" ? "up" : "down",

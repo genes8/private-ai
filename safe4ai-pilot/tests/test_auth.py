@@ -59,6 +59,9 @@ def _override_get_db(db: MagicMock) -> Callable[[], Generator[MagicMock, None, N
     return _override
 
 
+_ALLOWED_ORIGIN = "http://localhost:3000"
+
+
 # ---------------------------------------------------------------------------
 # test_login_success
 # ---------------------------------------------------------------------------
@@ -75,6 +78,7 @@ def test_login_success(test_client: TestClient) -> None:
     try:
         response = test_client.post(
             "/auth/login",
+            headers={"origin": _ALLOWED_ORIGIN},
             json={"email": "alice@example.com", "password": "SuperSecret123!"},
         )
     finally:
@@ -101,6 +105,7 @@ def test_login_wrong_password(test_client: TestClient) -> None:
     try:
         response = test_client.post(
             "/auth/login",
+            headers={"origin": _ALLOWED_ORIGIN},
             json={"email": "alice@example.com", "password": "WrongPassword999!"},
         )
     finally:
@@ -123,7 +128,7 @@ def test_login_account_locked(test_client: TestClient) -> None:
     locked_until = datetime.now(UTC) + timedelta(minutes=10)
     user = _make_user(
         password_hash=hashed,
-        failed_login_count=20,
+        failed_login_count=5,
         locked_until=locked_until,
     )
     db = _mock_db_with_user(user)
@@ -132,6 +137,7 @@ def test_login_account_locked(test_client: TestClient) -> None:
     try:
         response = test_client.post(
             "/auth/login",
+            headers={"origin": _ALLOWED_ORIGIN},
             json={"email": "alice@example.com", "password": "SuperSecret123!"},
         )
     finally:
@@ -147,26 +153,39 @@ def test_login_account_locked(test_client: TestClient) -> None:
 
 
 def test_logout_clears_cookie(test_client: TestClient) -> None:
+    user = _make_user()
+    db = _mock_db_with_user(user)
+    app.dependency_overrides[get_db] = _override_get_db(db)
     token = encode_token("user-1", "pilot_user")
     csrf_token = "test-csrf-token"
     test_client.cookies.set("access_token", token)
     test_client.cookies.set("csrf_token", csrf_token)
     test_client.headers["X-CSRF-Token"] = csrf_token
 
-    response = test_client.post("/auth/logout")
+    try:
+        response = test_client.post("/auth/logout")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
     assert response.status_code == 200
     assert response.json() == {"message": "logged out"}
     set_cookie = response.headers.get("set-cookie", "")
     assert "access_token" in set_cookie
     assert "csrf_token" in set_cookie
     assert "max-age=0" in set_cookie.lower()
+    assert user.token_valid_after is not None
 
 
 def test_logout_requires_csrf_when_authenticated(test_client: TestClient) -> None:
+    user = _make_user()
+    db = _mock_db_with_user(user)
+    app.dependency_overrides[get_db] = _override_get_db(db)
     token = encode_token("user-1", "pilot_user")
     test_client.cookies.set("access_token", token)
 
-    response = test_client.post("/auth/logout")
+    try:
+        response = test_client.post("/auth/logout")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
     assert response.status_code == 403
 
@@ -233,7 +252,85 @@ def test_login_short_password_rejected(test_client: TestClient) -> None:
     """Passwords shorter than 12 chars must be rejected server-side."""
     response = test_client.post(
         "/auth/login",
+        headers={"origin": _ALLOWED_ORIGIN},
         json={"email": "alice@example.com", "password": "short"},
     )
     assert response.status_code == 401
     assert "Invalid credentials" in response.json()["detail"]
+
+
+def test_login_rejects_cross_origin_request(test_client: TestClient) -> None:
+    db = _mock_db_with_user(None)
+    app.dependency_overrides[get_db] = _override_get_db(db)
+    try:
+        response = test_client.post(
+            "/auth/login",
+            headers={"origin": "https://evil.example"},
+            json={"email": "alice@example.com", "password": "SuperSecret123!"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF validation failed"
+
+
+def test_login_rejects_missing_origin_header(test_client: TestClient) -> None:
+    db = _mock_db_with_user(None)
+    app.dependency_overrides[get_db] = _override_get_db(db)
+    try:
+        response = test_client.post(
+            "/auth/login",
+            json={"email": "alice@example.com", "password": "SuperSecret123!"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF validation failed"
+
+
+def test_expired_lockout_is_cleared_before_next_failed_attempt(test_client: TestClient) -> None:
+    from app.auth.middleware import hash_password
+
+    hashed = hash_password("SuperSecret123!")
+    expired_lock = datetime.now(UTC) - timedelta(minutes=1)
+    user = _make_user(
+        password_hash=hashed,
+        failed_login_count=5,
+        locked_until=expired_lock,
+    )
+    db = _mock_db_with_user(user)
+
+    app.dependency_overrides[get_db] = _override_get_db(db)
+    try:
+        response = test_client.post(
+            "/auth/login",
+            headers={"origin": _ALLOWED_ORIGIN},
+            json={"email": "alice@example.com", "password": "WrongPassword999!"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 401
+    assert user.failed_login_count == 1
+    assert user.locked_until is None
+
+
+def test_revoked_token_is_rejected_on_next_request(test_client: TestClient) -> None:
+    user = _make_user()
+    user.token_valid_after = datetime.now(UTC)
+    db = _mock_db_with_user(user)
+
+    app.dependency_overrides[get_db] = _override_get_db(db)
+    try:
+        token = encode_token("user-1", "pilot_user")
+        test_client.cookies.set("access_token", token)
+        test_client.cookies.set("csrf_token", "test-csrf-token")
+        test_client.headers["X-CSRF-Token"] = "test-csrf-token"
+        response = test_client.post("/auth/logout")
+    finally:
+        test_client.cookies.clear()
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 401

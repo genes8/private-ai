@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import secrets
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -12,7 +13,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
-from app.auth.middleware import encode_token, verify_password
+from app.auth.middleware import encode_token, get_current_user, verify_password
 from app.config import settings
 from app.db import get_db
 from app.db.models import User
@@ -25,8 +26,8 @@ limiter: Limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_LOCK_THRESHOLD = 20
-_LOCK_MINUTES = 15
+_LOCK_THRESHOLD = 5
+_LOCK_MINUTES = 30
 _CSRF_COOKIE_NAME = "csrf_token"
 _MIN_PASSWORD_LENGTH = 12
 
@@ -36,6 +37,19 @@ _INVALID_CREDS_DETAIL = "Invalid credentials"
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+def _clear_expired_lockout(user: User, *, now: datetime) -> bool:
+    locked_until = user.locked_until
+    if locked_until is None:
+        return False
+    if locked_until.tzinfo is None:
+        locked_until = locked_until.replace(tzinfo=UTC)
+    if locked_until > now:
+        return False
+    user.failed_login_count = 0
+    user.locked_until = None
+    return True
 
 
 @router.post("/login")
@@ -54,17 +68,20 @@ async def login(
 
     # --- Brute-force protection ---
     if user is not None:
+        now = datetime.now(UTC)
+        lockout_cleared = _clear_expired_lockout(user, now=now)
         if (
             user.failed_login_count is not None
             and user.failed_login_count >= _LOCK_THRESHOLD
             and user.locked_until is not None
         ):
-            now = datetime.now(UTC)
             locked_until = user.locked_until
             if locked_until.tzinfo is None:
                 locked_until = locked_until.replace(tzinfo=UTC)
             if locked_until > now:
                 raise HTTPException(status_code=429, detail="Account temporarily locked")
+        if lockout_cleared:
+            db.commit()
 
     # --- Credential verification (always, to prevent timing attacks) ---
     password_ok = False
@@ -86,6 +103,7 @@ async def login(
     # --- Success ---
     assert user is not None  # noqa: S101  # guaranteed: password_ok=True requires user is not None
     user.failed_login_count = 0
+    user.locked_until = None
     db.commit()
 
     config = load_app_config(db)
@@ -120,8 +138,13 @@ async def login(
 
 
 @router.post("/logout")
-async def logout() -> Response:
-    """Clear the JWT cookie."""
+async def logout(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Clear the JWT cookie and revoke the current token server-side."""
+    current_user.token_valid_after = datetime.now(UTC)
+    db.commit()
     response = Response(
         content='{"message": "logged out"}',
         media_type="application/json",

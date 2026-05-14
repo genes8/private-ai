@@ -148,6 +148,10 @@ class TestCostStats:
         call_kwargs = mock_instance.get_stats.call_args
         assert call_kwargs[1].get("days") == 7 or call_kwargs[0][1] == 7
 
+    def test_cost_stats_rejects_invalid_days(self, obs_client: TestClient) -> None:
+        resp = obs_client.get("/admin/stats/cost?days=0")
+        assert resp.status_code == 422
+
 
 class TestListFeedback:
     def test_list_feedback_returns_list(self, obs_client: TestClient) -> None:

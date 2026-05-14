@@ -6,7 +6,7 @@ from typing import Any
 import structlog
 from sqlalchemy.orm import Session
 
-from app.db.models import FeedbackRating, QueryFeedback
+from app.db.models import FeedbackRating, QueryFeedback, User
 
 logger = structlog.get_logger(__name__)
 
@@ -56,10 +56,16 @@ class FeedbackStore:
             .limit(limit)
             .all()
         )
+        user_ids = {r.user_id for r in rows if r.user_id}
+        user_rows = (
+            self._db.query(User).filter(User.id.in_(user_ids)).all() if user_ids else []
+        )
+        user_emails = {str(user.id): user.email for user in user_rows}
         return [
             {
                 "id": r.id,
                 "user_id": r.user_id,
+                "user_email": user_emails.get(str(r.user_id)),
                 "session_id": r.session_id,
                 "trace_id": r.trace_id,
                 "rating": r.rating,

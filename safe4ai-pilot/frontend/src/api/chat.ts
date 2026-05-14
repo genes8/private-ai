@@ -49,10 +49,10 @@ export async function* streamChat(
   let dataLines: string[] = [];
 
   function emitEvent(): SseEvent | null {
-    if (!eventName || dataLines.length === 0) return null;
+    if (dataLines.length === 0) return null;
     const raw = dataLines.join("\n");
     dataLines = [];
-    const name = eventName;
+    const name = eventName || "message";
     eventName = "";
     try {
       const data = JSON.parse(raw) as unknown;
@@ -63,7 +63,7 @@ export async function* streamChat(
     } catch (err) {
       console.warn("[sse] failed to parse event data", name, raw, err);
     }
-    return null;
+    return { type: "error", data: { message: `Unexpected SSE event: ${name}` } };
   }
 
   while (true) {
@@ -90,7 +90,7 @@ export async function* streamChat(
         continue;
       }
       if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trimStart());
+        dataLines.push(line.startsWith("data: ") ? line.slice(6) : line.slice(5));
       }
     }
   }

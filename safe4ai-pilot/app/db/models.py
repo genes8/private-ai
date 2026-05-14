@@ -60,6 +60,7 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     failed_login_count = Column(Integer, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)
+    token_valid_after = Column(DateTime(timezone=True), nullable=True)
 
 
 class Session(Base):
@@ -68,7 +69,7 @@ class Session(Base):
     id = Column(String, primary_key=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     state_json = Column(JSON, nullable=True)
 
 
@@ -82,7 +83,12 @@ class Document(Base):
     ingestion_status = Column(
         Enum(IngestionStatus), nullable=False, default=IngestionStatus.queued
     )
-    uploaded_by = Column(String, ForeignKey("users.id"), nullable=False)
+    uploaded_by = Column(
+        String,
+        ForeignKey("users.id", ondelete="SET DEFAULT"),
+        nullable=False,
+        server_default="00000000-0000-0000-0000-000000000001",
+    )
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
     doc_metadata = Column(JSON, nullable=True)
     ingestion_started_at = Column(DateTime(timezone=True), nullable=True)

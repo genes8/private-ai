@@ -77,6 +77,7 @@ def test_auth_login_has_security_headers(client_with_mocks: TestClient) -> None:
     try:
         response = client_with_mocks.post(
             "/auth/login",
+            headers={"origin": "http://localhost:3000"},
             json={"email": "nobody@example.com", "password": "doesnotexist123!"},
         )
     finally:
@@ -96,7 +97,10 @@ def test_body_limit_honors_configured_max_upload_size(client_with_mocks: TestCli
         response = client_with_mocks.post(
             "/auth/login",
             content=b"x",
-            headers={"content-type": "application/octet-stream"},
+            headers={
+                "content-type": "application/octet-stream",
+                "origin": "http://localhost:3000",
+            },
         )
     finally:
         settings.max_upload_size_mb = original_limit

@@ -77,4 +77,4 @@ export const deleteDocument = (id: string) =>
   apiFetch<void>(`/admin/documents/${id}`, { method: "DELETE" });
 
 export const reindexDocument = (id: string) =>
-  apiFetch<void>(`/admin/documents/${id}/reindex`, { method: "POST" });
+  apiFetch<{ job_id: string }>(`/admin/documents/${id}/reindex`, { method: "POST" });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Brain,
@@ -49,6 +49,9 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
 function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
+      type="button"
+      role="switch"
+      aria-checked={value}
       onClick={() => onChange(!value)}
       className={`relative w-9 h-5 rounded-full transition-colors ${value ? "bg-ink" : "bg-line-3"}`}>
       <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-paper-2 transition-transform
@@ -74,12 +77,39 @@ function NumberInput({ value, onChange, unit, min, max, step = 1 }: {
   value: number; onChange: (v: number) => void; unit?: string;
   min?: number; max?: number; step?: number;
 }) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  function commit(nextRaw: string) {
+    const next = Number(nextRaw);
+    if (Number.isFinite(next)) {
+      const clamped = Math.min(max ?? next, Math.max(min ?? next, next));
+      if (clamped !== value) {
+        onChange(clamped);
+      } else {
+        setDraft(String(value));
+      }
+    } else {
+      setDraft(String(value));
+    }
+  }
+
   return (
     <div className="inline-flex items-center gap-1.5">
       <input
         type="number" min={min} max={max} step={step}
-        value={value}
-        onChange={e => onChange(Number(e.target.value))}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={e => commit(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commit((e.currentTarget as HTMLInputElement).value);
+            e.currentTarget.blur();
+          }
+        }}
         className="w-20 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono text-right outline-none focus:border-accent" />
       {unit && <span className="text-[11.5px] font-mono text-text-3">{unit}</span>}
     </div>
@@ -139,6 +169,7 @@ const NAV: Array<{ id: SectionId; label: string; icon: React.ComponentType<{ cla
 export default function SettingsPage() {
   const [active, setActive] = useState<SectionId>("models");
   const qc = useQueryClient();
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const { data: s, isLoading, isError, error } = useQuery({
     queryKey: ["settings"],
@@ -149,11 +180,52 @@ export default function SettingsPage() {
 
   const save = useMutation({
     mutationFn: patchSettings,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
     onError: (err: Error) => {
       console.error("settings_save_failed", err);
+      void qc.invalidateQueries({ queryKey: ["settings"] });
     },
   });
+
+  const applyDiff = (current: AppSettings, diff: PatchableSettings): AppSettings => ({
+    ...current,
+    generationModel: diff.generationModel ?? current.generationModel,
+    generationFallback: diff.generationFallback ?? current.generationFallback,
+    embeddingModel: diff.embeddingModel ?? current.embeddingModel,
+    visionModel: diff.visionModel ?? current.visionModel,
+    reranker: {
+      enabled: diff.rerankerEnabled ?? current.reranker.enabled,
+      model: diff.rerankerModel ?? current.reranker.model,
+    },
+    retrieval: {
+      k: diff.retrievalK ?? current.retrieval.k,
+      scoreFloor: diff.scoreFloor ?? current.retrieval.scoreFloor,
+      chunkSize: diff.chunkSize ?? current.retrieval.chunkSize,
+      chunkOverlap: diff.chunkOverlap ?? current.retrieval.chunkOverlap,
+    },
+    security: {
+      ssoOnly: diff.ssoOnly ?? current.security.ssoOnly,
+      sessionHours: diff.sessionHours ?? current.security.sessionHours,
+      auditRetentionDays: diff.auditRetentionDays ?? current.security.auditRetentionDays,
+      redactPII: diff.redactPII ?? current.security.redactPII,
+    },
+    cost: {
+      ...current.cost,
+      dailyCeilingUsd: diff.dailyCeilingUsd ?? current.cost.dailyCeilingUsd,
+      monthlyCeilingUsd: diff.monthlyCeilingUsd ?? current.cost.monthlyCeilingUsd,
+    },
+  });
+
+  const queueSave = (diff: PatchableSettings) => {
+    qc.setQueryData<AppSettings>(["settings"], (current) => {
+      if (!current) return current;
+      return applyDiff(current, diff);
+    });
+    saveQueueRef.current = saveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        await save.mutateAsync(diff);
+      });
+  };
 
   const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     if (!s) return;
@@ -195,7 +267,7 @@ export default function SettingsPage() {
       if (cost.monthlyCeilingUsd !== s.cost.monthlyCeilingUsd) diff.monthlyCeilingUsd = cost.monthlyCeilingUsd;
     }
     if (Object.keys(diff).length > 0) {
-      save.mutate(diff);
+      queueSave(diff);
     }
   };
 

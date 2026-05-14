@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from threading import RLock
 from typing import Any
 
 import httpx
@@ -26,6 +27,7 @@ class HybridRetriever:
         self._bm25: BM25Okapi | None = None
         self._bm25_chunk_ids: list[str] = []
         self._bm25_payloads: dict[str, dict[str, Any]] = {}
+        self._bm25_lock = RLock()
 
     def _rebuild_bm25_index(self, entries: list[tuple[str, str, dict[str, Any]]]) -> None:
         if not entries:
@@ -58,55 +60,57 @@ class HybridRetriever:
             for chunk_id, content, payload in zip(chunk_ids, contents, incoming_payloads, strict=False)
         ]
 
-        if self._bm25 is None or not self._bm25_chunk_ids:
-            self._rebuild_bm25_index(incoming_entries)
-            return
+        with self._bm25_lock:
+            if self._bm25 is None or not self._bm25_chunk_ids:
+                self._rebuild_bm25_index(incoming_entries)
+                return
 
-        existing_entries: list[tuple[str, str, dict[str, Any]]] = []
-        for chunk_id in self._bm25_chunk_ids:
-            payload = self._bm25_payloads.get(chunk_id)
-            if payload is None:
-                continue
-            existing_entries.append(
-                (
-                    chunk_id,
-                    str(payload.get("content", "")),
-                    dict(payload),
+            existing_entries: list[tuple[str, str, dict[str, Any]]] = []
+            for chunk_id in self._bm25_chunk_ids:
+                payload = self._bm25_payloads.get(chunk_id)
+                if payload is None:
+                    continue
+                existing_entries.append(
+                    (
+                        chunk_id,
+                        str(payload.get("content", "")),
+                        dict(payload),
+                    )
                 )
-            )
 
-        self._rebuild_bm25_index(existing_entries + incoming_entries)
+            self._rebuild_bm25_index(existing_entries + incoming_entries)
 
     def remove_from_bm25(self, doc_id: str) -> None:
         """Remove all BM25 entries for a document and rebuild the sparse index."""
-        if self._bm25 is None or not self._bm25_chunk_ids:
-            return
+        with self._bm25_lock:
+            if self._bm25 is None or not self._bm25_chunk_ids:
+                return
 
-        remaining_entries: list[tuple[str, str, dict[str, Any]]] = []
-        for chunk_id in self._bm25_chunk_ids:
-            payload = self._bm25_payloads.get(chunk_id, {})
-            if str(payload.get("doc_id", "")) == doc_id:
-                continue
-            remaining_entries.append(
-                (
-                    chunk_id,
-                    str(payload.get("content", "")),
-                    dict(payload),
+            remaining_entries: list[tuple[str, str, dict[str, Any]]] = []
+            for chunk_id in self._bm25_chunk_ids:
+                payload = self._bm25_payloads.get(chunk_id, {})
+                if str(payload.get("doc_id", "")) == doc_id:
+                    continue
+                remaining_entries.append(
+                    (
+                        chunk_id,
+                        str(payload.get("content", "")),
+                        dict(payload),
+                    )
                 )
-            )
 
-        self._rebuild_bm25_index(remaining_entries)
+            self._rebuild_bm25_index(remaining_entries)
 
     async def _embed(self, query: str) -> list[float]:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{self._ollama_url}/api/embeddings",
-                json={"model": self._embedding_model, "prompt": query},
+                f"{self._ollama_url}/api/embed",
+                json={"model": self._embedding_model, "input": query},
                 timeout=30.0,
             )
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
-            embedding = data.get("embedding")
+            embedding = data.get("embedding") or data.get("embeddings", [None])[0]
             if not isinstance(embedding, list):
                 raise ValueError("Ollama embeddings response did not include an embedding list")
             return [float(value) for value in embedding]
@@ -153,20 +157,24 @@ class HybridRetriever:
         # Sparse BM25 rankings
         sparse_ranks: dict[str, int] = {}
         sparse_data: dict[str, dict[str, Any]] = {}
-        if self._bm25 is not None and self._bm25_chunk_ids:
+        with self._bm25_lock:
+            bm25 = self._bm25
+            bm25_chunk_ids = list(self._bm25_chunk_ids)
+            bm25_payloads = dict(self._bm25_payloads)
+        if bm25 is not None and bm25_chunk_ids:
             tokenized_query = query.lower().split()
-            scores = self._bm25.get_scores(tokenized_query)
+            scores = bm25.get_scores(tokenized_query)
             filtered: list[tuple[int, float, dict[str, Any]]] = []
             for idx, score in enumerate(scores):
-                cid = self._bm25_chunk_ids[idx]
-                payload = dense_data.get(cid) or self._bm25_payloads.get(cid, {})
+                cid = bm25_chunk_ids[idx]
+                payload = dense_data.get(cid) or bm25_payloads.get(cid, {})
                 if doc_ids and payload.get("doc_id") not in doc_ids:
                     continue
                 filtered.append((idx, score, payload))
 
             indexed = sorted(filtered, key=lambda x: x[1], reverse=True)[:top_k]
             for rank, (idx, _score, payload) in enumerate(indexed, start=1):
-                cid = self._bm25_chunk_ids[idx]
+                cid = bm25_chunk_ids[idx]
                 sparse_ranks[cid] = rank
                 sparse_data[cid] = payload
 

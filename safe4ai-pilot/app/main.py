@@ -31,6 +31,8 @@ logger = structlog.get_logger(__name__)
 secure_headers = Secure()
 _QDRANT_COLLECTION = "documents"
 _QDRANT_VECTOR_SIZE = 768
+_DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
+_DELETED_USER_EMAIL = "deleted@redacted.local"
 
 
 @contextlib.asynccontextmanager
@@ -41,6 +43,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(bind=engine)
     _ensure_documents_columns()
+    _ensure_user_columns()
+    _ensure_document_foreign_keys()
+    _ensure_deleted_user()
     _ensure_qdrant_collection()
 
     with SessionLocal() as db:
@@ -49,6 +54,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _app.state.retriever = retriever
     _app.state.reranker = reranker
     _app.state.graph = graph
+    _app.state.ingestion_tasks = set()
 
     asyncio.create_task(_prewarm_ollama(runtime.generation_model))
     schedule_cleanup(_app)
@@ -100,8 +106,13 @@ async def protect_csrf(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     unsafe_methods = {"POST", "PUT", "PATCH", "DELETE"}
-    if request.method in unsafe_methods and request.url.path != "/auth/login":
+    if request.method in unsafe_methods:
         origin = request.headers.get("origin")
+        requires_origin_check = request.url.path == "/auth/login"
+        if requires_origin_check and not origin:
+            response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+            response.headers.update(secure_headers.headers())
+            return response
         if origin and origin not in settings.allowed_origins_list:
             response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
             response.headers.update(secure_headers.headers())
@@ -172,6 +183,60 @@ def _ensure_documents_columns() -> None:
                 conn.execute(text(statement))
     except Exception as exc:
         logger.warning("document_columns_ensure_failed", error=str(exc))
+
+
+def _ensure_user_columns() -> None:
+    statements = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS token_valid_after TIMESTAMPTZ",
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+    except Exception as exc:
+        logger.warning("user_columns_ensure_failed", error=str(exc))
+
+
+def _ensure_document_foreign_keys() -> None:
+    statements = [
+        f"ALTER TABLE documents ALTER COLUMN uploaded_by SET DEFAULT '{_DELETED_USER_ID}'",
+        "ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_uploaded_by_fkey",
+        (
+            "ALTER TABLE documents ADD CONSTRAINT documents_uploaded_by_fkey "
+            "FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET DEFAULT"
+        ),
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+    except Exception as exc:
+        logger.warning("document_foreign_keys_ensure_failed", error=str(exc))
+
+
+def _ensure_deleted_user() -> None:
+    from app.auth.middleware import hash_password
+
+    statement = text(
+        """
+        INSERT INTO users (id, email, password_hash, role, is_active)
+        SELECT :user_id, :email, :password_hash, :role, false
+        WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = :user_id OR email = :email)
+        """
+    )
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                statement,
+                {
+                    "user_id": _DELETED_USER_ID,
+                    "email": _DELETED_USER_EMAIL,
+                    "password_hash": hash_password("deleted-user-disabled-password"),
+                    "role": "pilot_user",
+                },
+            )
+    except Exception as exc:
+        logger.warning("deleted_user_ensure_failed", error=str(exc))
 
 
 @app.get("/health")

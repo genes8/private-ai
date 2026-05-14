@@ -12,7 +12,6 @@ logger = structlog.get_logger(__name__)
 
 PII_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\b\d{3}[ -]\d{2}[ -]\d{4}\b"),  # SSN: ###-##-#### or ### ## ####
-    re.compile(r"\b\d{9}\b"),  # SSN without separators
     re.compile(r"\b(?:\d{4}[- ]){3}\d{4}\b"),  # Credit card
     re.compile(r"\b[A-Z]{1,2}\d{6,9}\b"),  # Passport
 ]

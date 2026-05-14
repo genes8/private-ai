@@ -22,7 +22,11 @@ function rangeToStart(range: string): string | undefined {
   const now = new Date();
   switch (range) {
     case "Last hour":   return new Date(now.getTime() - 60 * 60 * 1000).toISOString();
-    case "Today":       return new Date(now.setHours(0, 0, 0, 0)).toISOString();
+    case "Today": {
+      const startOfDay = new Date(now);
+      startOfDay.setHours(0, 0, 0, 0);
+      return startOfDay.toISOString();
+    }
     case "Last 7 days": return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     case "Last 30 days":return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
     default:            return undefined;

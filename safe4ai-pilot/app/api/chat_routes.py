@@ -121,6 +121,8 @@ def _resolve_session(
     if body.session_id:
         try:
             state = convo.load_session(body.session_id)
+            if state.user_id != user_id:
+                raise HTTPException(status_code=404, detail="Session not found")
             return body.session_id, state
         except KeyError:
             pass

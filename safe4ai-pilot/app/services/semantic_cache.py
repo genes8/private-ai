@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -27,13 +28,13 @@ class SemanticCache:
     async def _embed(self, query: str) -> list[float]:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{self._ollama_url}/api/embeddings",
-                json={"model": self._embedding_model, "prompt": query},
+                f"{self._ollama_url}/api/embed",
+                json={"model": self._embedding_model, "input": query},
                 timeout=30.0,
             )
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
-            embedding = data.get("embedding")
+            embedding = data.get("embedding") or data.get("embeddings", [None])[0]
             if not isinstance(embedding, list):
                 raise ValueError("Ollama embeddings response did not include an embedding list")
             return [float(value) for value in embedding]
@@ -104,7 +105,7 @@ def invalidate_cache_for_document(db: Session, doc_id: str, *, commit: bool = Tr
             "DELETE FROM semantic_cache "
             "WHERE source_document_ids::jsonb @> CAST(:doc_id_json AS jsonb)"
         ),
-        {"doc_id_json": f'["{doc_id}"]'},
+        {"doc_id_json": json.dumps([doc_id])},
     )
     if commit:
         db.commit()

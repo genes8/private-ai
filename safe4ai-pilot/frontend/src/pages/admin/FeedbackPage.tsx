@@ -7,6 +7,16 @@ import FeedbackListItem from "../../components/admin/FeedbackListItem";
 import { listFeedback } from "../../api/feedback";
 import AdminLayout from "./AdminLayout";
 
+function displayName(userEmail: string | undefined, userId: string): string {
+  if (!userEmail) return `User ${userId.slice(0, 8)}`;
+  const [local] = userEmail.split("@");
+  return local
+    .split(/[._-]/)
+    .filter(Boolean)
+    .map((part) => part[0]!.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export default function FeedbackPage() {
   const { data: items = [], isLoading } = useQuery({
     queryKey: ["feedback"],
@@ -114,10 +124,14 @@ export default function FeedbackPage() {
 
               {/* Reporter */}
               <div className="flex items-center gap-2.5 mb-5">
-                <Avatar name={selected.userId} size={28} />
+                <Avatar name={displayName(selected.userEmail, selected.userId)} size={28} />
                 <div>
-                  <p className="text-[13.5px] font-medium text-ink">{selected.userId}</p>
-                  <p className="font-mono text-[11.5px] text-text-3">{selected.userId}</p>
+                  <p className="text-[13.5px] font-medium text-ink">
+                    {displayName(selected.userEmail, selected.userId)}
+                  </p>
+                  <p className="font-mono text-[11.5px] text-text-3">
+                    {selected.userEmail ?? selected.userId}
+                  </p>
                 </div>
               </div>
 
@@ -173,7 +187,7 @@ export default function FeedbackPage() {
               {/* Meta */}
               <div className="rounded-lg border border-line bg-surface px-3.5 py-3 grid grid-cols-2 gap-y-1.5 text-[12px]">
                 <span className="text-text-mute">User</span>
-                <span className="text-text font-mono truncate">{selected.userId}</span>
+                <span className="text-text font-mono truncate">{selected.userEmail ?? selected.userId}</span>
                 <span className="text-text-mute">Session</span>
                 <span className="text-text font-mono truncate">{selected.sessionId || "—"}</span>
                 <span className="text-text-mute">Trace ID</span>

@@ -17,6 +17,7 @@ logger = structlog.get_logger(__name__)
 
 _QDRANT_COLLECTION = "documents"
 _STUCK_THRESHOLD_MINUTES = 10
+_PENDING_JOB_TIMEOUT_ERROR = "Background ingestion task did not start; retry upload or reindex."
 
 
 async def run_ingestion(
@@ -78,7 +79,9 @@ async def run_ingestion(
 
         job.status = IngestionJobStatus.completed
         job.completed_at = datetime.now(UTC)
-        doc.ingestion_status = IngestionStatus.indexed
+        doc = db.get(Document, doc_id)
+        if doc is not None and doc.ingestion_status == IngestionStatus.embedding:
+            doc.ingestion_status = IngestionStatus.indexed
         db.commit()
         logger.info("ingestion_completed", doc_id=doc_id)
 
@@ -112,7 +115,7 @@ def recover_stuck_jobs(db: Session) -> int:
     Returns the number of jobs recovered.
     """
     cutoff = datetime.now(UTC) - timedelta(minutes=_STUCK_THRESHOLD_MINUTES)
-    stuck: list[IngestionJob] = (
+    stuck_embedding: list[IngestionJob] = (
         db.query(IngestionJob)
         .join(Document, IngestionJob.document_id == Document.id)
         .filter(
@@ -121,12 +124,37 @@ def recover_stuck_jobs(db: Session) -> int:
         )
         .all()
     )
-    for job in stuck:
+    for job in stuck_embedding:
         job.status = IngestionJobStatus.pending
         doc = db.get(Document, job.document_id)
         if doc is not None:
             doc.ingestion_status = IngestionStatus.queued
-    if stuck:
+            doc.ingestion_started_at = None
+
+    stuck_pending: list[IngestionJob] = (
+        db.query(IngestionJob)
+        .join(Document, IngestionJob.document_id == Document.id)
+        .filter(
+            IngestionJob.status == IngestionJobStatus.pending,
+            IngestionJob.created_at < cutoff,
+        )
+        .all()
+    )
+    for job in stuck_pending:
+        job.status = IngestionJobStatus.failed
+        job.error = _PENDING_JOB_TIMEOUT_ERROR
+        job.completed_at = datetime.now(UTC)
+        doc = db.get(Document, job.document_id)
+        if doc is not None and doc.ingestion_status == IngestionStatus.queued:
+            doc.ingestion_status = IngestionStatus.failed
+
+    recovered = len(stuck_embedding) + len(stuck_pending)
+    if recovered:
         db.commit()
-        logger.info("recovered_stuck_jobs", count=len(stuck))
-    return len(stuck)
+        logger.info(
+            "recovered_stuck_jobs",
+            count=recovered,
+            reset_embedding=len(stuck_embedding),
+            failed_pending=len(stuck_pending),
+        )
+    return recovered

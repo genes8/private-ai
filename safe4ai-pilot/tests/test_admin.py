@@ -95,6 +95,14 @@ def _make_test_client(db_mock: Any, admin: User) -> TestClient:
     return client
 
 
+def _close_and_return_task(coro: Any) -> MagicMock:
+    coro.close()
+    task = MagicMock()
+    task.cancelled.return_value = False
+    task.exception.return_value = None
+    return task
+
+
 # ---------------------------------------------------------------------------
 # Document upload
 # ---------------------------------------------------------------------------
@@ -105,8 +113,7 @@ class TestDocumentUpload:
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
 
-        _close = lambda coro: coro.close()  # noqa: E731
-        with patch("app.api.admin_routes.asyncio.create_task", side_effect=_close):
+        with patch("app.api.admin_routes.asyncio.create_task", side_effect=_close_and_return_task):
             client = _make_test_client(db, admin)
             pdf_bytes = b"%PDF-1.4 fake pdf content"
             with patch("app.api.admin_routes.UploadValidator.validate") as mock_validate, \
@@ -290,10 +297,9 @@ class TestDocumentReindex:
         doc = _make_document()
         db.get.side_effect = lambda model, pk: admin if model is User else doc
 
-        _close2 = lambda coro: coro.close()  # noqa: E731
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=True), \
-             patch("app.api.admin_routes.asyncio.create_task", side_effect=_close2), \
+             patch("app.api.admin_routes.asyncio.create_task", side_effect=_close_and_return_task), \
              patch("app.api.admin_routes.QdrantClient") as MockQdrant:
             client = _make_test_client(db, admin)
             resp = client.post("/admin/documents/doc-1/reindex")
@@ -329,6 +335,75 @@ class TestDocumentReindex:
             resp = client.post("/admin/documents/doc-1/reindex")
 
         assert resp.status_code == 409
+        from app.main import app
+        app.dependency_overrides.clear()
+
+
+class TestSettings:
+    def test_get_settings_uses_live_cost_stats(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.count.return_value = 4
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 12.34, "runs_count": 3, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.get("/settings")
+
+        assert resp.status_code == 200
+        assert resp.json()["cost"]["todayUsd"] == pytest.approx(12.34)
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_returns_full_settings_payload(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.get.side_effect = lambda model, pk: admin if model is User else None
+        updated_generation = MagicMock()
+        updated_generation.key = "generation_model"
+        updated_generation.value = "qwen3:latest"
+        db.query.return_value.all.side_effect = [
+            [],
+            [updated_generation],
+        ]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            return_value={"qwen3:latest"},
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"generationModel": "qwen3:latest"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["generationModel"] == "qwen3:latest"
+        assert "cost" in body
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_rejects_unknown_ollama_model(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            return_value={"known:model"},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"generationModel": "missing:model"})
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "generationModel is not available in Ollama"
         from app.main import app
         app.dependency_overrides.clear()
 
@@ -385,17 +460,34 @@ class TestUserManagement:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_create_user_requires_password(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.filter.return_value.first.return_value = None
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.post(
+                "/admin/users",
+                json={"email": "x@test.com", "role": "pilot_user"},
+            )
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "Password is required"
+        from app.main import app
+        app.dependency_overrides.clear()
+
     def test_deactivate_user_returns_204(self) -> None:
         admin = _make_admin_user()
         target = _make_pilot_user("user-99")
         db = _mock_db_with_admin(admin)
-        deleted_user = _make_pilot_user("deleted-user")
+        deleted_user = _make_pilot_user("00000000-0000-0000-0000-000000000001")
         deleted_user.email = "deleted@redacted.local"
 
         def _get(model: Any, pk: str) -> Any:
             if pk == "admin-1":
                 return admin
-            if pk == "deleted-user":
+            if pk == "00000000-0000-0000-0000-000000000001":
                 return deleted_user
             return target
 
@@ -408,6 +500,7 @@ class TestUserManagement:
         assert resp.status_code == 204
         assert target.is_active is False
         assert str(target.email).startswith("deactivated+user-99@redacted.local")
+        assert target.token_valid_after is not None
         db.commit.assert_called()
         from app.main import app
         app.dependency_overrides.clear()
@@ -604,12 +697,37 @@ class TestIngestionRecovery:
         doc = _make_document()
         doc.ingestion_started_at = datetime.now(UTC) - timedelta(minutes=30)
         db = MagicMock()
-        db.query.return_value.join.return_value.filter.return_value.all.return_value = [stuck_job]
+        db.query.return_value.join.return_value.filter.return_value.all.side_effect = [[stuck_job], []]
         db.get.return_value = doc
 
         count = recover_stuck_jobs(db)
 
         assert count == 1
+        db.commit.assert_called_once()
+
+    def test_recover_stuck_pending_jobs_marks_failed(self) -> None:
+        from app.db.models import IngestionStatus
+        from app.services.ingestion_service import recover_stuck_jobs
+
+        pending_job = MagicMock()
+        pending_job.id = "job-2"
+        pending_job.document_id = "doc-2"
+        pending_job.status = "pending"
+        pending_job.created_at = datetime.now(UTC) - timedelta(minutes=30)
+
+        doc = _make_document("doc-2")
+        doc.ingestion_status = IngestionStatus.queued
+
+        db = MagicMock()
+        join_filter = db.query.return_value.join.return_value.filter.return_value
+        join_filter.all.side_effect = [[], [pending_job]]
+        db.get.return_value = doc
+
+        count = recover_stuck_jobs(db)
+
+        assert count == 1
+        assert pending_job.status == "failed"
+        assert doc.ingestion_status == IngestionStatus.failed
         db.commit.assert_called_once()
 
     def test_recover_no_stuck_jobs_returns_zero(self) -> None:

@@ -124,3 +124,19 @@ def test_chat_graph_not_initialized(authed_client: TestClient) -> None:
             response = authed_client.post("/chat", json={"question": "hello"})
 
     assert response.status_code == 503
+
+
+def test_chat_rejects_session_owned_by_another_user(authed_client: TestClient) -> None:
+    authed_client.app.state.graph = AsyncMock()  # type: ignore[union-attr]
+    foreign_state = PrivateAIState(session_id="sess-foreign", user_id="someone-else")
+
+    with patch(
+        "app.services.conversation.ConversationManager.load_session",
+        return_value=foreign_state,
+    ):
+        response = authed_client.post(
+            "/chat",
+            json={"question": "hello", "session_id": "sess-foreign"},
+        )
+
+    assert response.status_code == 404

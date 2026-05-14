@@ -34,6 +34,12 @@ def _coerce_bool(value: Any, default: bool) -> bool:
         return value
     if value is None:
         return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
     return bool(value)
 
 
