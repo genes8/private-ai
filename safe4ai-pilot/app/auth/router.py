@@ -60,10 +60,6 @@ async def login(
     db: Session = Depends(get_db),
 ) -> Response:
     """Authenticate a user and set an HTTP-Only JWT cookie."""
-    # Server-side password length check
-    if len(body.password) < _MIN_PASSWORD_LENGTH:
-        raise HTTPException(status_code=401, detail=_INVALID_CREDS_DETAIL)
-
     user: User | None = db.query(User).filter(User.email == body.email).first()
 
     # --- Brute-force protection ---

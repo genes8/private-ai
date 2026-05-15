@@ -128,7 +128,8 @@ def test_chat_graph_not_initialized(authed_client: TestClient) -> None:
 
 def test_chat_rejects_session_owned_by_another_user(authed_client: TestClient) -> None:
     authed_client.app.state.graph = AsyncMock()  # type: ignore[union-attr]
-    foreign_state = PrivateAIState(session_id="sess-foreign", user_id="someone-else")
+    foreign_session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    foreign_state = PrivateAIState(session_id=foreign_session_id, user_id="someone-else")
 
     with patch(
         "app.services.conversation.ConversationManager.load_session",
@@ -136,7 +137,7 @@ def test_chat_rejects_session_owned_by_another_user(authed_client: TestClient) -
     ):
         response = authed_client.post(
             "/chat",
-            json={"question": "hello", "session_id": "sess-foreign"},
+            json={"question": "hello", "session_id": foreign_session_id},
         )
 
     assert response.status_code == 404
@@ -201,6 +202,7 @@ def test_chat_recovers_from_corrupted_session_state(authed_client: TestClient) -
     mock_graph = AsyncMock()
     mock_graph.ainvoke = AsyncMock(return_value=final_state)
 
+    old_session_id = "11111111-2222-3333-4444-555555555555"
     with patch(
         "app.services.conversation.ConversationManager.load_session",
         side_effect=[ValueError("Invalid session state"), PrivateAIState(session_id="sess-new", user_id="u1")],
@@ -213,7 +215,7 @@ def test_chat_recovers_from_corrupted_session_state(authed_client: TestClient) -
         authed_client.app.state.graph = mock_graph  # type: ignore[union-attr]
         response = authed_client.post(
             "/chat",
-            json={"question": "Recover this", "session_id": "sess-old"},
+            json={"question": "Recover this", "session_id": old_session_id},
         )
 
     assert response.status_code == 200

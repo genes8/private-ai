@@ -6,6 +6,7 @@ import csv
 import io
 import re
 import secrets
+import threading
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -70,6 +71,7 @@ _settings_live_cache: dict[str, Any] = {
     "today_cost": 0.0,
     "available_ollama_models": [],
 }
+_settings_live_cache_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -116,24 +118,27 @@ def _validate_password_strength(password: str) -> None:
 
 def _get_settings_live_metadata(db: Session) -> tuple[float, list[str]]:
     now = time.monotonic()
-    if now < float(_settings_live_cache["expires_at"]):
-        return (
-            float(_settings_live_cache["today_cost"]),
-            list(_settings_live_cache["available_ollama_models"]),
-        )
+    with _settings_live_cache_lock:
+        if now < float(_settings_live_cache["expires_at"]):
+            return (
+                float(_settings_live_cache["today_cost"]),
+                list(_settings_live_cache["available_ollama_models"]),
+            )
 
     today_cost = CostTracker(settings.cost_per_1k_tokens).get_stats(db, days=1)["total_cost_usd"]
     try:
         available_ollama_models = sorted(_fetch_ollama_model_names())
     except HTTPException:
         available_ollama_models = []
-    _settings_live_cache.update(
-        {
-            "expires_at": now + _SETTINGS_LIVE_TTL_SECONDS,
-            "today_cost": today_cost,
-            "available_ollama_models": available_ollama_models,
-        }
-    )
+
+    with _settings_live_cache_lock:
+        _settings_live_cache.update(
+            {
+                "expires_at": now + _SETTINGS_LIVE_TTL_SECONDS,
+                "today_cost": today_cost,
+                "available_ollama_models": available_ollama_models,
+            }
+        )
     return float(today_cost), list(available_ollama_models)
 
 
@@ -648,10 +653,16 @@ def _delete_qdrant_points(doc_id: str) -> None:
 @limiter.limit("100/minute")
 def list_users(
     request: Request,
+    limit: int = 200,
+    offset: int = 0,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_role("admin")),
 ) -> list[dict[str, Any]]:
-    users = db.query(User).order_by(User.created_at.desc()).all()
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 1000")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset cannot be negative")
+    users = db.query(User).order_by(User.created_at.desc()).offset(offset).limit(limit).all()
     return [
         {
             "id": u.id,

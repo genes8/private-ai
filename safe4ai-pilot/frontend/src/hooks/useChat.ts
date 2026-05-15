@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type SseCite, type StepName, type StepState, streamChat } from "../api/chat";
 import { submitFeedback } from "../api/feedback";
 
@@ -22,6 +22,14 @@ export function useChat() {
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -61,6 +69,7 @@ export function useChat() {
 
     try {
       for await (const ev of streamChat(question, sessionRef.current, "default", abort.signal)) {
+        if (!mountedRef.current) break;
         if (ev.type === "step") {
           setSteps((prev) =>
             prev.map((s) => s.name === ev.data.name ? { ...s, state: ev.data.state } : s),
@@ -87,8 +96,10 @@ export function useChat() {
         }
       }
     } finally {
-      setStreaming(false);
-      setSteps([]);
+      if (mountedRef.current) {
+        setStreaming(false);
+        setSteps([]);
+      }
     }
   }, []);
 

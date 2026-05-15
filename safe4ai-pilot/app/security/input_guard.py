@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import html
 import re
+import unicodedata
 
 from app.models import GuardResult
 
 _INJECTION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p, re.IGNORECASE)
     for p in [
-        r"ignore (?:previous|all|prior) instructions",
-        r"you are now",
-        r"act as (?:if you are|a|an)",
-        r"disregard (?:your|all|the)",
-        r"system prompt",
+        r"ignore\s+(?:previous|all|prior)\s+instructions",
+        r"you\s+are\s+now",
+        r"act\s+as\s+(?:if\s+you\s+are|a|an)",
+        r"disregard\s+(?:your|all|the)",
+        r"system\s+prompt",
         r"<\|.*?\|>",  # special tokens
     ]
 ]
@@ -25,16 +27,13 @@ class InputGuard:
     MAX_CHARS = 2048  # ~512 tokens at 4 chars/token
 
     def check(self, query: str) -> GuardResult:
-        """Validate and sanitise a user query.
-
-        Steps:
-        1. Strip HTML tags and non-printable control characters.
-        2. Reject if the cleaned text exceeds MAX_CHARS.
-        3. Reject if any injection pattern is found.
-        """
-        # 1. Strip HTML tags then control chars (keep printable + whitespace)
-        cleaned = _HTML_TAG_RE.sub("", query)
+        # 1. Decode HTML entities, normalize Unicode homoglyphs (NFKC), strip HTML tags
+        decoded = html.unescape(query)
+        normalized = unicodedata.normalize("NFKC", decoded)
+        cleaned = _HTML_TAG_RE.sub("", normalized)
+        # Strip non-printable control characters, collapse whitespace
         cleaned = "".join(ch for ch in cleaned if ch.isprintable() or ch in " \t\n\r\f\v")
+        cleaned = " ".join(cleaned.split())
 
         # 2. Length check
         if len(cleaned) > self.MAX_CHARS:

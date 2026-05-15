@@ -35,9 +35,9 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="grid h-screen" style={{ gridTemplateColumns: "1fr 1.05fr" }}>
+    <div className="grid h-screen grid-cols-1 md:grid-cols-2">
       {/* Left — dark brand panel */}
-      <div className="relative flex flex-col justify-between bg-ink p-10 overflow-hidden">
+      <div className="relative hidden md:flex flex-col justify-between bg-ink p-10 overflow-hidden">
         {/* Decorative rings */}
         <div className="absolute top-1/2 left-1/2 pointer-events-none" style={{ transform: "translate(-50%, -50%)" }}>
           <div className="absolute rounded-full border" style={{

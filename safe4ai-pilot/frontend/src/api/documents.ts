@@ -1,4 +1,5 @@
-import { apiFetch, apiUrl, csrfHeaders } from "./client";
+import { ApiError, apiFetch, apiUrl, csrfHeaders } from "./client";
+import { emitUnauthorized } from "./authEvents";
 
 export type DocStatus = "indexed" | "embedding" | "skipped" | "failed" | "queued";
 export type DocType   = "PDF" | "DOCX" | "XLSX" | "TXT";
@@ -68,7 +69,13 @@ export const uploadDocument = async (file: File): Promise<{ id: string }> => {
     headers: csrfHeaders(),
     body: fd,
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    if (res.status === 401) {
+      emitUnauthorized();
+    }
+    const text = await res.text().catch(() => String(res.status));
+    throw new ApiError(res.status, text);
+  }
   const body = await res.json() as { doc_id: string; job_id: string };
   return { id: body.doc_id };
 };

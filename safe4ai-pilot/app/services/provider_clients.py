@@ -70,6 +70,20 @@ class OpenAICompatibleProvider:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._api_key}"}
 
+    @staticmethod
+    def _coerce_content(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts)
+        return str(value)
+
     async def chat(self, system_prompt: str, user_prompt: str) -> ChatResult:
         response = await self._client.post(
             f"{self._base_url}/chat/completions",
@@ -85,7 +99,7 @@ class OpenAICompatibleProvider:
         response.raise_for_status()
         payload = response.json()
         content = payload["choices"][0]["message"]["content"]
-        return ChatResult(content=str(content), usage=_usage_from_openai(payload))
+        return ChatResult(content=self._coerce_content(content), usage=_usage_from_openai(payload))
 
     async def embed_query(self, query: str) -> list[float]:
         vectors = await self.embed_documents([query])
@@ -102,8 +116,31 @@ class OpenAICompatibleProvider:
         return [list(item["embedding"]) for item in payload.get("data", [])]
 
     async def describe_image(self, prompt: str, image_b64: str) -> str:
-        result = await self.chat(prompt, image_b64)
-        return result.content
+        response = await self._client.post(
+            f"{self._base_url}/chat/completions",
+            headers=self._headers(),
+            json={
+                "model": self._vision_model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{image_b64}",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content = payload["choices"][0]["message"]["content"]
+        return self._coerce_content(content)
 
 
 class OllamaProvider:
@@ -121,17 +158,19 @@ class OllamaProvider:
         self._vision_model = vision_model
 
     async def chat(self, system_prompt: str, user_prompt: str) -> ChatResult:
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
-                f"{self._base_url}/api/generate",
-                json={
-                    "model": self._chat_model,
-                    "prompt": f"{system_prompt}\n\n{user_prompt}",
-                    "stream": False,
-                },
+                f"{self._base_url}/api/chat",
+                json={"model": self._chat_model, "messages": messages, "stream": False},
             )
         response.raise_for_status()
-        return ChatResult(content=str(response.json().get("response", "")), usage=None)
+        payload = response.json()
+        content = payload.get("message", {}).get("content", "") or payload.get("response", "")
+        return ChatResult(content=str(content), usage=None)
 
     async def embed_query(self, query: str) -> list[float]:
         vectors = await self.embed_documents([query])

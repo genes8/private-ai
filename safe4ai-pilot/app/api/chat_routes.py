@@ -14,7 +14,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.auth.middleware import get_current_user
@@ -174,8 +174,18 @@ _STEP_MAP: dict[str, str] = {
 
 class ChatRequest(BaseModel):
     question: str = Field(..., max_length=2048)
-    session_id: str | None = None
+    session_id: str | None = Field(None, max_length=36)
     collection: str = "default"
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        import re
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", v):
+            raise ValueError("session_id must be a valid UUID")
+        return v
 
 
 class ChatResponse(BaseModel):
@@ -407,6 +417,13 @@ async def chat_stream(
             getattr(final, "usage", None),
         )
 
+        runtime = None
+        try:
+            runtime = load_runtime_config(db)
+            sse_done_mode = runtime.sse_done_mode
+        except Exception:
+            sse_done_mode = "strict"
+
         async def _finalize() -> None:
             try:
                 finalize_chat_run(
@@ -418,6 +435,7 @@ async def chat_stream(
                     k_retrieved=len(final.retrieved_chunks),
                     usage=usage,
                     cost_per_1k_tokens=settings.cost_per_1k_tokens,
+                    model_name=runtime.provider_type if runtime is not None else "local",
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -426,14 +444,31 @@ async def chat_stream(
                     trace_id=final.trace_id,
                 )
 
-        try:
-            runtime = load_runtime_config(db)
-            sse_done_mode = runtime.sse_done_mode
-        except Exception:
-            sse_done_mode = "strict"
-
         if sse_done_mode == "async":
-            asyncio.create_task(_finalize())
+            from app.db import SessionLocal
+
+            async def _finalize_async() -> None:
+                with SessionLocal() as async_db:
+                    try:
+                        finalize_chat_run(
+                            db=async_db,
+                            final=final,
+                            user_id=str(current_user.id),
+                            query=body.question,
+                            latency_ms=latency_ms,
+                            k_retrieved=len(final.retrieved_chunks),
+                            usage=usage,
+                            cost_per_1k_tokens=settings.cost_per_1k_tokens,
+                            model_name=runtime.provider_type if runtime is not None else "local",
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "chat_stream_postprocessing_failed",
+                            error=str(exc),
+                            trace_id=final.trace_id,
+                        )
+
+            asyncio.create_task(_finalize_async())
         else:
             await _finalize()
 
@@ -441,7 +476,7 @@ async def chat_stream(
             "traceId": final.trace_id,
             "latencyMs": latency_ms,
             "cache": False,
-            "model": runtime.provider_type if "runtime" in dir() else "local",
+            "model": runtime.provider_type if runtime is not None else "local",
             "kRetrieved": len(final.retrieved_chunks),
             "sessionId": session_id,
         })

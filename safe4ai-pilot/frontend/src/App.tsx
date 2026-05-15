@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth";
+import ErrorBoundary from "./components/ErrorBoundary";
 import ChatPage from "./pages/ChatPage";
 import LoginPage from "./pages/LoginPage";
 import ActivityPage from "./pages/admin/ActivityPage";
@@ -98,7 +99,7 @@ export default function App() {
         path="/admin/settings"
         element={
           <RequireAdmin>
-            <SettingsPage />
+            <ErrorBoundary><SettingsPage /></ErrorBoundary>
           </RequireAdmin>
         }
       />

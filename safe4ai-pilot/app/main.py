@@ -4,6 +4,7 @@ import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from secrets import compare_digest, token_urlsafe
+from typing import Any
 
 import httpx
 import structlog
@@ -24,7 +25,7 @@ from app.auth.router import limiter as auth_limiter
 from app.auth.router import router as auth_router
 from app.config import settings
 from app.db import Base, SessionLocal, engine
-from app.services.runtime_config import build_runtime_components
+from app.services.runtime_config import build_runtime_components, load_runtime_config
 from scripts.audit_cleanup import schedule_cleanup
 
 logger = structlog.get_logger(__name__)
@@ -57,7 +58,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _app.state.graph = graph
     _app.state.ingestion_tasks = set()
 
-    asyncio.create_task(_prewarm_ollama(runtime.generation_model))
+    asyncio.create_task(_prewarm_provider(runtime))
     schedule_cleanup(_app)
     yield
 
@@ -100,39 +101,41 @@ async def limit_body_size(
         if length > max_body_bytes:
             return Response(status_code=413, content="Request body too large")
     elif request.headers.get("transfer-encoding", "").lower() == "chunked":
-        # Chunked requests lack Content-Length; consume body with a size cap
-        try:
-            total_bytes = 0
-            spooled_body = tempfile.SpooledTemporaryFile(max_size=max_body_bytes)
-            replay_done = False
-            async for chunk in request.stream():
-                if chunk:
-                    total_bytes += len(chunk)
-                    spooled_body.write(chunk)
-                if total_bytes > max_body_bytes:
+        # Skip chunked body replay for chat streaming — the body is always tiny JSON
+        # and the replay mechanism uses private ASGI internals that may break across versions.
+        if request.url.path not in {"/chat/stream", "/chat"}:
+            try:
+                total_bytes = 0
+                spooled_body = tempfile.SpooledTemporaryFile(max_size=max_body_bytes)
+                replay_done = False
+                async for chunk in request.stream():
+                    if chunk:
+                        total_bytes += len(chunk)
+                        spooled_body.write(chunk)
+                    if total_bytes > max_body_bytes:
+                        spooled_body.close()
+                        return Response(status_code=413, content="Request body too large")
+                spooled_body.seek(0)
+
+                async def replay_receive() -> dict[str, object]:
+                    nonlocal replay_done
+                    chunk = spooled_body.read(64 * 1024)
+                    if chunk:
+                        return {
+                            "type": "http.request",
+                            "body": chunk,
+                            "more_body": spooled_body.tell() < total_bytes,
+                        }
+                    if replay_done:
+                        return {"type": "http.request", "body": b"", "more_body": False}
+                    replay_done = True
                     spooled_body.close()
-                    return Response(status_code=413, content="Request body too large")
-            spooled_body.seek(0)
-
-            async def replay_receive() -> dict[str, object]:
-                nonlocal replay_done
-                chunk = spooled_body.read(64 * 1024)
-                if chunk:
-                    return {
-                        "type": "http.request",
-                        "body": chunk,
-                        "more_body": spooled_body.tell() < total_bytes,
-                    }
-                if replay_done:
                     return {"type": "http.request", "body": b"", "more_body": False}
-                replay_done = True
-                spooled_body.close()
-                return {"type": "http.request", "body": b"", "more_body": False}
 
-            request._stream_consumed = False
-            request._receive = replay_receive
-        except Exception:
-            return Response(status_code=400, content="Failed to read request body")
+                request._stream_consumed = False
+                request._receive = replay_receive
+            except Exception:
+                return Response(status_code=400, content="Failed to read request body")
     return await call_next(request)
 
 
@@ -153,7 +156,8 @@ async def protect_csrf(
             response.headers.update(secure_headers.headers())
             return response
 
-        if request.cookies.get("access_token"):
+        # Verify CSRF double-submit token whenever access_token or csrf_token cookie is present
+        if request.cookies.get("access_token") or request.cookies.get("csrf_token"):
             csrf_cookie = request.cookies.get("csrf_token")
             csrf_header = request.headers.get("X-CSRF-Token")
             if not csrf_cookie or not csrf_header or not compare_digest(csrf_header, csrf_cookie):
@@ -169,16 +173,19 @@ app.include_router(observability_router)
 app.include_router(admin_router)
 
 
-async def _prewarm_ollama(model: str) -> None:
-    """Hit Ollama with an empty prompt so the model is loaded before first real query."""
+async def _prewarm_provider(runtime: Any) -> None:
+    """Warm the configured provider when it supports local Ollama preloading."""
     await asyncio.sleep(5)  # give Ollama container time to be fully ready
+    if getattr(runtime, "provider_type", "ollama") != "ollama":
+        logger.info("provider_prewarm_skipped", provider_type=getattr(runtime, "provider_type", "unknown"))
+        return
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             await client.post(
                 f"{settings.ollama_url}/api/generate",
-                json={"model": model, "prompt": "", "stream": False},
+                json={"model": runtime.chat_model, "prompt": "", "stream": False},
             )
-        logger.info("ollama_prewarm_complete", model=model)
+        logger.info("ollama_prewarm_complete", model=runtime.chat_model)
     except Exception as exc:
         logger.warning("ollama_prewarm_failed", error=str(exc))
 
@@ -306,6 +313,8 @@ def _ensure_deleted_user() -> None:
 @app.get("/health")
 async def health() -> dict[str, object]:
     checks: dict[str, str] = {}
+    with SessionLocal() as db:
+        runtime = load_runtime_config(db)
 
     # PostgreSQL
     try:
@@ -323,13 +332,26 @@ async def health() -> dict[str, object]:
     except Exception as exc:
         checks["qdrant"] = f"error: {exc}"
 
-    # Ollama
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"{settings.ollama_url}/api/tags")
-            checks["ollama"] = "ok" if r.status_code == 200 else f"status {r.status_code}"
-    except Exception as exc:
-        checks["ollama"] = f"error: {exc}"
+    if runtime.provider_type == "openai_compatible":
+        try:
+            if not runtime.provider_api_key:
+                checks["provider"] = "error: missing api key"
+            else:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    r = await client.get(
+                        f"{runtime.provider_base_url}/models",
+                        headers={"Authorization": f"Bearer {runtime.provider_api_key}"},
+                    )
+                    checks["provider"] = "ok" if r.status_code < 400 else f"status {r.status_code}"
+        except Exception as exc:
+            checks["provider"] = f"error: {exc}"
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(f"{settings.ollama_url}/api/tags")
+                checks["provider"] = "ok" if r.status_code == 200 else f"status {r.status_code}"
+        except Exception as exc:
+            checks["provider"] = f"error: {exc}"
 
     overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return {"status": overall, "checks": checks}

@@ -38,8 +38,25 @@ const inviteUser = (body: { email: string; role: string; password?: string }) =>
   });
 
 function generateTemporaryPassword(): string {
-  const seed = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return `${seed}Aa!9`;
+  const lower = 'abcdefghijkmnpqrstuvwxyz';
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const digits = '23456789';
+  const special = '!@#$%&*';
+  const all = lower + upper + digits + special;
+  const array = new Uint8Array(20);
+  crypto.getRandomValues(array);
+  const chars = Array.from(array).map((b) => all[b % all.length]);
+  // Ensure at least one of each required type at fixed positions
+  const pick = (charset: string) => {
+    const b = new Uint8Array(1);
+    crypto.getRandomValues(b);
+    return charset[b[0] % charset.length];
+  };
+  chars[0] = pick(upper);
+  chars[1] = pick(lower);
+  chars[2] = pick(digits);
+  chars[3] = pick(special);
+  return chars.join('');
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -91,7 +108,8 @@ function InviteModal({
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit() {
-    if (!email) return;
+    if (!email) { setError("Email is required"); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError("Enter a valid email address"); return; }
     setError(null);
     try {
       setSubmitting(true);

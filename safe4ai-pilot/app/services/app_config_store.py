@@ -14,6 +14,7 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset({
     "openai_api_key",
     "anthropic_api_key",
     "api_key",
+    "provider_api_key",
 })
 
 _CIPHER_PREFIX = "enc:"

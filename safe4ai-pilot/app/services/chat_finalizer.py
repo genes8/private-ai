@@ -21,6 +21,7 @@ def finalize_chat_run(
     k_retrieved: int,
     usage: ProviderUsage,
     cost_per_1k_tokens: float,
+    model_name: str = "local",
 ) -> None:
     """Persist assistant reply, audit log, and cost record in a single transaction."""
     assistant_msg = Message(role="assistant", content=final.draft_answer, created_at=datetime.now(UTC))
@@ -51,7 +52,7 @@ def finalize_chat_run(
                     "total_tokens": usage.total_tokens,
                 },
                 latency_ms=latency_ms,
-                model_used=final.trace_id,
+                model_used=model_name,
                 trace_id=final.trace_id,
             )
         )
