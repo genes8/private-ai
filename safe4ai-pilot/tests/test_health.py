@@ -26,6 +26,10 @@ def client_with_mocks() -> Generator[TestClient, None, None]:
     from app.main import app
 
     mock_engine = _mock_engine_connect()
+    mock_db = MagicMock()
+    mock_session_ctx = MagicMock()
+    mock_session_ctx.__enter__.return_value = mock_db
+    mock_session_ctx.__exit__.return_value = False
 
     # Mock qdrant + ollama HTTP calls
     async def mock_get(url: str, **_kwargs: object) -> MagicMock:
@@ -35,6 +39,8 @@ def client_with_mocks() -> Generator[TestClient, None, None]:
 
     with (
         patch("app.main.engine", mock_engine),
+        patch("app.main.SessionLocal", return_value=mock_session_ctx),
+        patch("app.main.load_runtime_config", return_value=MagicMock(provider_type="ollama")),
         patch("httpx.AsyncClient.get", mock_get),
     ):
         yield TestClient(app)
@@ -46,6 +52,36 @@ def test_health_returns_200(client_with_mocks: TestClient) -> None:
     body = r.json()
     assert "status" in body
     assert "checks" in body
+
+
+def test_health_uses_provider_check_for_openai_compatible() -> None:
+    from app.main import app
+
+    mock_engine = _mock_engine_connect()
+
+    async def mock_get(_self: object, url: str, **_kwargs: object) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.url = url
+        return resp
+
+    with (
+        patch("app.main.engine", mock_engine),
+        patch("app.main.load_runtime_config") as mock_runtime_config,
+        patch("httpx.AsyncClient.get", mock_get),
+    ):
+        mock_runtime_config.return_value = MagicMock(
+            provider_type="openai_compatible",
+            provider_base_url="https://api.example.test/v1",
+            provider_api_key="secret",
+        )
+        client = TestClient(app)
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "provider" in body["checks"]
+    assert body["checks"]["provider"] == "ok"
 
 
 def test_prompt_registry_get_latest() -> None:

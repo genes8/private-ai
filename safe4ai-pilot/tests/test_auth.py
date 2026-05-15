@@ -250,11 +250,17 @@ def test_decode_token_rejects_tampered() -> None:
 
 def test_login_short_password_rejected(test_client: TestClient) -> None:
     """Passwords shorter than 12 chars must be rejected server-side."""
-    response = test_client.post(
-        "/auth/login",
-        headers={"origin": _ALLOWED_ORIGIN},
-        json={"email": "alice@example.com", "password": "short"},
-    )
+    db = _mock_db_with_user(None)
+    app.dependency_overrides[get_db] = _override_get_db(db)
+    try:
+        response = test_client.post(
+            "/auth/login",
+            headers={"origin": _ALLOWED_ORIGIN},
+            json={"email": "alice@example.com", "password": "short"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
     assert response.status_code == 401
     assert "Invalid credentials" in response.json()["detail"]
 

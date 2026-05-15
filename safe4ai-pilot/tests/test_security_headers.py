@@ -37,6 +37,10 @@ def client_with_mocks() -> Generator[TestClient, None, None]:
     from app.main import app
 
     mock_engine = _mock_engine_connect()
+    mock_db = MagicMock()
+    mock_session_ctx = MagicMock()
+    mock_session_ctx.__enter__.return_value = mock_db
+    mock_session_ctx.__exit__.return_value = False
 
     async def mock_get(url: str, **_kwargs: object) -> MagicMock:
         resp = MagicMock()
@@ -45,6 +49,8 @@ def client_with_mocks() -> Generator[TestClient, None, None]:
 
     with (
         patch("app.main.engine", mock_engine),
+        patch("app.main.SessionLocal", return_value=mock_session_ctx),
+        patch("app.main.load_runtime_config", return_value=MagicMock(provider_type="ollama")),
         patch("httpx.AsyncClient.get", mock_get),
     ):
         yield TestClient(app)

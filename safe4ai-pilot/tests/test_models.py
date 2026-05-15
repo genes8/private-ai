@@ -1,5 +1,7 @@
 from datetime import UTC
 
+import pytest
+
 
 def test_private_ai_state_defaults_are_isolated() -> None:
     from app.models import Message, PrivateAIState
@@ -82,3 +84,27 @@ def test_runtime_config_coerce_bool_handles_string_zero() -> None:
     assert _coerce_bool("0", True) is False
     assert _coerce_bool("false", True) is False
     assert _coerce_bool("1", False) is True
+
+
+@pytest.mark.asyncio
+async def test_prewarm_provider_skips_non_ollama() -> None:
+    from app.main import _prewarm_provider
+
+    runtime = type("Runtime", (), {"provider_type": "openai_compatible", "chat_model": "DeepSeek-V4-Flash"})()
+    with pytest.MonkeyPatch.context() as mp:
+        called = {"post": False}
+
+        class _Client:
+            async def __aenter__(self) -> "_Client":
+                return self
+
+            async def __aexit__(self, *_args: object) -> None:
+                return None
+
+            async def post(self, *_args: object, **_kwargs: object) -> None:
+                called["post"] = True
+
+        mp.setattr("app.main.httpx.AsyncClient", lambda timeout=120: _Client())
+        await _prewarm_provider(runtime)
+
+    assert called["post"] is False

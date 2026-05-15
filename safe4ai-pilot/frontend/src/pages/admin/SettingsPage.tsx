@@ -40,6 +40,15 @@ type SaveField =
   | "providerVisionModel"
   | "sseDoneMode";
 
+const DEFAULT_PROVIDER: AppSettings["provider"] = {
+  type: "ollama",
+  baseUrl: "http://localhost:11434",
+  apiKeyConfigured: false,
+  chatModel: "",
+  embeddingModel: "",
+  visionModel: "qwen2.5vl:7b",
+};
+
 // ── Atoms ─────────────────────────────────────────────────────────────────
 function Section({ id, title, subtitle, children }: {
   id: string; title: string; subtitle?: string; children: React.ReactNode;
@@ -305,6 +314,8 @@ export default function SettingsPage() {
     mutationFn: patchSettings,
   });
 
+  const provider = s?.provider ?? DEFAULT_PROVIDER;
+
   const applyDiff = (current: AppSettings, diff: PatchableSettings): AppSettings => ({
     ...current,
     generationModel: diff.generationModel ?? current.generationModel,
@@ -313,12 +324,12 @@ export default function SettingsPage() {
     visionModel: diff.visionModel ?? current.visionModel,
     sseDoneMode: diff.sseDoneMode ?? current.sseDoneMode,
     provider: {
-      ...current.provider,
-      type: diff.providerType ?? current.provider.type,
-      baseUrl: diff.providerBaseUrl ?? current.provider.baseUrl,
-      chatModel: diff.providerChatModel ?? current.provider.chatModel,
-      embeddingModel: diff.providerEmbeddingModel ?? current.provider.embeddingModel,
-      visionModel: diff.providerVisionModel ?? current.provider.visionModel,
+      ...(current.provider ?? DEFAULT_PROVIDER),
+      type: diff.providerType ?? (current.provider?.type ?? DEFAULT_PROVIDER.type),
+      baseUrl: diff.providerBaseUrl ?? (current.provider?.baseUrl ?? DEFAULT_PROVIDER.baseUrl),
+      chatModel: diff.providerChatModel ?? (current.provider?.chatModel ?? DEFAULT_PROVIDER.chatModel),
+      embeddingModel: diff.providerEmbeddingModel ?? (current.provider?.embeddingModel ?? DEFAULT_PROVIDER.embeddingModel),
+      visionModel: diff.providerVisionModel ?? (current.provider?.visionModel ?? DEFAULT_PROVIDER.visionModel),
     },
     reranker: {
       enabled: diff.rerankerEnabled ?? current.reranker.enabled,
@@ -421,11 +432,11 @@ export default function SettingsPage() {
     }
     if (key === "provider") {
       const provider = value as AppSettings["provider"];
-      if (provider.type !== s.provider.type) diff.providerType = provider.type;
-      if (provider.baseUrl !== s.provider.baseUrl) diff.providerBaseUrl = provider.baseUrl;
-      if (provider.chatModel !== s.provider.chatModel) diff.providerChatModel = provider.chatModel;
-      if (provider.embeddingModel !== s.provider.embeddingModel) diff.providerEmbeddingModel = provider.embeddingModel;
-      if (provider.visionModel !== s.provider.visionModel) diff.providerVisionModel = provider.visionModel;
+      if (provider.type !== (s.provider?.type ?? DEFAULT_PROVIDER.type)) diff.providerType = provider.type;
+      if (provider.baseUrl !== (s.provider?.baseUrl ?? DEFAULT_PROVIDER.baseUrl)) diff.providerBaseUrl = provider.baseUrl;
+      if (provider.chatModel !== (s.provider?.chatModel ?? DEFAULT_PROVIDER.chatModel)) diff.providerChatModel = provider.chatModel;
+      if (provider.embeddingModel !== (s.provider?.embeddingModel ?? DEFAULT_PROVIDER.embeddingModel)) diff.providerEmbeddingModel = provider.embeddingModel;
+      if (provider.visionModel !== (s.provider?.visionModel ?? DEFAULT_PROVIDER.visionModel)) diff.providerVisionModel = provider.visionModel;
     }
     if (key === "sseDoneMode" && value !== s.sseDoneMode) {
       diff.sseDoneMode = value as AppSettings["sseDoneMode"];
@@ -519,36 +530,36 @@ export default function SettingsPage() {
               subtitle="Choose the runtime that handles chat, embeddings and OCR. Use local Ollama or an OpenAI-compatible API.">
               <Row label="Mode" hint="Switch between a local Ollama instance and any OpenAI-compatible API endpoint." saving={isSavingField("providerType")}>
                 <Select
-                  value={s.provider.type}
+                  value={provider.type}
                   options={["ollama", "openai_compatible"] as const}
-                  onChange={(v) => set("provider", { ...s.provider, type: v })} />
+                  onChange={(v) => set("provider", { ...provider, type: v })} />
               </Row>
               <Row label="Base URL" hint="Ollama default: http://localhost:11434. For API providers: https://api.openai.com/v1." saving={isSavingField("providerBaseUrl")}>
                 <TextInput
-                  value={s.provider.baseUrl}
-                  onCommit={(v) => set("provider", { ...s.provider, baseUrl: v })} />
+                  value={provider.baseUrl}
+                  onCommit={(v) => set("provider", { ...provider, baseUrl: v })} />
               </Row>
-              {s.provider.type === "openai_compatible" && (
-                <Row label="API key" hint={s.provider.apiKeyConfigured ? "A key is already configured. Enter a new key to rotate it." : "Required for API mode."} saving={isSavingField("providerApiKey")}>
+              {provider.type === "openai_compatible" && (
+                <Row label="API key" hint={provider.apiKeyConfigured ? "A key is already configured. Enter a new key to rotate it." : "Required for API mode."} saving={isSavingField("providerApiKey")}>
                   <PasswordInput
-                    placeholder={s.provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
+                    placeholder={provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
                     onCommit={(v) => v && queueSave({ providerApiKey: v })} />
                 </Row>
               )}
               <Row label="Chat model" hint="Used for query rewriting, grading, generation, and routing." saving={isSavingField("providerChatModel")}>
                 <TextInput
-                  value={s.provider.chatModel}
-                  onCommit={(v) => set("provider", { ...s.provider, chatModel: v })} />
+                  value={provider.chatModel}
+                  onCommit={(v) => set("provider", { ...provider, chatModel: v })} />
               </Row>
               <Row label="Embedding model" hint="Changing this requires reindexing the entire document corpus." saving={isSavingField("providerEmbeddingModel")}>
                 <TextInput
-                  value={s.provider.embeddingModel}
-                  onCommit={(v) => set("provider", { ...s.provider, embeddingModel: v })} />
+                  value={provider.embeddingModel}
+                  onCommit={(v) => set("provider", { ...provider, embeddingModel: v })} />
               </Row>
               <Row label="Vision model" hint="Used for OCR on PDF pages with insufficient text." saving={isSavingField("providerVisionModel")}>
                 <TextInput
-                  value={s.provider.visionModel}
-                  onCommit={(v) => set("provider", { ...s.provider, visionModel: v })} />
+                  value={provider.visionModel}
+                  onCommit={(v) => set("provider", { ...provider, visionModel: v })} />
               </Row>
               <Row label="SSE completion mode" hint="Strict waits for persistence before sending done; async returns done immediately for lower p99 latency." saving={isSavingField("sseDoneMode")}>
                 <Select
