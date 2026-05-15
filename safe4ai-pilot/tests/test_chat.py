@@ -173,6 +173,28 @@ def test_chat_stream_rejects_when_monthly_cost_ceiling_reached(authed_client: Te
     assert "Monthly cost ceiling reached" in response.json()["detail"]
 
 
+def test_chat_rejects_when_projected_request_cost_exceeds_daily_ceiling(
+    authed_client: TestClient,
+) -> None:
+    with patch(
+        "app.services.app_config_store.load_app_config",
+        return_value={"daily_ceiling_usd": 1.0, "monthly_ceiling_usd": 500},
+    ), patch(
+        "app.api.chat_routes.CostTracker.get_stats",
+        side_effect=[
+            {"total_cost_usd": 0.95, "runs_count": 1, "by_day": []},
+            {"total_cost_usd": 10.0, "runs_count": 1, "by_day": []},
+        ],
+    ), patch(
+        "app.api.chat_routes.estimate_tokens",
+        side_effect=[40, 40],
+    ), patch("app.api.chat_routes.settings.cost_per_1k_tokens", 1.0):
+        response = authed_client.post("/chat", json={"question": "Will this fit?"})
+
+    assert response.status_code == 429
+    assert "Projected request would exceed daily cost ceiling" in response.json()["detail"]
+
+
 def test_chat_recovers_from_corrupted_session_state(authed_client: TestClient) -> None:
     final_state = _make_final_state(session_id="sess-new")
 

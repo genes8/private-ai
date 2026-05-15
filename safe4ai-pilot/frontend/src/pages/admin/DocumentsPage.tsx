@@ -25,9 +25,7 @@ export default function DocumentsPage() {
 
   async function handleFiles(files: FileList | null) {
     if (!files) return;
-    for (const file of Array.from(files)) {
-      await upload(file);
-    }
+    await Promise.allSettled(Array.from(files).map((file) => upload(file)));
   }
 
   function onDrop(e: React.DragEvent) {

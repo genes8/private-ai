@@ -6,6 +6,7 @@ import csv
 import io
 import re
 import secrets
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -63,6 +64,12 @@ _MAX_BACKGROUND_INGESTION_TASKS = 4
 _INGESTION_TASK_SEMAPHORE = asyncio.Semaphore(_MAX_BACKGROUND_INGESTION_TASKS)
 _DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
 _DELETED_USER_EMAIL = "deleted@redacted.local"
+_SETTINGS_LIVE_TTL_SECONDS = 15.0
+_settings_live_cache: dict[str, Any] = {
+    "expires_at": 0.0,
+    "today_cost": 0.0,
+    "available_ollama_models": [],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -93,18 +100,68 @@ def _validate_model_identifier(value: str, field_name: str) -> str:
     return normalized
 
 
+def _validate_password_strength(password: str) -> None:
+    if len(password) < 12:
+        raise HTTPException(status_code=422, detail="Password must be at least 12 characters")
+    has_upper = any(char.isupper() for char in password)
+    has_lower = any(char.islower() for char in password)
+    has_digit = any(char.isdigit() for char in password)
+    has_special = any(not char.isalnum() for char in password)
+    if not (has_upper and has_lower and has_digit and has_special):
+        raise HTTPException(
+            status_code=422,
+            detail="Password must include uppercase, lowercase, digit, and special character",
+        )
+
+
+def _get_settings_live_metadata(db: Session) -> tuple[float, list[str]]:
+    now = time.monotonic()
+    if now < float(_settings_live_cache["expires_at"]):
+        return (
+            float(_settings_live_cache["today_cost"]),
+            list(_settings_live_cache["available_ollama_models"]),
+        )
+
+    today_cost = CostTracker(settings.cost_per_1k_tokens).get_stats(db, days=1)["total_cost_usd"]
+    try:
+        available_ollama_models = sorted(_fetch_ollama_model_names())
+    except HTTPException:
+        available_ollama_models = []
+    _settings_live_cache.update(
+        {
+            "expires_at": now + _SETTINGS_LIVE_TTL_SECONDS,
+            "today_cost": today_cost,
+            "available_ollama_models": available_ollama_models,
+        }
+    )
+    return float(today_cost), list(available_ollama_models)
+
+
 def _serialize_settings(db: Session) -> dict[str, Any]:
     db_overrides = load_app_config(db)
 
     def _val(key: str, default: Any) -> Any:
         return db_overrides.get(key, default)
 
-    today_cost = CostTracker(settings.cost_per_1k_tokens).get_stats(db, days=1)["total_cost_usd"]
+    today_cost, available_ollama_models = _get_settings_live_metadata(db)
+    current_ollama_models = {
+        str(_val("generation_model", settings.ollama_model)),
+        str(_val("generation_fallback_model", settings.ollama_model)),
+        str(_val("embedding_model", settings.embedding_model)),
+        str(_val("vision_model", "qwen2.5vl:7b")),
+    }
     return {
         "generationModel": _val("generation_model", settings.ollama_model),
         "generationFallback": _val("generation_fallback_model", settings.ollama_model),
         "embeddingModel": _val("embedding_model", settings.embedding_model),
         "visionModel": _val("vision_model", "qwen2.5vl:7b"),
+        "availableModels": {
+            "ollama": sorted(set(available_ollama_models) | current_ollama_models),
+            "reranker": [
+                "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                "bge-reranker-v2",
+            ],
+        },
         "reranker": {
             "enabled": _val("reranker_enabled", True),
             "model": _val("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
@@ -446,18 +503,7 @@ async def reindex_document(
             detail="Document is currently being ingested. Wait for completion before reindexing.",
         )
 
-    try:
-        _delete_qdrant_points(doc_id)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="Failed to reset vector index for reindex") from exc
-
     retriever = getattr(request.app.state, "retriever", None)
-    if retriever is not None and hasattr(retriever, "remove_from_bm25"):
-        try:
-            retriever.remove_from_bm25(doc_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
-
     job_id = str(uuid.uuid4())
     with db.begin():
         active_job = _lock_query(
@@ -474,13 +520,32 @@ async def reindex_document(
                 detail="Document is currently being ingested. Wait for completion before reindexing.",
             )
         job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
+        db.add(job)
+
+    try:
+        _delete_qdrant_points(doc_id)
+        if retriever is not None and hasattr(retriever, "remove_from_bm25"):
+            try:
+                retriever.remove_from_bm25(doc_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
+    except Exception as exc:
+        failed_job = db.get(IngestionJob, job_id)
+        if failed_job is not None:
+            failed_job.status = IngestionJobStatus.failed
+            failed_job.completed_at = datetime.now(UTC)
+            failed_job.error = "Failed to reset search indexes before reindex"
+        doc.ingestion_status = IngestionStatus.failed
+        db.commit()
+        raise HTTPException(status_code=502, detail="Failed to reset vector index for reindex") from exc
+
+    with db.begin():
         invalidate_cache_for_document(db, doc_id, commit=False)
         db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
         doc.version = (doc.version or 1) + 1
         doc.active_version = doc.version
         doc.ingestion_status = IngestionStatus.queued
         doc.ingestion_started_at = None
-        db.add(job)
 
     _schedule_ingestion_task(
         request,
@@ -561,8 +626,7 @@ def create_user(
 ) -> dict[str, str]:
     if body.password is None:
         raise HTTPException(status_code=422, detail="Password is required")
-    if len(body.password) < 12:
-        raise HTTPException(status_code=422, detail="Password must be at least 12 characters")
+    _validate_password_strength(body.password)
     existing = db.query(User).filter(User.email == body.email).first()
     if existing is not None:
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -923,7 +987,7 @@ def patch_settings(
             raise HTTPException(status_code=422, detail="monthlyCeilingUsd must be between 30 and 300000")
         updates["monthly_ceiling_usd"] = body.monthlyCeilingUsd
 
-    upsert_app_config(db, updates)
+    upsert_app_config(db, updates, commit=False)
     db.commit()
     try:
         _runtime, retriever, reranker, graph = build_runtime_components(db)

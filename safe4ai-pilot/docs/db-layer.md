@@ -526,7 +526,7 @@ WHERE source_document_ids::jsonb @> '["<doc_id>"]'::jsonb;
 | Field | Value |
 |---|---|
 | **email** | `admin@safe4ai.local` |
-| **password** | `ChangeMe!2024Pilot` |
+| **password** | Printed by `scripts/seed.py` at runtime or supplied with `SEED_ADMIN_PASSWORD` |
 | **role** | `admin` |
 | **id** | (auto-generated UUID) |
 

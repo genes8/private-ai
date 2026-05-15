@@ -42,7 +42,12 @@ export async function* streamChat(
     return;
   }
 
-  const reader = res.body!.getReader();
+  if (!res.body) {
+    yield { type: "error", data: { message: "Streaming response body was empty" } };
+    return;
+  }
+
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let eventName = "";

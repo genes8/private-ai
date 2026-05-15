@@ -10,7 +10,7 @@ import Logo from "../components/Logo";
 
 const schema = z.object({
   email:    z.string().email("Enter a valid email"),
-  password: z.string().min(1, "Password is required"),
+  password: z.string().min(12, "Password must be at least 12 characters"),
 });
 type Form = z.infer<typeof schema>;
 
@@ -120,6 +120,9 @@ export default function LoginPage() {
                   errors.password ? "border-danger" : "border-line",
                 ].join(" ")}
               />
+              <p className="mt-1 text-[11px] text-text-3">
+                Use at least 12 characters.
+              </p>
               {errors.password && <p className="mt-1 text-[11px] text-danger">{errors.password.message}</p>}
             </div>
 

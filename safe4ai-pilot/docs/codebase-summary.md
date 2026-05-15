@@ -68,7 +68,7 @@ docker compose up -d
 
 ### Seed account
 - **Email:** `admin@safe4ai.local`
-- **Password:** `ChangeMe!2024Pilot`
+- **Password:** printed by `scripts/seed.py` at runtime, or provided via `SEED_ADMIN_PASSWORD`
 - **Role:** `admin` (has access to everything including admin panels)
 
 ### Creating Additional Users

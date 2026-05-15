@@ -371,6 +371,25 @@ class TestDocumentReindex:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_reindex_active_job_does_not_mutate_indexes(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        doc = _make_document()
+        active_job = MagicMock()
+        db.get.side_effect = lambda model, pk: admin if model is User else doc
+        db.query.return_value.filter.return_value.first.return_value = active_job
+
+        with patch("pathlib.Path.mkdir"), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("app.api.admin_routes._delete_qdrant_points") as mock_delete_qdrant:
+            client = _make_test_client(db, admin)
+            resp = client.post("/admin/documents/doc-1/reindex")
+
+        assert resp.status_code == 409
+        mock_delete_qdrant.assert_not_called()
+        from app.main import app
+        app.dependency_overrides.clear()
+
 
 class TestSettings:
     def test_get_settings_uses_live_cost_stats(self) -> None:
@@ -440,6 +459,33 @@ class TestSettings:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_get_settings_includes_available_model_options(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            return_value={"qwen3.5:9b", "nomic-embed-text", "qwen2.5vl:7b"},
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.get("/settings")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["availableModels"]["ollama"] == [
+            "nomic-embed-text",
+            "qwen2.5vl:7b",
+            "qwen3.5:9b",
+        ]
+        assert "bge-reranker-v2" in body["availableModels"]["reranker"]
+        from app.main import app
+        app.dependency_overrides.clear()
+
 
 # ---------------------------------------------------------------------------
 # User management
@@ -469,7 +515,7 @@ class TestUserManagement:
             client = _make_test_client(db, admin)
             resp = client.post(
                 "/admin/users",
-                json={"email": "new@test.com", "password": "strongpassword123",
+                json={"email": "new@test.com", "password": "Strongpassword123!",
                       "role": "pilot_user"},
             )
 
@@ -490,6 +536,26 @@ class TestUserManagement:
             )
 
         assert resp.status_code == 422
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_create_user_rejects_password_without_required_complexity(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.post(
+                "/admin/users",
+                json={
+                    "email": "x@test.com",
+                    "password": "alllowercase123",
+                    "role": "pilot_user",
+                },
+            )
+
+        assert resp.status_code == 422
+        assert "Password must include uppercase, lowercase, digit, and special character" in resp.json()["detail"]
         from app.main import app
         app.dependency_overrides.clear()
 
@@ -559,7 +625,7 @@ class TestUserManagement:
             client = _make_test_client(db, admin)
             resp = client.post(
                 "/admin/users",
-                json={"email": "admin@test.com", "password": "strongpassword123",
+                json={"email": "admin@test.com", "password": "Strongpassword123!",
                       "role": "pilot_user"},
             )
 

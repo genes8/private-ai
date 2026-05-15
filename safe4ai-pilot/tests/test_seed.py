@@ -20,3 +20,10 @@ def test_seed_writes_sample_files_and_runs_ingestion() -> None:
     assert "from app.services.ingestion_service import run_ingestion" in seed_py
     assert "await run_ingestion(" in seed_py
     assert "asyncio.run(seed())" in seed_py
+
+
+def test_seed_does_not_hardcode_admin_password() -> None:
+    seed_py = (ROOT / "scripts" / "seed.py").read_text()
+
+    assert "ChangeMe!2024Pilot" not in seed_py
+    assert "SEED_ADMIN_PASSWORD" in seed_py

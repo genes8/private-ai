@@ -34,6 +34,7 @@ export default function ChatPage() {
   const [composer, setComposer] = useState("");
   const [activeCitationId, setActiveCitationId] = useState<string | null>(null);
   const [drawerMessageId, setDrawerMessageId] = useState<string | null>(null);
+  const [mobileSourcesOpen, setMobileSourcesOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const totalChunks = docs.reduce((sum, d) => sum + d.chunks, 0);
@@ -127,10 +128,16 @@ export default function ChatPage() {
                       icon={<BookOpen size={12} />}
                       question={s.question}
                       source={s.source}
-                      onSelect={() => setComposer(s.question)}
+                      onSelect={() => {
+                        setComposer(s.question);
+                        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+                      }}
                     />
                   ))}
                 </div>
+                <p className="text-[12px] text-text-3">
+                  Select a prompt to edit it, then send when ready.
+                </p>
               </div>
             )}
 
@@ -154,6 +161,7 @@ export default function ChatPage() {
                     onCitationOpen={(id) => {
                       setDrawerMessageId(msg.id);
                       setActiveCitationId((prev) => (prev === id ? null : id));
+                      setMobileSourcesOpen(true);
                     }}
                   />
                 )}
@@ -195,6 +203,27 @@ export default function ChatPage() {
               disabled={streaming}
             />
           </div>
+          {drawerSources.length > 0 && (
+            <div className="mx-auto mt-3 max-w-2xl md:hidden">
+              <button
+                type="button"
+                onClick={() => setMobileSourcesOpen((prev) => !prev)}
+                className="flex w-full items-center justify-between rounded-lg border border-line bg-surface-2 px-3 py-2 text-left text-[12px] font-medium text-text-2"
+              >
+                <span>Sources</span>
+                <span className="font-mono text-[11px] text-text-3">
+                  {mobileSourcesOpen ? "Hide" : `Show ${drawerSources.length}`}
+                </span>
+              </button>
+              {mobileSourcesOpen && (
+                <div className="mt-2 overflow-hidden rounded-lg border border-line bg-surface-2">
+                  {drawerSources.map((source) => (
+                    <SourceRow key={source.id} source={source} active={activeCitationId === source.id} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

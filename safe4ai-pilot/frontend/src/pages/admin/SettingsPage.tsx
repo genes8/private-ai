@@ -14,6 +14,24 @@ import {
 import { getSettings, patchSettings, type AppSettings, type PatchableSettings } from "../../api/settings";
 import AdminLayout from "./AdminLayout";
 
+type SaveField =
+  | "generationModel"
+  | "generationFallback"
+  | "embeddingModel"
+  | "visionModel"
+  | "rerankerEnabled"
+  | "rerankerModel"
+  | "retrievalK"
+  | "scoreFloor"
+  | "chunkSize"
+  | "chunkOverlap"
+  | "ssoOnly"
+  | "sessionHours"
+  | "auditRetentionDays"
+  | "redactPII"
+  | "dailyCeilingUsd"
+  | "monthlyCeilingUsd";
+
 // ── Atoms ─────────────────────────────────────────────────────────────────
 function Section({ id, title, subtitle, children }: {
   id: string; title: string; subtitle?: string; children: React.ReactNode;
@@ -34,11 +52,29 @@ function Section({ id, title, subtitle, children }: {
   );
 }
 
-function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Row({
+  label,
+  hint,
+  saving = false,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  saving?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <div className="grid grid-cols-[1fr_auto] gap-6 items-center px-5 py-4">
       <div className="min-w-0">
-        <div className="text-[13.5px] font-medium text-ink">{label}</div>
+        <div className="flex items-center gap-2">
+          <div className="text-[13.5px] font-medium text-ink">{label}</div>
+          {saving && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-mono text-accent">
+              <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+              Saving
+            </span>
+          )}
+        </div>
         {hint && <div className="text-[12px] text-text-2 mt-0.5 leading-relaxed">{hint}</div>}
       </div>
       <div className="flex items-center gap-2">{children}</div>
@@ -78,12 +114,16 @@ function NumberInput({ value, onChange, unit, min, max, step = 1 }: {
   min?: number; max?: number; step?: number;
 }) {
   const [draft, setDraft] = useState(String(value));
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
+    if (!isEditing) {
+      setDraft(String(value));
+    }
+  }, [isEditing, value]);
 
   function commit(nextRaw: string) {
+    setIsEditing(false);
     const next = Number(nextRaw);
     if (Number.isFinite(next)) {
       const clamped = Math.min(max ?? next, Math.max(min ?? next, next));
@@ -102,7 +142,11 @@ function NumberInput({ value, onChange, unit, min, max, step = 1 }: {
       <input
         type="number" min={min} max={max} step={step}
         value={draft}
-        onChange={e => setDraft(e.target.value)}
+        onFocus={() => setIsEditing(true)}
+        onChange={(e) => {
+          setIsEditing(true);
+          setDraft(e.target.value);
+        }}
         onBlur={e => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -166,10 +210,34 @@ const NAV: Array<{ id: SectionId; label: string; icon: React.ComponentType<{ cla
   { id: "cost",      label: "Cost ceiling",    icon: Activity },
 ];
 
+function mergeDiffs(base: PatchableSettings, next: PatchableSettings): PatchableSettings {
+  return { ...base, ...next };
+}
+
+function diffFieldKeys(diff: PatchableSettings): SaveField[] {
+  return Object.keys(diff) as SaveField[];
+}
+
+function subtractConfirmedDiff(
+  pending: PatchableSettings,
+  confirmed: PatchableSettings,
+): PatchableSettings {
+  const remaining: PatchableSettings = { ...pending };
+  for (const key of Object.keys(confirmed) as Array<keyof PatchableSettings>) {
+    if (remaining[key] === confirmed[key]) {
+      delete remaining[key];
+    }
+  }
+  return remaining;
+}
+
 export default function SettingsPage() {
   const [active, setActive] = useState<SectionId>("models");
+  const [saveErrorText, setSaveErrorText] = useState<string | null>(null);
+  const [savingFields, setSavingFields] = useState<SaveField[]>([]);
   const qc = useQueryClient();
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const unsavedDiffRef = useRef<PatchableSettings>({});
 
   const { data: s, isLoading, isError, error } = useQuery({
     queryKey: ["settings"],
@@ -180,10 +248,6 @@ export default function SettingsPage() {
 
   const save = useMutation({
     mutationFn: patchSettings,
-    onError: (err: Error) => {
-      console.error("settings_save_failed", err);
-      void qc.invalidateQueries({ queryKey: ["settings"] });
-    },
   });
 
   const applyDiff = (current: AppSettings, diff: PatchableSettings): AppSettings => ({
@@ -215,7 +279,13 @@ export default function SettingsPage() {
     },
   });
 
+  const isSavingField = (field: SaveField) => savingFields.includes(field);
+
   const queueSave = (diff: PatchableSettings) => {
+    const nextUnsaved = mergeDiffs(unsavedDiffRef.current, diff);
+    unsavedDiffRef.current = nextUnsaved;
+    setSaveErrorText(null);
+    setSavingFields((prev) => Array.from(new Set([...prev, ...diffFieldKeys(diff)])));
     qc.setQueryData<AppSettings>(["settings"], (current) => {
       if (!current) return current;
       return applyDiff(current, diff);
@@ -223,7 +293,26 @@ export default function SettingsPage() {
     saveQueueRef.current = saveQueueRef.current
       .catch(() => undefined)
       .then(async () => {
-        await save.mutateAsync(diff);
+        const diffToSave = unsavedDiffRef.current;
+        if (Object.keys(diffToSave).length === 0) {
+          return;
+        }
+        try {
+          const nextSettings = await save.mutateAsync(diffToSave);
+          qc.setQueryData<AppSettings>(["settings"], nextSettings);
+          unsavedDiffRef.current = subtractConfirmedDiff(unsavedDiffRef.current, diffToSave);
+          setSavingFields(diffFieldKeys(unsavedDiffRef.current));
+        } catch (err) {
+          console.error("settings_save_failed", err);
+          setSaveErrorText(err instanceof Error ? err.message : "Failed to save changes");
+          await qc.invalidateQueries({ queryKey: ["settings"] });
+          qc.setQueryData<AppSettings>(["settings"], (current) => {
+            if (!current) return current;
+            return applyDiff(current, unsavedDiffRef.current);
+          });
+          setSavingFields([]);
+          throw err;
+        }
       });
   };
 
@@ -270,6 +359,16 @@ export default function SettingsPage() {
       queueSave(diff);
     }
   };
+
+  const ollamaModelOptions = s
+    ? Array.from(new Set([
+      ...s.availableModels.ollama,
+      s.generationModel,
+      s.generationFallback,
+      s.embeddingModel,
+      s.visionModel,
+    ]))
+    : [];
 
   if (isLoading) {
     return (
@@ -324,7 +423,7 @@ export default function SettingsPage() {
           </nav>
 
           <div className="mt-6 p-3 rounded bg-paper-2 text-[11px] font-mono text-text-3 leading-relaxed">
-            Saved changes apply to all users within ~30s. No restart needed.
+            Changes save automatically. Applied to all users within ~30s. No restart needed.
           </div>
         </aside>
 
@@ -343,37 +442,41 @@ export default function SettingsPage() {
             {/* MODELS */}
             <Section id="models" title="Models"
               subtitle="The generation model answers queries; the embedding model indexes documents. Reranker is optional but improves precision on noisy corpora.">
-              <Row label="Generation model" hint="Used for every answer. Smaller = faster + cheaper.">
+              <Row label="Generation model" hint="Used for every answer. Smaller = faster + cheaper." saving={isSavingField("generationModel")}>
                 <Select
                   value={s.generationModel}
-                  options={["qwen3.5:9b", "claude-sonnet-4-6", "claude-opus-4-7"]}
+                  options={ollamaModelOptions}
                   onChange={(v) => set("generationModel", v)} />
               </Row>
-              <Row label="Fallback model" hint="Tried on low-confidence retries. Set to the same model to disable.">
+              <Row label="Fallback model" hint="Tried on low-confidence retries. Set to the same model to disable." saving={isSavingField("generationFallback")}>
                 <Select
                   value={s.generationFallback}
-                  options={["qwen3.5:9b", "claude-sonnet-4-6", "claude-opus-4-7"]}
+                  options={ollamaModelOptions}
                   onChange={(v) => set("generationFallback", v)} />
               </Row>
-              <Row label="Embedding model" hint="Changing this triggers a full reindex of your corpus.">
+              <Row label="Embedding model" hint="Changing this triggers a full reindex of your corpus." saving={isSavingField("embeddingModel")}>
                 <Select
                   value={s.embeddingModel}
-                  options={["nomic-embed-text", "voyage-3", "openai-text-embedding-3-large"]}
+                  options={ollamaModelOptions}
                   onChange={(v) => set("embeddingModel", v)} />
               </Row>
-              <Row label="OCR model" hint="Used only for PDF pages that need vision fallback.">
+              <Row label="OCR model" hint="Used only for PDF pages that need vision fallback." saving={isSavingField("visionModel")}>
                 <Select
                   value={s.visionModel}
-                  options={["qwen2.5vl:7b", "qwen2.5vl:32b"]}
+                  options={ollamaModelOptions}
                   onChange={(v) => set("visionModel", v)} />
               </Row>
-              <Row label="Reranker" hint="bge-reranker-v2 adds ~140ms p50 but lifts top-1 score by ~12% on our corpus.">
+              <Row
+                label="Reranker"
+                hint="bge-reranker-v2 adds ~140ms p50 but lifts top-1 score by ~12% on our corpus."
+                saving={isSavingField("rerankerEnabled") || isSavingField("rerankerModel")}
+              >
                 <div className="flex items-center gap-3">
                   <Toggle value={s.reranker.enabled}
                     onChange={(v) => set("reranker", { ...s.reranker, enabled: v })} />
                   <Select
                     value={s.reranker.model}
-                    options={["cross-encoder/ms-marco-MiniLM-L-6-v2", "bge-reranker-v2"]}
+                    options={s.availableModels.reranker}
                     onChange={(v) => set("reranker", { ...s.reranker, model: v })} />
                 </div>
               </Row>
@@ -382,19 +485,19 @@ export default function SettingsPage() {
             {/* RETRIEVAL */}
             <Section id="retrieval" title="Retrieval"
               subtitle="How chunks are pulled from the index before the model sees them. Score floor governs when private·ai refuses to answer.">
-              <Row label="Chunks retrieved (k)" hint="Higher k = more context, more tokens, more cost.">
+              <Row label="Chunks retrieved (k)" hint="Higher k = more context, more tokens, more cost." saving={isSavingField("retrievalK")}>
                 <NumberInput value={s.retrieval.k} min={1} max={32}
                   onChange={(v) => set("retrieval", { ...s.retrieval, k: v })} />
               </Row>
-              <Row label="Score floor" hint="If the top-1 retrieval scores below this, private·ai falls back to “I don't know.”">
+              <Row label="Score floor" hint="If the top-1 retrieval scores below this, private·ai falls back to “I don't know.”" saving={isSavingField("scoreFloor")}>
                 <NumberInput value={s.retrieval.scoreFloor} min={0} max={1} step={0.05}
                   onChange={(v) => set("retrieval", { ...s.retrieval, scoreFloor: v })} />
               </Row>
-              <Row label="Chunk size" hint="Tokens per chunk at index time.">
+              <Row label="Chunk size" hint="Tokens per chunk at index time." saving={isSavingField("chunkSize")}>
                 <NumberInput value={s.retrieval.chunkSize} unit="tokens" min={128} max={2048} step={64}
                   onChange={(v) => set("retrieval", { ...s.retrieval, chunkSize: v })} />
               </Row>
-              <Row label="Chunk overlap" hint="Tokens shared between adjacent chunks for better recall on boundary text.">
+              <Row label="Chunk overlap" hint="Tokens shared between adjacent chunks for better recall on boundary text." saving={isSavingField("chunkOverlap")}>
                 <NumberInput value={s.retrieval.chunkOverlap} unit="tokens" min={0} max={512} step={16}
                   onChange={(v) => set("retrieval", { ...s.retrieval, chunkOverlap: v })} />
               </Row>
@@ -427,19 +530,19 @@ export default function SettingsPage() {
             {/* SECURITY */}
             <Section id="security" title="Security"
               subtitle="Auth, session lifetime and how long the audit log keeps every prompt and retrieval.">
-              <Row label="SSO only" hint="When on, password login is disabled and all sign-ins must go through your IdP.">
+              <Row label="SSO only" hint="When on, password login is disabled and all sign-ins must go through your IdP." saving={isSavingField("ssoOnly")}>
                 <Toggle value={s.security.ssoOnly}
                   onChange={(v) => set("security", { ...s.security, ssoOnly: v })} />
               </Row>
-              <Row label="Session lifetime" hint="How long a JWT cookie is valid before re-auth.">
+              <Row label="Session lifetime" hint="How long a JWT cookie is valid before re-auth." saving={isSavingField("sessionHours")}>
                 <NumberInput value={s.security.sessionHours} unit="hours" min={1} max={720}
                   onChange={(v) => set("security", { ...s.security, sessionHours: v })} />
               </Row>
-              <Row label="Audit retention" hint="After this, events are archived to immutable storage.">
+              <Row label="Audit retention" hint="After this, events are archived to immutable storage." saving={isSavingField("auditRetentionDays")}>
                 <NumberInput value={s.security.auditRetentionDays} unit="days" min={30} max={3650}
                   onChange={(v) => set("security", { ...s.security, auditRetentionDays: v })} />
               </Row>
-              <Row label="Redact PII in audit log" hint="Email addresses, phone numbers and names are hashed before being written to the audit stream.">
+              <Row label="Redact PII in audit log" hint="Email addresses, phone numbers and names are hashed before being written to the audit stream." saving={isSavingField("redactPII")}>
                 <Toggle value={s.security.redactPII}
                   onChange={(v) => set("security", { ...s.security, redactPII: v })} />
               </Row>
@@ -469,20 +572,20 @@ export default function SettingsPage() {
                   </div>
                 </div>
               </Row>
-              <Row label="Daily ceiling" hint="Service degrades gracefully when hit — answers still served from cache.">
+              <Row label="Daily ceiling" hint="Service degrades gracefully when hit — answers still served from cache." saving={isSavingField("dailyCeilingUsd")}>
                 <NumberInput value={s.cost.dailyCeilingUsd} unit="USD" min={1} max={10000}
                   onChange={(v) => set("cost", { ...s.cost, dailyCeilingUsd: v })} />
               </Row>
-              <Row label="Monthly ceiling" hint="A second guardrail on top of the daily one.">
+              <Row label="Monthly ceiling" hint="A second guardrail on top of the daily one." saving={isSavingField("monthlyCeilingUsd")}>
                 <NumberInput value={s.cost.monthlyCeilingUsd} unit="USD" min={30} max={300000}
                   onChange={(v) => set("cost", { ...s.cost, monthlyCeilingUsd: v })} />
               </Row>
             </Section>
 
-            {save.isError && (
+            {saveErrorText && (
               <div className="flex items-center gap-2 p-3 rounded bg-danger-soft text-danger text-[12.5px]">
                 <AlertCircle className="w-4 h-4" strokeWidth={1.5} />
-                {save.error?.message || "Failed to save changes"}
+                {saveErrorText}
               </div>
             )}
 

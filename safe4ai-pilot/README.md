@@ -50,7 +50,7 @@ python -m scripts.seed
 Default seeded admin login:
 
 - Email: `admin@safe4ai.local`
-- Password: `ChangeMe!2024Pilot`
+- Password: printed by `scripts/seed.py` at runtime, or set explicitly with `SEED_ADMIN_PASSWORD`
 
 ## Useful Docker commands
 

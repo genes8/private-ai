@@ -5,6 +5,10 @@ export interface AppSettings {
   generationFallback: string;
   embeddingModel: string;
   visionModel: string;
+  availableModels: {
+    ollama: string[];
+    reranker: string[];
+  };
   reranker: { enabled: boolean; model: string };
   retrieval: {
     k: number;

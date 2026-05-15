@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -26,6 +27,14 @@ from app.services.conversation import ConversationManager
 from observability.cost_tracker import CostTracker
 
 logger = structlog.get_logger(__name__)
+
+
+def estimate_tokens(text: str) -> int:
+    """Approximate token count with a chars-per-token heuristic."""
+    stripped = text.strip()
+    if not stripped:
+        return 0
+    return max(1, math.ceil(len(stripped) / 4))
 
 
 def _write_audit_log(
@@ -83,7 +92,7 @@ def _record_cost(
         logger.warning("cost_tracking_failed", error=str(exc))
 
 
-def _check_cost_ceiling(db: Session) -> None:
+def _check_cost_ceiling(db: Session, *, projected_question: str | None = None) -> None:
     """Raise 429 if the daily or monthly cost ceiling has been reached."""
     try:
         from app.services.app_config_store import load_app_config
@@ -91,17 +100,38 @@ def _check_cost_ceiling(db: Session) -> None:
         daily_ceiling = float(db_overrides.get("daily_ceiling_usd", 50))
         monthly_ceiling = float(db_overrides.get("monthly_ceiling_usd", 500))
         tracker = CostTracker(settings.cost_per_1k_tokens)
+        projected_cost = 0.0
+        if projected_question:
+            prompt_tokens = estimate_tokens(projected_question)
+            completion_tokens = max(estimate_tokens(projected_question), 256)
+            projected_cost = tracker.calculate(prompt_tokens, completion_tokens)
         today_cost = tracker.get_stats(db, days=1)["total_cost_usd"]
         if today_cost >= daily_ceiling:
             raise HTTPException(
                 status_code=429,
                 detail=f"Daily cost ceiling reached (${today_cost:.2f} / ${daily_ceiling:.2f})",
             )
+        if projected_cost and (today_cost + projected_cost) > daily_ceiling:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Projected request would exceed daily cost ceiling "
+                    f"(${today_cost + projected_cost:.2f} / ${daily_ceiling:.2f})"
+                ),
+            )
         month_cost = tracker.get_stats(db, days=30)["total_cost_usd"]
         if month_cost >= monthly_ceiling:
             raise HTTPException(
                 status_code=429,
                 detail=f"Monthly cost ceiling reached (${month_cost:.2f} / ${monthly_ceiling:.2f})",
+            )
+        if projected_cost and (month_cost + projected_cost) > monthly_ceiling:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Projected request would exceed monthly cost ceiling "
+                    f"(${month_cost + projected_cost:.2f} / ${monthly_ceiling:.2f})"
+                ),
             )
     except HTTPException:
         raise
@@ -211,7 +241,7 @@ async def chat(
     if not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
 
-    _check_cost_ceiling(db)
+    _check_cost_ceiling(db, projected_question=body.question)
 
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
@@ -254,10 +284,9 @@ async def chat(
         k_retrieved=len(final.retrieved_chunks),
         status="completed",
     )
-    # Rough token estimation: ~0.75 tokens / word (heuristic for English text)
-    prompt_words = len(body.question.split())
-    completion_words = len((final.draft_answer or "").split())
-    _record_cost(db, session_id, int(prompt_words * 0.75), int(completion_words * 0.75))
+    prompt_tokens = estimate_tokens(body.question)
+    completion_tokens = estimate_tokens(final.draft_answer or "")
+    _record_cost(db, session_id, prompt_tokens, completion_tokens)
 
     return ChatResponse(
         answer=final.draft_answer,
@@ -283,7 +312,7 @@ async def chat_stream(
     if not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
 
-    _check_cost_ceiling(db)
+    _check_cost_ceiling(db, projected_question=body.question)
 
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
@@ -367,9 +396,9 @@ async def chat_stream(
                 k_retrieved=len(final.retrieved_chunks),
                 status="completed",
             )
-            prompt_words = len(body.question.split())
-            completion_words = len((final.draft_answer or "").split())
-            _record_cost(db, session_id, int(prompt_words * 0.75), int(completion_words * 0.75))
+            prompt_tokens = estimate_tokens(body.question)
+            completion_tokens = estimate_tokens(final.draft_answer or "")
+            _record_cost(db, session_id, prompt_tokens, completion_tokens)
         except Exception as exc:  # noqa: BLE001
             logger.warning("chat_stream_postprocessing_failed", error=str(exc), trace_id=final.trace_id)
         yield _sse("done", {

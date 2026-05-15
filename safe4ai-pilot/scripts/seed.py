@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import secrets
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -129,16 +131,22 @@ Do not attempt to investigate or remediate security incidents independently.
 ]
 
 
+def _generate_seed_admin_password() -> str:
+    seed = secrets.token_urlsafe(18)
+    return f"{seed}Aa!9"
+
+
 async def seed() -> None:
     _RAW_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
     db: Session = SessionLocal()
+    admin_password = os.getenv("SEED_ADMIN_PASSWORD") or _generate_seed_admin_password()
     try:
         admin_id = str(uuid.uuid4())
         admin = User(
             id=admin_id,
             email="admin@safe4ai.local",
-            password_hash=bcrypt.hashpw(b"ChangeMe!2024Pilot", bcrypt.gensalt()).decode(),
+            password_hash=bcrypt.hashpw(admin_password.encode("utf-8"), bcrypt.gensalt()).decode(),
             role=UserRole.admin,
         )
         db.merge(admin)
@@ -170,6 +178,11 @@ async def seed() -> None:
 
         db.commit()
         print("Seed complete: admin user + 3 sample policy documents created.")
+        print("Admin email: admin@safe4ai.local")
+        if os.getenv("SEED_ADMIN_PASSWORD"):
+            print("Admin password: value loaded from SEED_ADMIN_PASSWORD")
+        else:
+            print(f"Admin password: {admin_password}")
     finally:
         db.close()
 

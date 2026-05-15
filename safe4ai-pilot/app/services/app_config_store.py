@@ -12,7 +12,7 @@ def load_app_config(db: Session) -> dict[str, Any]:
     return {row.key: row.value for row in db.query(AppConfig).all()}
 
 
-def upsert_app_config(db: Session, updates: dict[str, Any]) -> None:
+def upsert_app_config(db: Session, updates: dict[str, Any], *, commit: bool = True) -> None:
     """Insert or update app_config rows for the provided keys."""
     for key, value in updates.items():
         row = db.get(AppConfig, key)
@@ -21,3 +21,5 @@ def upsert_app_config(db: Session, updates: dict[str, Any]) -> None:
             db.add(row)
         else:
             row.value = value
+    if commit:
+        db.commit()

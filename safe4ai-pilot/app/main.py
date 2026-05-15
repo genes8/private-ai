@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from secrets import compare_digest, token_urlsafe
@@ -101,13 +102,35 @@ async def limit_body_size(
     elif request.headers.get("transfer-encoding", "").lower() == "chunked":
         # Chunked requests lack Content-Length; consume body with a size cap
         try:
-            body = bytearray()
+            total_bytes = 0
+            spooled_body = tempfile.SpooledTemporaryFile(max_size=max_body_bytes)
+            replay_done = False
             async for chunk in request.stream():
-                body.extend(chunk)
-                if len(body) > max_body_bytes:
+                if chunk:
+                    total_bytes += len(chunk)
+                    spooled_body.write(chunk)
+                if total_bytes > max_body_bytes:
+                    spooled_body.close()
                     return Response(status_code=413, content="Request body too large")
-            # Rewind: replace the consumed body so downstream handlers can read it
-            request._body = bytes(body)
+            spooled_body.seek(0)
+
+            async def replay_receive() -> dict[str, object]:
+                nonlocal replay_done
+                chunk = spooled_body.read(64 * 1024)
+                if chunk:
+                    return {
+                        "type": "http.request",
+                        "body": chunk,
+                        "more_body": spooled_body.tell() < total_bytes,
+                    }
+                if replay_done:
+                    return {"type": "http.request", "body": b"", "more_body": False}
+                replay_done = True
+                spooled_body.close()
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request._stream_consumed = False
+            request._receive = replay_receive
         except Exception:
             return Response(status_code=400, content="Failed to read request body")
     return await call_next(request)
