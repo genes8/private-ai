@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 
@@ -10,12 +11,30 @@ from app.prompts.registry import get_prompt
 async def decompose_query(
     query: str,
     *,
-    ollama_url: str,
-    model: str,
+    chat_client: Any = None,
+    ollama_url: str = "",
+    model: str = "",
     client: httpx.AsyncClient | None = None,
 ) -> list[str]:
     template = get_prompt("query_decomposer", "v1")
     prompt = template.template.format(query=query)
+
+    def _parse(raw: str) -> list[str]:
+        try:
+            data = json.loads(raw)
+            sub_queries = data.get("sub_queries", [])
+            if isinstance(sub_queries, list) and all(isinstance(q, str) for q in sub_queries):
+                return sub_queries[:4]
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        return [query]
+
+    if chat_client is not None:
+        try:
+            result = await chat_client.chat("You are a query decomposition assistant. Reply with JSON.", prompt)
+            return _parse(result.content.strip())
+        except Exception:
+            return [query]
 
     async def _call(c: httpx.AsyncClient) -> list[str]:
         try:
@@ -26,10 +45,7 @@ async def decompose_query(
             )
             resp.raise_for_status()
             raw: str = resp.json().get("response", "{}").strip()
-            data = json.loads(raw)
-            sub_queries = data.get("sub_queries", [])
-            if isinstance(sub_queries, list) and all(isinstance(q, str) for q in sub_queries):
-                return sub_queries[:4]
+            return _parse(raw)
         except Exception:  # noqa: S110
             pass
         return [query]

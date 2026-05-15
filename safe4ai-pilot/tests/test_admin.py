@@ -471,6 +471,8 @@ class TestSettings:
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ), patch.dict(
+            "app.api.admin_routes._settings_live_cache", {"expires_at": 0.0}
         ):
             client = _make_test_client(db, admin)
             resp = client.get("/settings")

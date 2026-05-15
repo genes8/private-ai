@@ -23,7 +23,10 @@ from app.config import settings
 from app.db import get_db
 from app.db.models import AuditLog, User
 from app.models import Citation, Message, PrivateAIState
+from app.services.chat_finalizer import finalize_chat_run
 from app.services.conversation import ConversationManager
+from app.services.provider_clients import ProviderUsage
+from app.services.runtime_config import load_runtime_config
 from observability.cost_tracker import CostTracker
 
 logger = structlog.get_logger(__name__)
@@ -35,6 +38,19 @@ def estimate_tokens(text: str) -> int:
     if not stripped:
         return 0
     return max(1, math.ceil(len(stripped) / 4))
+
+
+def _usage_or_estimate(question: str, answer: str, provider_usage: ProviderUsage | None) -> ProviderUsage:
+    if provider_usage is not None:
+        return provider_usage
+    prompt_tokens = estimate_tokens(question)
+    completion_tokens = estimate_tokens(answer)
+    return ProviderUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        source="estimated",
+    )
 
 
 def _write_audit_log(
@@ -384,28 +400,48 @@ async def chat_stream(
             })
 
         latency_ms = int((time.monotonic() - started_at) * 1000)
+
+        usage = _usage_or_estimate(
+            body.question,
+            final.draft_answer or "",
+            getattr(final, "usage", None),
+        )
+
+        async def _finalize() -> None:
+            try:
+                finalize_chat_run(
+                    db=db,
+                    final=final,
+                    user_id=str(current_user.id),
+                    query=body.question,
+                    latency_ms=latency_ms,
+                    k_retrieved=len(final.retrieved_chunks),
+                    usage=usage,
+                    cost_per_1k_tokens=settings.cost_per_1k_tokens,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "chat_stream_postprocessing_failed",
+                    error=str(exc),
+                    trace_id=final.trace_id,
+                )
+
         try:
-            _save_assistant_reply(convo, final)
-            _write_audit_log(
-                db,
-                user_id=str(current_user.id),
-                session_id=session_id,
-                query=body.question,
-                trace_id=final.trace_id,
-                latency_ms=latency_ms,
-                k_retrieved=len(final.retrieved_chunks),
-                status="completed",
-            )
-            prompt_tokens = estimate_tokens(body.question)
-            completion_tokens = estimate_tokens(final.draft_answer or "")
-            _record_cost(db, session_id, prompt_tokens, completion_tokens)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("chat_stream_postprocessing_failed", error=str(exc), trace_id=final.trace_id)
+            runtime = load_runtime_config(db)
+            sse_done_mode = runtime.sse_done_mode
+        except Exception:
+            sse_done_mode = "strict"
+
+        if sse_done_mode == "async":
+            asyncio.create_task(_finalize())
+        else:
+            await _finalize()
+
         yield _sse("done", {
             "traceId": final.trace_id,
             "latencyMs": latency_ms,
             "cache": False,
-            "model": "local",
+            "model": runtime.provider_type if "runtime" in dir() else "local",
             "kRetrieved": len(final.retrieved_chunks),
             "sessionId": session_id,
         })

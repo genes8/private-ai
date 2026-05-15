@@ -4,12 +4,12 @@ import asyncio
 from threading import RLock
 from typing import Any
 
-import httpx
 from qdrant_client import QdrantClient
 from qdrant_client import models as qmodels
 from rank_bm25 import BM25Okapi
 
 from app.models import RetrievedChunk
+from app.services.provider_clients import EmbeddingClient
 
 
 class HybridRetriever:
@@ -17,13 +17,13 @@ class HybridRetriever:
         self,
         qdrant_url: str,
         collection: str,
-        ollama_url: str,
-        embedding_model: str,
+        embedding_model: str = "",
+        embedding_client: EmbeddingClient | None = None,
     ) -> None:
         self._qdrant = QdrantClient(url=qdrant_url)
         self._collection = collection
-        self._ollama_url = ollama_url
-        self._embedding_model = embedding_model
+        self.embedding_model = embedding_model
+        self._embedding_client = embedding_client
         self._bm25: BM25Okapi | None = None
         self._bm25_chunk_ids: list[str] = []
         self._bm25_payloads: dict[str, dict[str, Any]] = {}
@@ -101,20 +101,6 @@ class HybridRetriever:
 
             self._rebuild_bm25_index(remaining_entries)
 
-    async def _embed(self, query: str) -> list[float]:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self._ollama_url}/api/embed",
-                json={"model": self._embedding_model, "input": query},
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
-            embedding = data.get("embedding") or data.get("embeddings", [None])[0]
-            if not isinstance(embedding, list):
-                raise ValueError("Ollama embeddings response did not include an embedding list")
-            return [float(value) for value in embedding]
-
     async def retrieve(
         self,
         query: str,
@@ -122,7 +108,9 @@ class HybridRetriever:
         collection: str | None = None,
         top_k: int = 20,
     ) -> list[RetrievedChunk]:
-        embedding = await self._embed(query)
+        if self._embedding_client is None:
+            raise RuntimeError("No embedding client configured for HybridRetriever")
+        embedding = await self._embedding_client.embed_query(query)
 
         # Build optional qdrant filter for doc_id
         qdrant_filter: qmodels.Filter | None = None

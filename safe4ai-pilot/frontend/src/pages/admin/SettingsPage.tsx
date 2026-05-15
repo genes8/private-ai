@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Trash2,
   AlertCircle,
+  Plug,
 } from "lucide-react";
 import { getSettings, patchSettings, type AppSettings, type PatchableSettings } from "../../api/settings";
 import AdminLayout from "./AdminLayout";
@@ -30,7 +31,14 @@ type SaveField =
   | "auditRetentionDays"
   | "redactPII"
   | "dailyCeilingUsd"
-  | "monthlyCeilingUsd";
+  | "monthlyCeilingUsd"
+  | "providerType"
+  | "providerBaseUrl"
+  | "providerApiKey"
+  | "providerChatModel"
+  | "providerEmbeddingModel"
+  | "providerVisionModel"
+  | "sseDoneMode";
 
 // ── Atoms ─────────────────────────────────────────────────────────────────
 function Section({ id, title, subtitle, children }: {
@@ -160,6 +168,52 @@ function NumberInput({ value, onChange, unit, min, max, step = 1 }: {
   );
 }
 
+function TextInput({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [editing, value]);
+
+  function commit(v: string) {
+    setEditing(false);
+    if (v.trim() !== value.trim()) onCommit(v.trim());
+    else setDraft(value);
+  }
+
+  return (
+    <input
+      type="text"
+      value={draft}
+      onFocus={() => setEditing(true)}
+      onChange={(e) => { setEditing(true); setDraft(e.target.value); }}
+      onBlur={(e) => commit(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") { commit(e.currentTarget.value); e.currentTarget.blur(); } }}
+      className="w-64 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
+  );
+}
+
+function PasswordInput({ placeholder, onCommit }: { placeholder: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState("");
+
+  function commit(v: string) {
+    if (v) onCommit(v);
+    setDraft("");
+  }
+
+  return (
+    <input
+      type="password"
+      value={draft}
+      placeholder={placeholder}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={(e) => commit(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") { commit(e.currentTarget.value); e.currentTarget.blur(); } }}
+      className="w-64 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
+  );
+}
+
 function SourceCard({ s, onSync, onRemove }: {
   s: AppSettings["sources"][number];
   onSync: () => void; onRemove: () => void;
@@ -200,9 +254,10 @@ function SourceCard({ s, onSync, onRemove }: {
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────
-type SectionId = "models" | "retrieval" | "sources" | "security" | "cost";
+type SectionId = "provider" | "models" | "retrieval" | "sources" | "security" | "cost";
 
 const NAV: Array<{ id: SectionId; label: string; icon: React.ComponentType<{ className?: string; strokeWidth?: string | number }> }> = [
+  { id: "provider",  label: "Provider",        icon: Plug },
   { id: "models",    label: "Models",          icon: Brain },
   { id: "retrieval", label: "Retrieval",       icon: SearchIcon },
   { id: "sources",   label: "Document sources", icon: Folder },
@@ -256,6 +311,15 @@ export default function SettingsPage() {
     generationFallback: diff.generationFallback ?? current.generationFallback,
     embeddingModel: diff.embeddingModel ?? current.embeddingModel,
     visionModel: diff.visionModel ?? current.visionModel,
+    sseDoneMode: diff.sseDoneMode ?? current.sseDoneMode,
+    provider: {
+      ...current.provider,
+      type: diff.providerType ?? current.provider.type,
+      baseUrl: diff.providerBaseUrl ?? current.provider.baseUrl,
+      chatModel: diff.providerChatModel ?? current.provider.chatModel,
+      embeddingModel: diff.providerEmbeddingModel ?? current.provider.embeddingModel,
+      visionModel: diff.providerVisionModel ?? current.provider.visionModel,
+    },
     reranker: {
       enabled: diff.rerankerEnabled ?? current.reranker.enabled,
       model: diff.rerankerModel ?? current.reranker.model,
@@ -355,12 +419,23 @@ export default function SettingsPage() {
       if (cost.dailyCeilingUsd !== s.cost.dailyCeilingUsd) diff.dailyCeilingUsd = cost.dailyCeilingUsd;
       if (cost.monthlyCeilingUsd !== s.cost.monthlyCeilingUsd) diff.monthlyCeilingUsd = cost.monthlyCeilingUsd;
     }
+    if (key === "provider") {
+      const provider = value as AppSettings["provider"];
+      if (provider.type !== s.provider.type) diff.providerType = provider.type;
+      if (provider.baseUrl !== s.provider.baseUrl) diff.providerBaseUrl = provider.baseUrl;
+      if (provider.chatModel !== s.provider.chatModel) diff.providerChatModel = provider.chatModel;
+      if (provider.embeddingModel !== s.provider.embeddingModel) diff.providerEmbeddingModel = provider.embeddingModel;
+      if (provider.visionModel !== s.provider.visionModel) diff.providerVisionModel = provider.visionModel;
+    }
+    if (key === "sseDoneMode" && value !== s.sseDoneMode) {
+      diff.sseDoneMode = value as AppSettings["sseDoneMode"];
+    }
     if (Object.keys(diff).length > 0) {
       queueSave(diff);
     }
   };
 
-  const ollamaModelOptions = s
+  const ollamaModelOptions = s?.availableModels
     ? Array.from(new Set([
       ...s.availableModels.ollama,
       s.generationModel,
@@ -439,6 +514,50 @@ export default function SettingsPage() {
               </p>
             </header>
 
+            {/* PROVIDER */}
+            <Section id="provider" title="Inference provider"
+              subtitle="Choose the runtime that handles chat, embeddings and OCR. Use local Ollama or an OpenAI-compatible API.">
+              <Row label="Mode" hint="Switch between a local Ollama instance and any OpenAI-compatible API endpoint." saving={isSavingField("providerType")}>
+                <Select
+                  value={s.provider.type}
+                  options={["ollama", "openai_compatible"] as const}
+                  onChange={(v) => set("provider", { ...s.provider, type: v })} />
+              </Row>
+              <Row label="Base URL" hint="Ollama default: http://localhost:11434. For API providers: https://api.openai.com/v1." saving={isSavingField("providerBaseUrl")}>
+                <TextInput
+                  value={s.provider.baseUrl}
+                  onCommit={(v) => set("provider", { ...s.provider, baseUrl: v })} />
+              </Row>
+              {s.provider.type === "openai_compatible" && (
+                <Row label="API key" hint={s.provider.apiKeyConfigured ? "A key is already configured. Enter a new key to rotate it." : "Required for API mode."} saving={isSavingField("providerApiKey")}>
+                  <PasswordInput
+                    placeholder={s.provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
+                    onCommit={(v) => v && queueSave({ providerApiKey: v })} />
+                </Row>
+              )}
+              <Row label="Chat model" hint="Used for query rewriting, grading, generation, and routing." saving={isSavingField("providerChatModel")}>
+                <TextInput
+                  value={s.provider.chatModel}
+                  onCommit={(v) => set("provider", { ...s.provider, chatModel: v })} />
+              </Row>
+              <Row label="Embedding model" hint="Changing this requires reindexing the entire document corpus." saving={isSavingField("providerEmbeddingModel")}>
+                <TextInput
+                  value={s.provider.embeddingModel}
+                  onCommit={(v) => set("provider", { ...s.provider, embeddingModel: v })} />
+              </Row>
+              <Row label="Vision model" hint="Used for OCR on PDF pages with insufficient text." saving={isSavingField("providerVisionModel")}>
+                <TextInput
+                  value={s.provider.visionModel}
+                  onCommit={(v) => set("provider", { ...s.provider, visionModel: v })} />
+              </Row>
+              <Row label="SSE completion mode" hint="Strict waits for persistence before sending done; async returns done immediately for lower p99 latency." saving={isSavingField("sseDoneMode")}>
+                <Select
+                  value={s.sseDoneMode}
+                  options={["strict", "async"] as const}
+                  onChange={(v) => set("sseDoneMode", v)} />
+              </Row>
+            </Section>
+
             {/* MODELS */}
             <Section id="models" title="Models"
               subtitle="The generation model answers queries; the embedding model indexes documents. Reranker is optional but improves precision on noisy corpora.">
@@ -476,7 +595,7 @@ export default function SettingsPage() {
                     onChange={(v) => set("reranker", { ...s.reranker, enabled: v })} />
                   <Select
                     value={s.reranker.model}
-                    options={s.availableModels.reranker}
+                    options={s.availableModels?.reranker ?? []}
                     onChange={(v) => set("reranker", { ...s.reranker, model: v })} />
                 </div>
               </Row>

@@ -1,10 +1,22 @@
 import { apiFetch } from "./client";
 
+export type ProviderType = "ollama" | "openai_compatible";
+export type SseDoneMode = "strict" | "async";
+
 export interface AppSettings {
   generationModel: string;
   generationFallback: string;
   embeddingModel: string;
   visionModel: string;
+  provider: {
+    type: ProviderType;
+    baseUrl: string;
+    apiKeyConfigured: boolean;
+    chatModel: string;
+    embeddingModel: string;
+    visionModel: string;
+  };
+  sseDoneMode: SseDoneMode;
   availableModels: {
     ollama: string[];
     reranker: string[];
@@ -55,6 +67,14 @@ export type PatchableSettings = Partial<{
   redactPII: boolean;
   dailyCeilingUsd: number;
   monthlyCeilingUsd: number;
+  // Inference provider
+  providerType: ProviderType;
+  providerBaseUrl: string;
+  providerApiKey: string;
+  providerChatModel: string;
+  providerEmbeddingModel: string;
+  providerVisionModel: string;
+  sseDoneMode: SseDoneMode;
 }>;
 
 export const getSettings = () => apiFetch<AppSettings>("/settings");

@@ -16,18 +16,33 @@ async def grade_chunks(
     query: str,
     chunks: list[RankedChunk],
     *,
-    ollama_url: str,
-    model: str,
+    chat_client: Any = None,
+    ollama_url: str = "",
+    model: str = "",
     client: httpx.AsyncClient | None = None,
 ) -> list[GradedChunk]:
     if not chunks:
         return []
 
     template = get_prompt("document_grader", "v1")
-
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_GRADES)
 
-    async def _grade_one(c: httpx.AsyncClient, chunk: RankedChunk) -> GradedChunk:
+    async def _grade_one_with_client(chunk: RankedChunk) -> GradedChunk:
+        async with semaphore:
+            prompt = template.template.format(query=query, chunk=chunk.content)
+            try:
+                result = await chat_client.chat("You are a relevance grader. Reply with JSON.", prompt)
+                raw = result.content.strip()
+                data: dict[str, Any] = json.loads(raw)
+                return GradedChunk(
+                    **chunk.model_dump(),
+                    relevant=bool(data.get("relevant", False)),
+                    reason=str(data.get("reason", "")),
+                )
+            except Exception:
+                return GradedChunk(**chunk.model_dump(), relevant=False, reason="grading failed")
+
+    async def _grade_one_ollama(c: httpx.AsyncClient, chunk: RankedChunk) -> GradedChunk:
         async with semaphore:
             prompt = template.template.format(query=query, chunk=chunk.content)
             try:
@@ -38,7 +53,7 @@ async def grade_chunks(
                 )
                 resp.raise_for_status()
                 raw: str = resp.json().get("response", "{}").strip()
-                data: dict[str, Any] = json.loads(raw)
+                data = json.loads(raw)
                 return GradedChunk(
                     **chunk.model_dump(),
                     relevant=bool(data.get("relevant", False)),
@@ -47,8 +62,12 @@ async def grade_chunks(
             except Exception:
                 return GradedChunk(**chunk.model_dump(), relevant=False, reason="grading failed")
 
+    if chat_client is not None:
+        results = await asyncio.gather(*[_grade_one_with_client(chunk) for chunk in chunks])
+        return list(results)
+
     async def _run(c: httpx.AsyncClient) -> list[GradedChunk]:
-        results = await asyncio.gather(*[_grade_one(c, chunk) for chunk in chunks])
+        results = await asyncio.gather(*[_grade_one_ollama(c, chunk) for chunk in chunks])
         return list(results)
 
     if client is not None:

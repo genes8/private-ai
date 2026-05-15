@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,11 +9,18 @@ from app.services.semantic_cache import SemanticCache
 from tests.conftest import FAKE_EMBEDDING
 
 
+class _MockProvider:
+    async def embed_query(self, query: str) -> list[float]:
+        return FAKE_EMBEDDING
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [FAKE_EMBEDDING for _ in texts]
+
+
 def _make_cache(db: MagicMock | None = None) -> SemanticCache:
     return SemanticCache(
         db=db or MagicMock(),
-        ollama_url="http://localhost:11434",
-        embedding_model="nomic-embed-text",
+        embedding_client=_MockProvider(),
         threshold=0.92,
     )
 
@@ -30,9 +37,7 @@ async def test_lookup_hit() -> None:
     db.execute.return_value.fetchone.return_value = fake_row
 
     cache = _make_cache(db=db)
-
-    with patch.object(cache, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)):
-        result = await cache.lookup("what is X?")
+    result = await cache.lookup("what is X?")
 
     assert result is not None
     assert result["response"] == "This is the answer."
@@ -48,9 +53,7 @@ async def test_lookup_hit_records_cache_hit_event() -> None:
     db.execute.return_value.fetchone.return_value = fake_row
 
     cache = _make_cache(db=db)
-
-    with patch.object(cache, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)):
-        await cache.lookup("what is X?")
+    await cache.lookup("what is X?")
 
     assert db.add.call_count == 1
     added_row = db.add.call_args[0][0]
@@ -64,9 +67,7 @@ async def test_lookup_miss() -> None:
     db.execute.return_value.fetchone.return_value = None
 
     cache = _make_cache(db=db)
-
-    with patch.object(cache, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)):
-        result = await cache.lookup("unknown query")
+    result = await cache.lookup("unknown query")
 
     assert result is None
 
@@ -76,14 +77,13 @@ async def test_store() -> None:
     db = MagicMock()
     cache = _make_cache(db=db)
 
-    with patch.object(cache, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)):
-        await cache.store(
-            query="test query",
-            response="test answer",
-            citations=[_make_citation()],
-            doc_ids=["doc-1"],
-            chunk_ids=["chunk-1"],
-        )
+    await cache.store(
+        query="test query",
+        response="test answer",
+        citations=[_make_citation()],
+        doc_ids=["doc-1"],
+        chunk_ids=["chunk-1"],
+    )
 
     db.add.assert_called_once()
     db.commit.assert_called_once()
@@ -116,8 +116,7 @@ async def test_lookup_uses_vector_distance_expression() -> None:
     db.execute.return_value.fetchone.return_value = None
     cache = _make_cache(db=db)
 
-    with patch.object(cache, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)):
-        await cache.lookup("what is X?")
+    await cache.lookup("what is X?")
 
     stmt = db.execute.call_args[0][0]
     sql = str(stmt)

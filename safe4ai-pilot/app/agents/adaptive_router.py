@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 
@@ -26,8 +27,9 @@ async def decide_next_step(
     state: PrivateAIState,
     allowed_steps: list[str],
     *,
-    ollama_url: str,
-    model: str,
+    chat_client: Any = None,
+    ollama_url: str = "",
+    model: str = "",
     client: httpx.AsyncClient | None = None,
 ) -> str:
     """LLM-based adaptive routing for self-correction cycles."""
@@ -44,6 +46,20 @@ async def decide_next_step(
         allowed_steps=", ".join(allowed_steps),
     )
 
+    def _parse(raw: str) -> str:
+        try:
+            data = json.loads(raw)
+            decision = str(data.get("decision", ""))
+            if decision in allowed_steps:
+                return decision
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        return allowed_steps[0]
+
+    if chat_client is not None:
+        result = await chat_client.chat("You are a routing assistant. Reply with JSON.", prompt)
+        return _parse(result.content.strip())
+
     async def _call(c: httpx.AsyncClient) -> str:
         resp = await c.post(
             f"{ollama_url}/api/generate",
@@ -52,11 +68,7 @@ async def decide_next_step(
         )
         resp.raise_for_status()
         raw: str = resp.json().get("response", "{}").strip()
-        data = json.loads(raw)
-        decision = str(data.get("decision", ""))
-        if decision in allowed_steps:
-            return decision
-        return allowed_steps[0]  # valid HTTP but unrecognized decision name
+        return _parse(raw)
 
     if client is not None:
         return await _call(client)

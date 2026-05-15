@@ -150,11 +150,25 @@ def _serialize_settings(db: Session) -> dict[str, Any]:
         str(_val("embedding_model", settings.embedding_model)),
         str(_val("vision_model", "qwen2.5vl:7b")),
     }
+    provider_api_key_raw = _val("provider_api_key", "")
     return {
         "generationModel": _val("generation_model", settings.ollama_model),
         "generationFallback": _val("generation_fallback_model", settings.ollama_model),
         "embeddingModel": _val("embedding_model", settings.embedding_model),
         "visionModel": _val("vision_model", "qwen2.5vl:7b"),
+        "provider": {
+            "type": _val("provider_type", "ollama"),
+            "baseUrl": _val("provider_base_url", settings.ollama_url),
+            "apiKeyConfigured": bool(provider_api_key_raw),
+            "chatModel": _val(
+                "provider_chat_model", _val("generation_model", settings.ollama_model)
+            ),
+            "embeddingModel": _val(
+                "provider_embedding_model", _val("embedding_model", settings.embedding_model)
+            ),
+            "visionModel": _val("provider_vision_model", "qwen2.5vl:7b"),
+        },
+        "sseDoneMode": _val("sse_done_mode", "strict"),
         "availableModels": {
             "ollama": sorted(set(available_ollama_models) | current_ollama_models),
             "reranker": [
@@ -220,6 +234,38 @@ def _validate_ollama_model_exists(value: str, field_name: str, available_models:
     if normalized not in available_models:
         raise HTTPException(status_code=422, detail=f"{field_name} is not available in Ollama")
     return normalized
+
+
+def _validate_embedding_model_dimension(model: str) -> None:
+    """Raise 409 if the new embedding model's known dimension differs from the collection's."""
+    from app.services.runtime_config import expected_vector_size
+
+    expected = expected_vector_size(model)
+    if expected is None:
+        return
+    try:
+        from qdrant_client import QdrantClient as _QC
+
+        info = _QC(url=settings.qdrant_url).get_collection("documents")
+        vectors_cfg = info.config.params.vectors
+        actual: int = (
+            next(iter(vectors_cfg.values())).size  # type: ignore[union-attr]
+            if isinstance(vectors_cfg, dict)
+            else vectors_cfg.size  # type: ignore[union-attr]
+        )
+        if actual != expected:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Embedding model '{model}' requires vector size {expected} but "
+                    f"the Qdrant collection currently has size {actual}. "
+                    "Drop and recreate the collection before switching embedding models."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # If Qdrant is unreachable, allow the update and let startup guard catch it
 
 
 async def _run_ingestion_task(
@@ -899,6 +945,14 @@ class PatchSettingsRequest(BaseModel):
     redactPII: bool | None = None
     dailyCeilingUsd: float | None = None
     monthlyCeilingUsd: float | None = None
+    # Inference provider fields
+    providerType: str | None = None
+    providerBaseUrl: str | None = None
+    providerApiKey: str | None = None
+    providerChatModel: str | None = None
+    providerEmbeddingModel: str | None = None
+    providerVisionModel: str | None = None
+    sseDoneMode: str | None = None
 
 
 @router.patch("/settings", status_code=200)
@@ -933,6 +987,7 @@ def patch_settings(
         updates["embedding_model"] = _validate_ollama_model_exists(
             body.embeddingModel, "embeddingModel", available_ollama_models
         )
+        _validate_embedding_model_dimension(body.embeddingModel)
     if body.visionModel is not None:
         updates["vision_model"] = _validate_ollama_model_exists(
             body.visionModel, "visionModel", available_ollama_models
@@ -987,6 +1042,43 @@ def patch_settings(
             raise HTTPException(status_code=422, detail="monthlyCeilingUsd must be between 30 and 300000")
         updates["monthly_ceiling_usd"] = body.monthlyCeilingUsd
 
+    # Inference provider fields
+    if body.providerType is not None:
+        if body.providerType not in {"ollama", "openai_compatible"}:
+            raise HTTPException(
+                status_code=422, detail="providerType must be ollama or openai_compatible"
+            )
+        updates["provider_type"] = body.providerType
+    if body.providerBaseUrl is not None:
+        updates["provider_base_url"] = body.providerBaseUrl.rstrip("/")
+    if body.providerApiKey is not None:
+        updates["provider_api_key"] = body.providerApiKey
+    if body.providerChatModel is not None:
+        updates["provider_chat_model"] = _validate_model_identifier(
+            body.providerChatModel, "providerChatModel"
+        )
+    if body.providerEmbeddingModel is not None:
+        updates["provider_embedding_model"] = _validate_model_identifier(
+            body.providerEmbeddingModel, "providerEmbeddingModel"
+        )
+        _validate_embedding_model_dimension(body.providerEmbeddingModel)
+    if body.providerVisionModel is not None:
+        updates["provider_vision_model"] = _validate_model_identifier(
+            body.providerVisionModel, "providerVisionModel"
+        )
+    if body.sseDoneMode is not None:
+        if body.sseDoneMode not in {"strict", "async"}:
+            raise HTTPException(status_code=422, detail="sseDoneMode must be strict or async")
+        updates["sse_done_mode"] = body.sseDoneMode
+
+    # Require API key when switching to openai_compatible
+    effective_provider = body.providerType or current_config.get("provider_type", "ollama")
+    effective_key = body.providerApiKey or current_config.get("provider_api_key")
+    if effective_provider == "openai_compatible" and not effective_key:
+        raise HTTPException(
+            status_code=422, detail="providerApiKey is required for openai_compatible"
+        )
+
     upsert_app_config(db, updates, commit=False)
     db.commit()
     try:
@@ -998,6 +1090,51 @@ def patch_settings(
         logger.warning("runtime_refresh_failed", error=str(exc))
     logger.info("settings_updated", keys=list(updates.keys()))
     return _serialize_settings(db)
+
+
+@router.post("/settings/provider/test", status_code=200)
+def test_provider_connection(
+    request: Request,
+    body: PatchSettingsRequest,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, str]:
+    """Validate provider credentials with a lightweight connectivity check."""
+    from app.services.provider_clients import OpenAICompatibleProvider
+
+    provider_type = body.providerType or str(load_app_config(db).get("provider_type", "ollama"))
+    base_url = body.providerBaseUrl or str(
+        load_app_config(db).get("provider_base_url", settings.ollama_url)
+    )
+    api_key = body.providerApiKey or load_app_config(db).get("provider_api_key", "")
+
+    if provider_type == "openai_compatible":
+        if not api_key:
+            raise HTTPException(status_code=422, detail="providerApiKey is required for openai_compatible")
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(
+                    f"{base_url.rstrip('/')}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                if resp.status_code >= 500:
+                    raise HTTPException(status_code=503, detail="Provider returned server error")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Connection failed: {exc}") from exc
+    else:
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(f"{base_url.rstrip('/')}/api/tags")
+                if resp.status_code >= 400:
+                    raise HTTPException(status_code=503, detail="Ollama not reachable")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Ollama connection failed: {exc}") from exc
+
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

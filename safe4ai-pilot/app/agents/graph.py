@@ -44,8 +44,9 @@ def build_graph(
     *,
     retriever: HybridRetriever,
     reranker: Reranker,
-    ollama_url: str,
-    ollama_model: str,
+    chat_client: Any = None,
+    ollama_url: str | None = None,
+    ollama_model: str | None = None,
     retrieval_top_k: int = 6,
     http_client: httpx.AsyncClient | None = None,
 ) -> Any:
@@ -53,6 +54,30 @@ def build_graph(
     guard = InputGuard()
     output_filter = OutputFilter()
     content_filter = ContentFilter()
+
+    # Resolve fallback Ollama coordinates for nodes that don't yet use chat_client
+    _ollama_url = ollama_url or ""
+    _ollama_model = ollama_model or ""
+
+    async def _llm_generate(prompt: str, *, timeout: float = 30.0) -> str:
+        """Route LLM text generation through chat_client when available."""
+        if chat_client is not None:
+            result = await chat_client.chat("", prompt)
+            return result.content
+
+        async def _call(c: httpx.AsyncClient) -> str:
+            resp = await c.post(
+                f"{_ollama_url}/api/generate",
+                json={"model": _ollama_model, "prompt": prompt, "stream": False},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return str(resp.json().get("response", ""))
+
+        if http_client is not None:
+            return await _call(http_client)
+        async with httpx.AsyncClient() as c:
+            return await _call(c)
 
     async def intake_node(state: PrivateAIState) -> dict[str, Any]:
         with _node_span("intake", state):
@@ -73,20 +98,8 @@ def build_graph(
             template = get_prompt("query_rewriter", "v1")
             prompt = template.template.format(query=query)
             try:
-                c = http_client or httpx.AsyncClient()
-                owned = http_client is None
-                try:
-                    resp = await c.post(
-                        f"{ollama_url}/api/generate",
-                        json={"model": ollama_model, "prompt": prompt, "stream": False},
-                        timeout=30.0,
-                    )
-                    resp.raise_for_status()
-                    rewritten: str = resp.json().get("response", "").strip()
-                finally:
-                    if owned:
-                        await c.aclose()
-                return {"rewritten_query": rewritten or query, "current_step": "retrieve"}
+                rewritten = await _llm_generate(prompt)
+                return {"rewritten_query": rewritten.strip() or query, "current_step": "retrieve"}
             except Exception as exc:
                 logger.warning("rewrite_node_failed", error=str(exc))
                 return {"rewritten_query": query, "current_step": "retrieve"}
@@ -120,26 +133,26 @@ def build_graph(
             graded = await grade_chunks(
                 query,
                 state.retrieved_chunks,
-                ollama_url=ollama_url,
-                model=ollama_model,
+                chat_client=chat_client,
+                ollama_url=_ollama_url,
+                model=_ollama_model,
                 client=http_client,
             )
             relevant_count = sum(1 for c in graded if c.relevant)
             span.set_attribute("relevant_chunks", relevant_count)
-            # LLM-driven routing with sync threshold fallback
             routing_state = state.model_copy(update={"graded_chunks": graded})
             try:
                 decision = await decide_next_step(
                     routing_state,
                     ["generate", "decompose"],
-                    ollama_url=ollama_url,
-                    model=ollama_model,
+                    chat_client=chat_client,
+                    ollama_url=_ollama_url,
+                    model=_ollama_model,
                     client=http_client,
                 )
             except Exception as exc:
                 logger.warning("grade_routing_failed", error=str(exc))
                 decision = route_after_grade(routing_state)
-            # Safety: if LLM returns "generate" but sync rule disagrees, trust the rule
             if decision == "generate" and route_after_grade(routing_state) == "decompose":
                 decision = "decompose"
             span.set_attribute("routing_decision", decision)
@@ -150,8 +163,9 @@ def build_graph(
             query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
             sub_queries = await decompose_query(
                 query,
-                ollama_url=ollama_url,
-                model=ollama_model,
+                chat_client=chat_client,
+                ollama_url=_ollama_url,
+                model=_ollama_model,
                 client=http_client,
             )
             span.set_attribute("sub_query_count", len(sub_queries))
@@ -164,8 +178,9 @@ def build_graph(
                     graded = await grade_chunks(
                         sub_q,
                         ranked,
-                        ollama_url=ollama_url,
-                        model=ollama_model,
+                        chat_client=chat_client,
+                        ollama_url=_ollama_url,
+                        model=_ollama_model,
                         client=http_client,
                     )
                     all_graded.extend(graded)
@@ -203,19 +218,7 @@ def build_graph(
             prompt = template.template.format(context=context, query=query)
 
             try:
-                c = http_client or httpx.AsyncClient()
-                owned = http_client is None
-                try:
-                    resp = await c.post(
-                        f"{ollama_url}/api/generate",
-                        json={"model": ollama_model, "prompt": prompt, "stream": False},
-                        timeout=120.0,
-                    )
-                    resp.raise_for_status()
-                    answer: str = resp.json().get("response", "").strip()
-                finally:
-                    if owned:
-                        await c.aclose()
+                answer = (await _llm_generate(prompt, timeout=120.0)).strip()
             except Exception as exc:
                 return {
                     "draft_answer": _NO_ANSWER,
@@ -269,7 +272,6 @@ def build_graph(
                 and state.draft_answer != _NO_ANSWER
                 and has_relevant
             )
-            # Self-correction loop guard: after _MAX_RETRIEVAL_ATTEMPTS, don't route back
             if state.retrieval_attempts >= _MAX_RETRIEVAL_ATTEMPTS:
                 allowed = ["respond", "fallback"]
             else:
@@ -280,14 +282,14 @@ def build_graph(
                 decision = await decide_next_step(
                     routing_state,
                     allowed,
-                    ollama_url=ollama_url,
-                    model=ollama_model,
+                    chat_client=chat_client,
+                    ollama_url=_ollama_url,
+                    model=_ollama_model,
                     client=http_client,
                 )
             except Exception as exc:
                 logger.warning("quality_gate_routing_failed", error=str(exc))
                 decision = "respond" if grounded else "fallback"
-            # Safety: never route ungrounded state to respond regardless of LLM output
             if decision == "respond" and not grounded:
                 decision = "fallback"
             span.set_attribute("grounded", grounded)
@@ -323,7 +325,6 @@ def build_graph(
 
     builder.set_entry_point("intake")
 
-    # intake: guard pass → rewrite; guard reject → fallback
     builder.add_conditional_edges(
         "intake",
         lambda state: state.current_step,
@@ -331,7 +332,6 @@ def build_graph(
     )
     builder.add_edge("rewrite", "retrieve")
     builder.add_edge("retrieve", "grade")
-    # grade: LLM routes to generate (≥2 relevant) or decompose (<2)
     builder.add_conditional_edges(
         "grade",
         lambda state: state.current_step,
@@ -340,7 +340,6 @@ def build_graph(
     builder.add_edge("decompose", "generate")
     builder.add_edge("generate", "output_filter")
     builder.add_edge("output_filter", "quality_gate")
-    # quality_gate: LLM routes to respond, retrieve (self-correction), or fallback
     builder.add_conditional_edges(
         "quality_gate",
         lambda state: state.current_step,

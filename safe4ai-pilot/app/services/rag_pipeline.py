@@ -25,6 +25,7 @@ from app.components.reranker import Reranker
 from app.db.models import Document, DocumentChunk, IngestionStatus
 from app.models import Citation, RankedChunk
 from app.security.content_filter import ContentFilter
+from app.services.provider_clients import ChatClient, EmbeddingClient, VisionClient
 
 logger = structlog.get_logger(__name__)
 
@@ -49,6 +50,7 @@ class RagPipeline:
         collection: str,
         db_session: Session,
         *,
+        provider_client: ChatClient | EmbeddingClient | VisionClient | None = None,
         chunk_size: int = _CHUNK_SIZE,
         chunk_overlap: int = _CHUNK_OVERLAP,
         rerank_top_n: int = 6,
@@ -63,6 +65,7 @@ class RagPipeline:
         self._qdrant = QdrantClient(url=qdrant_url)
         self._collection = collection
         self._db = db_session
+        self._provider_client = provider_client
         self._rerank_top_n = rerank_top_n
         self._min_rerank_score = min_rerank_score
         self._vision_model = vision_model
@@ -213,7 +216,15 @@ class RagPipeline:
     # ------------------------------------------------------------------
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        results: list[list[float]] = []
+        if self._provider_client is not None and hasattr(self._provider_client, "embed_documents"):
+            results: list[list[float]] = []
+            for i in range(0, len(texts), _EMBED_BATCH):
+                batch = texts[i : i + _EMBED_BATCH]
+                batch_results = await self._provider_client.embed_documents(batch)  # type: ignore[union-attr]
+                results.extend(batch_results)
+            return results
+
+        results = []
         async with httpx.AsyncClient() as client:
             for i in range(0, len(texts), _EMBED_BATCH):
                 batch = texts[i : i + _EMBED_BATCH]
@@ -252,50 +263,67 @@ class RagPipeline:
         with open(image_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
 
+        extract_prompt = (
+            "Extract all text from this document page exactly as it appears. "
+            "Preserve structure, headers, tables, and lists. "
+            "Return only the extracted text."
+        )
+        quality_prompt = (
+            "Rate your confidence in the text extraction: high/medium/low. "
+            'Return JSON {"confidence": "...", "reason": "..."}.'
+        )
+
+        if self._provider_client is not None and hasattr(self._provider_client, "describe_image"):
+            text = await self._provider_client.describe_image(extract_prompt, b64)  # type: ignore[union-attr]
+            quality_raw = await self._provider_client.describe_image(quality_prompt, b64)  # type: ignore[union-attr]
+            try:
+                quality_data: dict[str, Any] = json.loads(quality_raw)
+                confidence: str = quality_data.get("confidence", "low")
+            except (json.JSONDecodeError, AttributeError):
+                confidence = "low"
+            return text, confidence
+
         async with httpx.AsyncClient() as client:
-            # Extract text
             extract_resp = await client.post(
                 f"{self._ollama_url}/api/generate",
                 json={
                     "model": self._vision_model,
-                    "prompt": (
-                        "Extract all text from this document page exactly as it appears. "
-                        "Preserve structure, headers, tables, and lists. "
-                        "Return only the extracted text."
-                    ),
+                    "prompt": extract_prompt,
                     "images": [b64],
                     "stream": False,
                 },
                 timeout=120.0,
             )
             extract_resp.raise_for_status()
-            text: str = extract_resp.json().get("response", "")
+            text = extract_resp.json().get("response", "")
 
-            # Quality gate
             quality_resp = await client.post(
                 f"{self._ollama_url}/api/generate",
                 json={
                     "model": self._vision_model,
-                    "prompt": (
-                        "Rate your confidence in the text extraction: high/medium/low. "
-                        'Return JSON {"confidence": "...", "reason": "..."}.'
-                    ),
+                    "prompt": quality_prompt,
                     "images": [b64],
                     "stream": False,
                 },
                 timeout=60.0,
             )
             quality_resp.raise_for_status()
-            quality_raw: str = quality_resp.json().get("response", "{}")
+            quality_raw = quality_resp.json().get("response", "{}")
             try:
-                quality_data: dict[str, Any] = json.loads(quality_raw)
-                confidence: str = quality_data.get("confidence", "low")
+                quality_data = json.loads(quality_raw)
+                confidence = quality_data.get("confidence", "low")
             except (json.JSONDecodeError, AttributeError):
                 confidence = "low"
 
         return text, confidence
 
     async def _generate(self, prompt: str) -> str:
+        if self._provider_client is not None and hasattr(self._provider_client, "chat"):
+            result = await self._provider_client.chat(  # type: ignore[union-attr]
+                "Answer using retrieved context.", prompt
+            )
+            return result.content
+
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self._ollama_url}/api/generate",

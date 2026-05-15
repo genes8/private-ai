@@ -11,7 +11,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.db.models import Document, IngestionJob, IngestionJobStatus, IngestionStatus
 from app.services.rag_pipeline import RagPipeline
-from app.services.runtime_config import load_runtime_config
+from app.services.runtime_config import build_provider, load_runtime_config
 
 logger = structlog.get_logger(__name__)
 
@@ -46,22 +46,24 @@ async def run_ingestion(
         doc.ingestion_started_at = datetime.now(UTC)
         db.commit()
 
+        provider = build_provider(runtime)
         retriever = retriever or HybridRetriever(
             qdrant_url=settings.qdrant_url,
             collection=_QDRANT_COLLECTION,
-            ollama_url=settings.ollama_url,
             embedding_model=runtime.embedding_model,
+            embedding_client=provider,
         )
         reranker = Reranker(model_name=runtime.reranker_model, enabled=runtime.reranker_enabled)
         pipeline = RagPipeline(
             retriever=retriever,
             reranker=reranker,
-            ollama_url=settings.ollama_url,
-            ollama_model=runtime.generation_model,
+            ollama_url=runtime.provider_base_url,
+            ollama_model=runtime.chat_model,
             embedding_model=runtime.embedding_model,
             qdrant_url=settings.qdrant_url,
             collection=_QDRANT_COLLECTION,
             db_session=db,
+            provider_client=provider,
             chunk_size=runtime.chunk_size,
             chunk_overlap=runtime.chunk_overlap,
             rerank_top_n=runtime.retrieval_k,

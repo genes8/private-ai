@@ -376,148 +376,239 @@ Ovo je dobra arhitektura za **on-premise private AI chatbot / RAG sistem** gde p
 
 #    NADOGRADNJA ARCHITECTURE
 
-## **Kako bi se uklopio u tvoju arhitekturu**
+Za **produkciju** bih stavio **sva tri**, ali sa jasnom podelom da se ne duplira posao.
 
-Umesto ovoga:
+Dokploy \= deployment \+ infra status  
+Langfuse \= AI/LLM observability  
+Jaeger \= distributed tracing / backend tracing
 
-API → Jaeger
+## **Produkcijska preporuka**
 
-ja bih za AI aplikaciju stavio:
+### **1\. Dokploy — obavezno**
 
-API / LangGraph → Langfuse  
-Dokploy → infrastruktura
+Koristi ga za:
 
-Praktično:
+deploy aplikacija  
+restart/redeploy  
+env vars  
+container logs  
+CPU/RAM/disk/network  
+status servisa  
+Docker/Compose management
+
+On ti je **platform layer**.
+
+---
+
+### **2\. Langfuse — obavezno za AI app**
+
+Koristi ga za:
+
+LLM traces  
+LangGraph node traces  
+prompt input/output  
+retrieval debugging  
+token usage  
+cost tracking  
+user sessions  
+feedback/evaluations  
+debugging loših odgovora
+
+On ti je **AI observability layer**.
+
+---
+
+### **3\. Jaeger — preporučljivo za produkciju**
+
+Koristi ga za:
+
+API request tracing  
+DB latency  
+Qdrant latency  
+Ollama/LLM service latency  
+worker latency  
+network bottlenecks  
+distributed trace kroz više servisa
+
+On ti je **backend/infrastructure tracing layer**.
+
+---
+
+## **Kako bih ja to složio**
 
 React SPA  
-  ↓  
-FastAPI  
-  ↓  
+   ↓  
+FastAPI API  
+   ↓  
 LangGraph Pipeline  
-  ↓  
-Retriever / Reranker / Ollama  
-  ↓  
-Langfuse traces
+   ↓  
+Retriever / Reranker / Qdrant / Ollama
 
-## **Šta bi Langfuse hvatao kod tebe**
+Observability:
 
-Na primer za jedan `/chat` request:
+FastAPI / LangGraph → Langfuse  
+FastAPI / services → OpenTelemetry → Jaeger  
+Dokploy → containers / deploy / infra metrics / logs
 
-Trace: user pita pitanje
+## **Minimalni produkcijski setup**
 
-Span 1: auth/user/session  
-Span 2: query preprocessing  
-Span 3: hybrid retrieval  
-Span 4: Qdrant search  
-Span 5: reranking  
-Span 6: prompt building  
-Span 7: Ollama LLM call  
-Span 8: final response  
-Span 9: evaluation / score
+U produkciji bih imao:
 
-I za svaki korak vidiš:
+dokploy  
+postgres  
+qdrant  
+ollama  
+fastapi-api  
+frontend  
+langfuse  
+jaeger  
+otel-collector
 
-koliko je trajao  
-šta je bio input  
-šta je bio output  
-koji model je korišćen  
-koliko tokena  
-gde je puklo  
-koliko je koštalo  
-koji user/session
+Još bolje ako dodaš:
 
-Langfuse podržava traces, session tracking, custom trace IDs, token/cost tracking i latency monitoring za LLM aplikacije.
+prometheus  
+grafana
 
-## **Da li menja Observability Router?**
+Ali ako hoćeš da ne preteraš u startu, onda:
 
-Ne potpuno.
+Dokploy \+ Langfuse \+ Jaeger \+ OpenTelemetry Collector
 
-Ja bih ostavio minimalni `Observability Router`, ali ga pojednostavio.
+je sasvim dovoljno.
 
-### **Backend i dalje treba da ima:**
+---
+
+## **Šta da ostane u Observability Router-u**
+
+Ne pravi veliki custom observability sistem.
+
+Ostavi samo:
 
 GET /health  
 GET /ready  
-GET /metrics
+GET /metrics  
+GET /version
 
-Zbog:
+A ovo prebaci na alate:
 
-Dokploy health check  
-Docker healthcheck  
-load balancer readiness  
-uptime monitoring  
-basic Prometheus metrics
+/traces → Jaeger \+ Langfuse  
+/logs → Dokploy / kasnije Loki  
+LLM traces → Langfuse  
+latency traces → Jaeger  
+infra status → Dokploy
 
-### **Langfuse bi preuzeo:**
+## **Finalna odluka**
 
-/traces  
-LLM latency  
-agent pipeline debugging  
-prompt/output logs  
-retrieval debug  
-evaluation scores  
-chat session analysis
+Za **produkciju**:
 
-Znači ne bih pravio veliki custom `/traces` sistem ako koristiš Langfuse.
+DA — Dokploy  
+DA — Langfuse  
+DA — Jaeger  
+DA — minimalni FastAPI Observability Router
 
-## **Najbolja kombinacija za tebe**
+Ne zato što rade isto, nego zato što pokrivaju različite slojeve:
 
-Dokploy  
-\- deployment  
-\- logs  
-\- service status  
-\- CPU/RAM/disk/network
+Dokploy: da li sistem radi  
+Jaeger: gde je request usporio/pukao  
+Langfuse: zašto je AI dao loš/spor/skup odgovor
 
-FastAPI Observability Router  
-\- /health  
-\- /ready  
-\- /metrics  
-\- basic service checks
+To je najzdravija produkcijska kombinacija za tvoj stack.
 
-Langfuse  
-\- LLM traces  
-\- LangGraph steps  
-\- prompts  
-\- outputs  
-\- latency per step  
-\- token/cost tracking  
-\- evals  
-\- datasets
+**PODESAVANJE LLM-a**
 
-## **Zaključak**
+Evo šta vidim iz koda:
 
-Za tvoj stack:
+\*\*Trenutno stanje:\*\*  
+\- \`OLLAMA\_MODEL=qwen3.5:9b\` — \~5.5GB download, \~9GB RAM za CPU inferenciju  
+\- \`qwen2.5vl:7b\` (OCR) — \~4.7GB  
+\- Docker Compose pokreće Ollama container \+ \`ollama-init\` koji pokušava pull-ovati oba modela pri \`docker compose up\`  
+\- Već imaš native Ollama na macOS (\`ollama list\` radi), ali model nije pulled  
+\- \`qwen3-coder:30b\` (18GB) je jedini veliki model — nepotreban za ovaj app
 
-React \+ FastAPI \+ LangGraph \+ HybridRetriever \+ Qdrant \+ Ollama
+\---
 
-**Langfuse je odličan izbor.**
+\#\# Predlog: Dva režima rada
 
-Posebno zato što radi dobro za:
+\#\#\# 1\. \*\*Local Dev (preporučeno za testiranje)\*\* — Ollama na host-u, app lokalno
 
-AI chat aplikacije  
-RAG sisteme  
-agente  
-LangGraph pipeline  
-local LLM / Ollama setup  
-debugging promptova  
-evaluaciju kvaliteta odgovora
+Najjednostavniji i najbrži pristup. Ne treba ti Ollama u Docker-u uopšte.
 
-Ja bih arhitekturu promenio ovako:
 
-API \--\> Observability Router  
-API \--\> LangGraph  
-LangGraph \--\> Retriever  
-LangGraph \--\> Reranker  
-LangGraph \--\> Ollama  
-LangGraph \--\> Langfuse  
-API \--\> Langfuse  
-Dokploy \--\> API / DB / Qdrant / Ollama / Langfuse
+\# 2\. Embedding model već imaš  
+ollama pull nomic-embed-text     \# već pulled
 
-Odnosno:
+\# 3\. OCR \- skip za sad (koristi fallback bez OCR-a)  
+\# Ako treba: ollama pull minicpm-v:1b  (\~700MB, minimal vision)
 
-**Dokploy za deploy i infra monitoring.**  
- **Langfuse za AI observability.**  
- **Mali FastAPI Observability Router samo za health/metrics.**
+
+\`\`\`
+
+\*\*Docker Compose\*\* — izbaci Ollama servise, zadrži samo Postgres i Qdrant:  
+\`\`\`bash  
+docker compose up postgres qdrant jaeger  \# samo infra  
+\`\`\`
+
+
+\---
+
+\#\#\# 2\. \*\*Full Docker\*\* — ako mora sve u kontejnerima
+
+Ollama container mora da pristupa host Ollama-i ili da ima dovoljno RAM-a. Na macOS, Docker Desktop ima limited RAM (default 4GB).
+
+\*\*Rešenje:\*\* Ollama na hostu, app container se konektuje preko \`host.docker.internal\`:
+
+\`\`\`yaml  
+\# docker-compose.override.yml  
+services:  
+  app:  
+    environment:  
+      \- OLLAMA\_URL=http://host.docker.internal:11434  
+  \# Ukloni ollama i ollama-init servise  
+\`\`\`
+
+\---
+
+\#\#\# Model-upustvo po RAM kapacitetu
+
+| Model | Download | RAM (CPU) | Kvalitet | Preporuka |  
+|-------|----------|-----------|----------|-----------|  
+| \`qwen2.5:0.5b\` | 395MB | \~1GB | Low | Samo smoke test |  
+| \*\*\`qwen2.5:1.5b\`\*\* | \*\*987MB\*\* | \*\*\~2.5GB\*\* | \*\*Acceptable\*\* | \*\*Najbolji za CPU test\*\* |  
+| \`qwen2.5:3b\` | 2GB | \~4.5GB | Good | Ako imaš RAM |  
+| \`qwen3.5:9b\` | 5.5GB | \~9GB | Great | Samo sa GPU |  
+| \`nomic-embed-text\` | 274MB | \~0.5GB | N/A | Već pulled |  
+| \`minicpm-v:1b\` | 700MB | \~1.5GB | Low OCR | Za OCR test |
+
+\---
+
+\#\#\# Šta treba promeniti u kodu
+
+Samo \*\*\`.env\`\*\* — jedina promena je \`OLLAMA\_MODEL\`. Arhitektura već podržava runtime config iz DB (\`runtime\_config.py\` čita \`generation\_model\` iz \`app\_config\` tabele), tako da će Settings page moći da menja model bez restarta.
+
+Za \`docker-compose.yml\`, predlažem da se \`ollama\` i \`ollama-init\` servisi prebace u \*\*opcionu sekciju\*\* ili \`profile\`:
+
+\`\`\`yaml  
+\# docker-compose.yml — dodaj profile na ollama servise  
+  ollama:  
+    profiles: \["with-ollama"\]  \# ne pokreće se podrazumevano  
+    ...  
+  ollama-init:  
+    profiles: \["with-ollama"\]  
+    ...  
+\`\`\`
+
+Tako \`docker compose up\` pokreće samo infra (postgres, qdrant, jaeger), a \`docker compose \--profile with-ollama up\` pokreće i Ollama u containeru za one kojima treba.
+
+\---
+
+\*\*Moj preporučeni plan za sada:\*\*  
+1\. \`ollama pull qwen2.5:1.5b\` — manji model za CPU  
+2\. Promeni \`.env\` → \`OLLAMA\_MODEL=qwen2.5:1.5b\`  
+3\. Dodaj \`profiles: \["with-ollama"\]\` na Ollama servise u \`docker-compose.yml\`  
+4\. Pokreni infra: \`docker compose up postgres qdrant jaeger\`  
+5\. Pokreni app lokalno: \`uvicorn app.main:app \--reload\`  
+6\. Ollama radi natively na \`localhost:11434\`
+
+Želiš da implementiram ovo?
 
 # DODAVANJE FEATURES
 

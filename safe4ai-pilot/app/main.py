@@ -184,10 +184,37 @@ async def _prewarm_ollama(model: str) -> None:
 
 
 def _ensure_qdrant_collection() -> None:
-    """Create the default document collection on first boot if it is missing."""
+    """Create the default document collection on first boot if it is missing.
+
+    If the collection already exists, validates its vector size against the
+    configured embedding model.  Raises RuntimeError on dimension mismatch so
+    that startup fails loudly rather than silently producing wrong embeddings.
+    """
+    from app.services.app_config_store import load_app_config
+    from app.services.runtime_config import expected_vector_size
+
+    with SessionLocal() as db:
+        cfg = load_app_config(db)
+    embedding_model = str(cfg.get("embedding_model", settings.embedding_model))
+
     try:
         client = QdrantClient(url=settings.qdrant_url)
         if client.collection_exists(_QDRANT_COLLECTION):
+            expected = expected_vector_size(embedding_model)
+            if expected is not None:
+                info = client.get_collection(_QDRANT_COLLECTION)
+                vectors_cfg = info.config.params.vectors
+                actual_size: int = (
+                    next(iter(vectors_cfg.values())).size  # type: ignore[union-attr]
+                    if isinstance(vectors_cfg, dict)
+                    else vectors_cfg.size  # type: ignore[union-attr]
+                )
+                if actual_size != expected:
+                    raise RuntimeError(
+                        f"Qdrant collection '{_QDRANT_COLLECTION}' has vector size {actual_size} "
+                        f"but embedding model '{embedding_model}' requires {expected}. "
+                        "Drop and recreate the collection to switch embedding models."
+                    )
             return
         client.create_collection(
             collection_name=_QDRANT_COLLECTION,
@@ -201,6 +228,8 @@ def _ensure_qdrant_collection() -> None:
             collection=_QDRANT_COLLECTION,
             vector_size=_QDRANT_VECTOR_SIZE,
         )
+    except RuntimeError:
+        raise
     except Exception as exc:
         logger.warning("qdrant_collection_ensure_failed", error=str(exc))
 

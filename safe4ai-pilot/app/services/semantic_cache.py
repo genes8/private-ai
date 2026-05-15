@@ -4,44 +4,28 @@ import json
 import uuid
 from typing import Any
 
-import httpx
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from app.db.models import SemanticCache as SemanticCacheModel
 from app.db.models import SemanticCacheHit
 from app.models import Citation
+from app.services.provider_clients import EmbeddingClient
 
 
 class SemanticCache:
     def __init__(
         self,
         db: Session,
-        ollama_url: str,
-        embedding_model: str,
+        embedding_client: EmbeddingClient,
         threshold: float,
     ) -> None:
         self._db = db
-        self._ollama_url = ollama_url
-        self._embedding_model = embedding_model
+        self._client = embedding_client
         self._threshold = threshold
 
-    async def _embed(self, query: str) -> list[float]:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self._ollama_url}/api/embed",
-                json={"model": self._embedding_model, "input": query},
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
-            embedding = data.get("embedding") or data.get("embeddings", [None])[0]
-            if not isinstance(embedding, list):
-                raise ValueError("Ollama embeddings response did not include an embedding list")
-            return [float(value) for value in embedding]
-
     async def lookup(self, query: str) -> dict[str, Any] | None:
-        embedding = await self._embed(query)
+        embedding = await self._client.embed_query(query)
         distance = SemanticCacheModel.query_embedding.cosine_distance(embedding)
         stmt = (
             select(
@@ -81,7 +65,7 @@ class SemanticCache:
         doc_ids: list[str],
         chunk_ids: list[str],
     ) -> None:
-        embedding = await self._embed(query)
+        embedding = await self._client.embed_query(query)
         citations_data = [c.model_dump() for c in citations]
         row = SemanticCacheModel(
             id=str(uuid.uuid4()),

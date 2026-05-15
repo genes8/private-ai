@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -10,9 +10,25 @@ from app.models import RetrievedChunk
 from tests.conftest import FAKE_EMBEDDING
 
 QDRANT_URL = "http://localhost:6333"
-OLLAMA_URL = "http://localhost:11434"
 COLLECTION = "test_collection"
-MODEL = "nomic-embed-text"
+
+
+class _MockProvider:
+    async def embed_query(self, query: str) -> list[float]:
+        return FAKE_EMBEDDING
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [FAKE_EMBEDDING for _ in texts]
+
+
+def _make_retriever() -> HybridRetriever:
+    with patch("app.components.hybrid_retriever.QdrantClient"):
+        return HybridRetriever(
+            qdrant_url=QDRANT_URL,
+            collection=COLLECTION,
+            embedding_model="nomic-embed-text",
+            embedding_client=_MockProvider(),
+        )
 
 
 def _make_hit(chunk_id: str, doc_id: str, score: float = 1.0) -> MagicMock:
@@ -26,16 +42,6 @@ def _make_hit(chunk_id: str, doc_id: str, score: float = 1.0) -> MagicMock:
         "content": f"Content for {chunk_id}",
     }
     return hit
-
-
-def _make_retriever() -> HybridRetriever:
-    with patch("app.components.hybrid_retriever.QdrantClient"):
-        return HybridRetriever(
-            qdrant_url=QDRANT_URL,
-            collection=COLLECTION,
-            ollama_url=OLLAMA_URL,
-            embedding_model=MODEL,
-        )
 
 
 def _make_query_response(hits: list[MagicMock]) -> MagicMock:
@@ -63,10 +69,7 @@ async def test_retrieve_returns_rrf_fused_results() -> None:
 
     dense_hits = [_make_hit("chunk-1", "doc-1", 0.9), _make_hit("chunk-2", "doc-1", 0.7)]
 
-    with (
-        patch.object(retriever, "_qdrant") as mock_qdrant,
-        patch.object(retriever, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)),
-    ):
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
         mock_qdrant.query_points.return_value = _make_query_response(dense_hits)
         results = await retriever.retrieve("hello world")
 
@@ -81,10 +84,7 @@ async def test_retrieve_returns_rrf_fused_results() -> None:
 async def test_retrieve_with_doc_id_filter() -> None:
     retriever = _make_retriever()
 
-    with (
-        patch.object(retriever, "_qdrant") as mock_qdrant,
-        patch.object(retriever, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)),
-    ):
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
         mock_qdrant.query_points.return_value = _make_query_response([])
         await retriever.retrieve("query", doc_ids=["doc-42"])
 
@@ -107,14 +107,10 @@ async def test_update_bm25_index() -> None:
 
     dense_hits = [_make_hit("c1", "d1", 0.8)]
 
-    with (
-        patch.object(retriever, "_qdrant") as mock_qdrant,
-        patch.object(retriever, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)),
-    ):
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
         mock_qdrant.query_points.return_value = _make_query_response(dense_hits)
         results = await retriever.retrieve("foo bar")
 
-    # Both c1 (from dense) and c2 (from BM25) should appear via fusion
     chunk_ids = [r.chunk_id for r in results]
     assert "c1" in chunk_ids
 
@@ -130,10 +126,7 @@ async def test_remove_from_bm25_prunes_document_chunks() -> None:
 
     retriever.remove_from_bm25("doc-1")
 
-    with (
-        patch.object(retriever, "_qdrant") as mock_qdrant,
-        patch.object(retriever, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)),
-    ):
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
         mock_qdrant.query_points.return_value = _make_query_response([])
         results = await retriever.retrieve("target words")
 
@@ -149,10 +142,7 @@ async def test_retrieve_returns_sparse_only_payloads_and_applies_doc_filter() ->
         [_make_payload("c1", "doc-1"), _make_payload("c2", "doc-2")],
     )
 
-    with (
-        patch.object(retriever, "_qdrant") as mock_qdrant,
-        patch.object(retriever, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)),
-    ):
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
         mock_qdrant.query_points.return_value = _make_query_response([])
         results = await retriever.retrieve("target words", doc_ids=["doc-2"])
 
@@ -165,10 +155,7 @@ async def test_retrieve_returns_sparse_only_payloads_and_applies_doc_filter() ->
 async def test_retrieve_uses_requested_collection() -> None:
     retriever = _make_retriever()
 
-    with (
-        patch.object(retriever, "_qdrant") as mock_qdrant,
-        patch.object(retriever, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)),
-    ):
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
         mock_qdrant.query_points.return_value = _make_query_response([])
         await retriever.retrieve("query", collection="routed_collection")
 
@@ -179,11 +166,13 @@ async def test_retrieve_uses_requested_collection() -> None:
 async def test_retrieve_empty_collection() -> None:
     retriever = _make_retriever()
 
-    with (
-        patch.object(retriever, "_qdrant") as mock_qdrant,
-        patch.object(retriever, "_embed", new=AsyncMock(return_value=FAKE_EMBEDDING)),
-    ):
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
         mock_qdrant.query_points.return_value = _make_query_response([])
         results = await retriever.retrieve("query with no results")
 
     assert results == []
+
+
+def test_embedding_model_attribute_exposed() -> None:
+    retriever = _make_retriever()
+    assert retriever.embedding_model == "nomic-embed-text"
