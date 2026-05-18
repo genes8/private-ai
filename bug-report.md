@@ -131,6 +131,49 @@ Ovaj fajl više nije lista otvorenih pretpostavki, nego provereno stanje posle v
 - **R5-12** (Auto-save UX): Namerna design odluka sa row-level indikatorima. Ako korisnici budu tražili eksplicitan "Save", dodati kasnije.
 - Ukupno kroz 5 rundi + provider runtime hardening: 108 stavki, 82 fixed, 14 not-a-bug/not-reproducible, 7 bounded/intentional, 3 improved, 5 code-quality.
 
+---
+
+## Round 6 Findings & Fixes (2026-05-18)
+
+| # | Severity | Status | Bug | Fajl | Napomena |
+|---|----------|--------|-----|------|----------|
+| R6-1 | High | Fixed (partial) | CSRF bypass — CSRF token provjera preskočena za login bez `access_token` cookie | `main.py` | CSRF double-submit se sada trigeruje na prisutnost `csrf_token` cookie, ne samo `access_token`. Origin check ostaje obavezan za login. Allowed-origin cross-login je prihvaćen tradeoff (SameSite=strict štiti). |
+| R6-2 | High | Fixed | `provider_api_key` čuvan nešifrovano u bazi | `app_config_store.py` | Dodat `"provider_api_key"` u `_SENSITIVE_KEYS` — Fernet enkriptovan pri upisu. |
+| R6-3 | Low | Fixed | Login password length rani-exit curio timing info | `auth/router.py` | Uklonjen rani exit za kratke passworde — bcrypt sada uvek teče po istoj putanji. |
+| R6-4 | Medium | Fixed | `session_id` bez UUID validacije | `chat_routes.py` | `field_validator` + regex `[0-9a-f]{8}-...-[0-9a-f]{12}`. |
+| R6-5 | Medium | Fixed | `runtime` varijabla provjeravana sa `"runtime" in dir()` | `chat_routes.py` | Inicijalizovana na `None` pre try bloka; check `if runtime is not None`. |
+| R6-6 | Medium | Fixed | DB sesija zatvorena pre async `_finalize()` | `chat_routes.py` | Async path otvara svoju `SessionLocal` instancu — ne zavisi od FastAPI dependency cleanup-a. |
+| R6-7 | Medium | Fixed | `AuditLog.model_used` čuva trace_id umjesto naziva modela | `chat_finalizer.py` | `finalize_chat_run()` prima `model_name: str` parametar; `model_used` kolona sada čuva `runtime.provider_type`. |
+| R6-8 | Low | Fixed | `_settings_live_cache` nije thread-safe | `admin_routes.py` | `threading.Lock` omotava read-check-write blok. |
+| R6-9 | Low | Fixed | `list_users` nema paginaciju | `admin_routes.py` | `limit` (1-1000, default 200) i `offset` parametri dodati. |
+| R6-10 | Medium | Fixed | `OllamaProvider.chat` concatenira system+user prompt | `provider_clients.py` | Prebačeno na `/api/chat` sa `messages` formatom — system prompt poštuje model. |
+| R6-11 | Medium | Fixed | Input guard bypass via Unicode homoglyphs/encoding | `input_guard.py` | `html.unescape()` + `unicodedata.normalize("NFKC")` + whitespace collapse pre injection checka; paterni koriste `\s+` umjesto literal razmaka. |
+| R6-12 | Low | Fixed (partial) | Passport regex false positives | `content_filter.py`, `output_filter.py` | Regex tighten: `\d{7,9}` + lookaround assertions. Manji false positivi ali ne 0. |
+| R6-13 | Low | Fixed | Login page neupotrebljiv na mobileu | `LoginPage.tsx` | `grid-cols-1 md:grid-cols-2`; brand panel skriven na mobileu (`hidden md:flex`). |
+| R6-14 | Low | Fixed | Invite modal bez email format validacije | `UsersPage.tsx` | Regex email check u `handleSubmit` pre submit-a. |
+| R6-15 | Low | Fixed | Temp password predvidljive strukture (`${seed}Aa!9`) | `UsersPage.tsx` | `crypto.getRandomValues(Uint8Array(20))` sa mixed charset; kompleksnost osigurana. |
+| R6-16 | Low | Fixed | Settings page bez ErrorBoundary | `App.tsx` | `<SettingsPage />` omotan u `<ErrorBoundary>`. |
+| R6-17 | Low | Fixed | `uploadDocument` ne emituje 401 unauthorized | `documents.ts` | Eksplicitni `res.status === 401` check + `emitUnauthorized()`; baca `ApiError` umjesto golog `Error`. |
+| R6-18 | Low | Fixed | `useChat` ne cancela stream na unmount | `useChat.ts` | `mountedRef` + `useEffect` cleanup poziva `abortRef.current?.abort()`; `setMessages`/`setSteps` u finally zaštićeni checkom. |
+| R6-19 | — | Not a bug | `provider_api_key` vraća samo boolean u API odgovoru | `admin_routes.py` | `"apiKeyConfigured": bool(provider_api_key_raw)` — vrijednost nikad ne napušta backend. |
+| R6-20 | — | Not a bug | CSV export bez CSRF headera | `audit.ts` | GET zahtjevi izuzeti iz CSRF po standardu. `SameSite=strict` cookie sprečava cross-site čitanje. |
+| R6-21 | — | Bounded limitation | Deaktivirani korisnik može koristiti JWT do isteka | `middleware.py` | `token_valid_after` setovan odmah; JWT ipak vrijedi do `exp`. Bez token blacklist-a ovo je inherentno JWT ograničenje. |
+| R6-22 | — | Bounded limitation | `AgentRun.session_id` bez FK constrainta | `models.py` | Orphaned records mogući, ne utiče na funkcionalnost. Promjena zahtijeva migraciju. |
+| R6-23 | — | Bounded limitation | Document delete: Qdrant cleanup nakon DB commit-a | `admin_routes.py` | Namjeran tradeoff — Qdrant failure ne blokira brisanje dokumenta; loguje se kao warning. |
+
+## Round 6 Verification
+
+- Backend: `.venv/bin/pytest -q` → `230 passed, 4 skipped`
+- Frontend: `npm run build` → uspješno
+
+## Round 6 Residual Notes
+
+- **R6-1** (CSRF login): Poboljšano ali ne potpuno — allowed-origin sajt može podnijeti login formu bez CSRF tokena ako korisnik nema csrf_token cookie. `SameSite=strict` + Origin check su primarne zaštite. Acceptabilno za pilot.
+- **R6-12** (Passport regex): 7+ cifara smanjuje false positive rate ali tehničke oznake poput `AB1234567` i dalje prolaze. Alternativa: whitelist-based pristup za dokumentspe specifikacije.
+- **R6-21** (JWT expiry): Za produkciju razmotriti token blacklist u Redis-u + provjeru `token_valid_after` u SSE stream loop-u.
+- **R6-22** (AgentRun FK): Dodati u backlog za sljedeći migration batch.
+- Ukupno kroz 6 rundi: ~131 stavki pregledano, 101 fixed, 17 not-a-bug/not-reproducible, 9 bounded/intentional, 4 improved.
+
 
 
 
