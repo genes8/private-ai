@@ -67,6 +67,13 @@ _ALLOWED_ORIGIN = "http://localhost:3000"
 # ---------------------------------------------------------------------------
 
 
+def _get_csrf(client: TestClient) -> str:
+    """Fetch a pre-login CSRF token and store it in the client's cookie jar."""
+    r = client.get("/auth/csrf")
+    assert r.status_code == 200
+    return r.json()["csrf_token"]
+
+
 def test_login_success(test_client: TestClient) -> None:
     from app.auth.middleware import hash_password
 
@@ -74,11 +81,12 @@ def test_login_success(test_client: TestClient) -> None:
     user = _make_user(password_hash=hashed)
     db = _mock_db_with_user(user)
 
+    csrf_token = _get_csrf(test_client)
     app.dependency_overrides[get_db] = _override_get_db(db)
     try:
         response = test_client.post(
             "/auth/login",
-            headers={"origin": _ALLOWED_ORIGIN},
+            headers={"origin": _ALLOWED_ORIGIN, "X-CSRF-Token": csrf_token},
             json={"email": "alice@example.com", "password": "SuperSecret123!"},
         )
     finally:
@@ -101,11 +109,12 @@ def test_login_wrong_password(test_client: TestClient) -> None:
     user = _make_user(password_hash=hashed)
     db = _mock_db_with_user(user)
 
+    csrf_token = _get_csrf(test_client)
     app.dependency_overrides[get_db] = _override_get_db(db)
     try:
         response = test_client.post(
             "/auth/login",
-            headers={"origin": _ALLOWED_ORIGIN},
+            headers={"origin": _ALLOWED_ORIGIN, "X-CSRF-Token": csrf_token},
             json={"email": "alice@example.com", "password": "WrongPassword999!"},
         )
     finally:
@@ -133,11 +142,12 @@ def test_login_account_locked(test_client: TestClient) -> None:
     )
     db = _mock_db_with_user(user)
 
+    csrf_token = _get_csrf(test_client)
     app.dependency_overrides[get_db] = _override_get_db(db)
     try:
         response = test_client.post(
             "/auth/login",
-            headers={"origin": _ALLOWED_ORIGIN},
+            headers={"origin": _ALLOWED_ORIGIN, "X-CSRF-Token": csrf_token},
             json={"email": "alice@example.com", "password": "SuperSecret123!"},
         )
     finally:
@@ -251,11 +261,12 @@ def test_decode_token_rejects_tampered() -> None:
 def test_login_short_password_rejected(test_client: TestClient) -> None:
     """Passwords shorter than 12 chars must be rejected server-side."""
     db = _mock_db_with_user(None)
+    csrf_token = _get_csrf(test_client)
     app.dependency_overrides[get_db] = _override_get_db(db)
     try:
         response = test_client.post(
             "/auth/login",
-            headers={"origin": _ALLOWED_ORIGIN},
+            headers={"origin": _ALLOWED_ORIGIN, "X-CSRF-Token": csrf_token},
             json={"email": "alice@example.com", "password": "short"},
         )
     finally:
@@ -263,6 +274,25 @@ def test_login_short_password_rejected(test_client: TestClient) -> None:
 
     assert response.status_code == 401
     assert "Invalid credentials" in response.json()["detail"]
+
+
+def test_get_csrf_token_sets_cookie(test_client: TestClient) -> None:
+    response = test_client.get("/auth/csrf")
+    assert response.status_code == 200
+    data = response.json()
+    assert "csrf_token" in data
+    assert len(data["csrf_token"]) >= 32
+    assert "csrf_token" in response.cookies
+
+
+def test_login_without_csrf_token_is_rejected(test_client: TestClient) -> None:
+    response = test_client.post(
+        "/auth/login",
+        headers={"origin": _ALLOWED_ORIGIN},
+        json={"email": "alice@example.com", "password": "SuperSecret123!"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF validation failed"
 
 
 def test_login_rejects_cross_origin_request(test_client: TestClient) -> None:
@@ -308,11 +338,12 @@ def test_expired_lockout_is_cleared_before_next_failed_attempt(test_client: Test
     )
     db = _mock_db_with_user(user)
 
+    csrf_token = _get_csrf(test_client)
     app.dependency_overrides[get_db] = _override_get_db(db)
     try:
         response = test_client.post(
             "/auth/login",
-            headers={"origin": _ALLOWED_ORIGIN},
+            headers={"origin": _ALLOWED_ORIGIN, "X-CSRF-Token": csrf_token},
             json={"email": "alice@example.com", "password": "WrongPassword999!"},
         )
     finally:

@@ -137,7 +137,7 @@ Ovaj fajl više nije lista otvorenih pretpostavki, nego provereno stanje posle v
 
 | # | Severity | Status | Bug | Fajl | Napomena |
 |---|----------|--------|-----|------|----------|
-| R6-1 | High | Fixed (partial) | CSRF bypass — CSRF token provjera preskočena za login bez `access_token` cookie | `main.py` | CSRF double-submit se sada trigeruje na prisutnost `csrf_token` cookie, ne samo `access_token`. Origin check ostaje obavezan za login. Allowed-origin cross-login je prihvaćen tradeoff (SameSite=strict štiti). |
+| R6-1 | High | Fixed | CSRF bypass — CSRF token provjera preskočena za login bez `access_token` cookie | `main.py`, `auth/router.py`, `frontend/auth.ts` | Dodat `GET /auth/csrf` endpoint koji emituje pre-login CSRF cookie. `protect_csrf` sada uvijek zahtijeva CSRF double-submit za `/auth/login` (ne samo kad postoji cookie). Frontend poziva `/auth/csrf` prije svakog login zahtjeva. `limit_body_size` reorderovan da se izvrši prije `protect_csrf` (LIFO). |
 | R6-2 | High | Fixed | `provider_api_key` čuvan nešifrovano u bazi | `app_config_store.py` | Dodat `"provider_api_key"` u `_SENSITIVE_KEYS` — Fernet enkriptovan pri upisu. |
 | R6-3 | Low | Fixed | Login password length rani-exit curio timing info | `auth/router.py` | Uklonjen rani exit za kratke passworde — bcrypt sada uvek teče po istoj putanji. |
 | R6-4 | Medium | Fixed | `session_id` bez UUID validacije | `chat_routes.py` | `field_validator` + regex `[0-9a-f]{8}-...-[0-9a-f]{12}`. |
@@ -148,7 +148,7 @@ Ovaj fajl više nije lista otvorenih pretpostavki, nego provereno stanje posle v
 | R6-9 | Low | Fixed | `list_users` nema paginaciju | `admin_routes.py` | `limit` (1-1000, default 200) i `offset` parametri dodati. |
 | R6-10 | Medium | Fixed | `OllamaProvider.chat` concatenira system+user prompt | `provider_clients.py` | Prebačeno na `/api/chat` sa `messages` formatom — system prompt poštuje model. |
 | R6-11 | Medium | Fixed | Input guard bypass via Unicode homoglyphs/encoding | `input_guard.py` | `html.unescape()` + `unicodedata.normalize("NFKC")` + whitespace collapse pre injection checka; paterni koriste `\s+` umjesto literal razmaka. |
-| R6-12 | Low | Fixed (partial) | Passport regex false positives | `content_filter.py`, `output_filter.py` | Regex tighten: `\d{7,9}` + lookaround assertions. Manji false positivi ali ne 0. |
+| R6-12 | Low | Fixed (partial) | Passport regex false positives | `content_filter.py`, `output_filter.py` | Regex tighten: `\d{7,9}` + lookaround assertions. Manji false positivi ali ne 0. Dodavanje `-`/`/` u lookaround bi stvorilo false negative (passport/AB1234567, AB1234567/2024) — gori od false positive. Zahtijeva kontekstualni/ML pristup za kompletno rješenje. |
 | R6-13 | Low | Fixed | Login page neupotrebljiv na mobileu | `LoginPage.tsx` | `grid-cols-1 md:grid-cols-2`; brand panel skriven na mobileu (`hidden md:flex`). |
 | R6-14 | Low | Fixed | Invite modal bez email format validacije | `UsersPage.tsx` | Regex email check u `handleSubmit` pre submit-a. |
 | R6-15 | Low | Fixed | Temp password predvidljive strukture (`${seed}Aa!9`) | `UsersPage.tsx` | `crypto.getRandomValues(Uint8Array(20))` sa mixed charset; kompleksnost osigurana. |
@@ -163,16 +163,16 @@ Ovaj fajl više nije lista otvorenih pretpostavki, nego provereno stanje posle v
 
 ## Round 6 Verification
 
-- Backend: `.venv/bin/pytest -q` → `230 passed, 4 skipped`
+- Backend: `.venv/bin/pytest -q` → `232 passed, 4 skipped`
 - Frontend: `npm run build` → uspješno
 
 ## Round 6 Residual Notes
 
-- **R6-1** (CSRF login): Poboljšano ali ne potpuno — allowed-origin sajt može podnijeti login formu bez CSRF tokena ako korisnik nema csrf_token cookie. `SameSite=strict` + Origin check su primarne zaštite. Acceptabilno za pilot.
+- **R6-1** (CSRF login): Potpuno fixovano — `GET /auth/csrf` endpoint + uvijek obavezan CSRF na login. Middleware reorderovan (body limit prije CSRF). 2 nova testa.
 - **R6-12** (Passport regex): 7+ cifara smanjuje false positive rate ali tehničke oznake poput `AB1234567` i dalje prolaze. Alternativa: whitelist-based pristup za dokumentspe specifikacije.
 - **R6-21** (JWT expiry): Za produkciju razmotriti token blacklist u Redis-u + provjeru `token_valid_after` u SSE stream loop-u.
 - **R6-22** (AgentRun FK): Dodati u backlog za sljedeći migration batch.
-- Ukupno kroz 6 rundi: ~131 stavki pregledano, 101 fixed, 17 not-a-bug/not-reproducible, 9 bounded/intentional, 4 improved.
+- Ukupno kroz 6 rundi + Round 7 CSRF fix: ~131 stavki pregledano, 102 fixed, 17 not-a-bug/not-reproducible, 9 bounded/intentional, 4 improved.
 
 
 

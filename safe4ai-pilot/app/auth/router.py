@@ -52,6 +52,21 @@ def _clear_expired_lockout(user: User, *, now: datetime) -> bool:
     return True
 
 
+@router.get("/csrf")
+async def get_csrf_token(response: Response) -> dict[str, str]:
+    """Issue a pre-login CSRF token.  Call this before POST /auth/login."""
+    token = secrets.token_urlsafe(32)
+    response.set_cookie(
+        key=_CSRF_COOKIE_NAME,
+        value=token,
+        max_age=300,
+        httponly=False,
+        samesite="strict",
+        secure=settings.enforce_https,
+    )
+    return {"csrf_token": token}
+
+
 @router.post("/login")
 @limiter.limit("10/minute")
 async def login(

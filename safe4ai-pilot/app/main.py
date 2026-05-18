@@ -88,6 +88,39 @@ async def set_secure_headers(
 
 
 @app.middleware("http")
+async def protect_csrf(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    unsafe_methods = {"POST", "PUT", "PATCH", "DELETE"}
+    if request.method in unsafe_methods:
+        origin = request.headers.get("origin")
+        requires_origin_check = request.url.path == "/auth/login"
+        if requires_origin_check and not origin:
+            response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+            response.headers.update(secure_headers.headers())
+            return response
+        if origin and origin not in settings.allowed_origins_list:
+            response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+            response.headers.update(secure_headers.headers())
+            return response
+
+        # Verify CSRF double-submit token for all authenticated requests and always for login
+        needs_csrf = (
+            request.cookies.get("access_token")
+            or request.cookies.get("csrf_token")
+            or request.url.path == "/auth/login"
+        )
+        if needs_csrf:
+            csrf_cookie = request.cookies.get("csrf_token")
+            csrf_header = request.headers.get("X-CSRF-Token")
+            if not csrf_cookie or not csrf_header or not compare_digest(csrf_header, csrf_cookie):
+                response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+                response.headers.update(secure_headers.headers())
+                return response
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def limit_body_size(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
@@ -136,34 +169,6 @@ async def limit_body_size(
                 request._receive = replay_receive
             except Exception:
                 return Response(status_code=400, content="Failed to read request body")
-    return await call_next(request)
-
-
-@app.middleware("http")
-async def protect_csrf(
-    request: Request, call_next: Callable[[Request], Awaitable[Response]]
-) -> Response:
-    unsafe_methods = {"POST", "PUT", "PATCH", "DELETE"}
-    if request.method in unsafe_methods:
-        origin = request.headers.get("origin")
-        requires_origin_check = request.url.path == "/auth/login"
-        if requires_origin_check and not origin:
-            response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
-            response.headers.update(secure_headers.headers())
-            return response
-        if origin and origin not in settings.allowed_origins_list:
-            response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
-            response.headers.update(secure_headers.headers())
-            return response
-
-        # Verify CSRF double-submit token whenever access_token or csrf_token cookie is present
-        if request.cookies.get("access_token") or request.cookies.get("csrf_token"):
-            csrf_cookie = request.cookies.get("csrf_token")
-            csrf_header = request.headers.get("X-CSRF-Token")
-            if not csrf_cookie or not csrf_header or not compare_digest(csrf_header, csrf_cookie):
-                response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
-                response.headers.update(secure_headers.headers())
-                return response
     return await call_next(request)
 
 
