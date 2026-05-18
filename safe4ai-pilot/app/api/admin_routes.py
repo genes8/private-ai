@@ -1128,8 +1128,13 @@ def test_provider_connection(
                     f"{base_url.rstrip('/')}/models",
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
-                if resp.status_code >= 500:
-                    raise HTTPException(status_code=503, detail="Provider returned server error")
+                if resp.status_code >= 400:
+                    detail = (
+                        "Invalid credentials — check your API key"
+                        if resp.status_code in {401, 403}
+                        else "Provider returned an error"
+                    )
+                    raise HTTPException(status_code=503, detail=detail)
         except HTTPException:
             raise
         except Exception as exc:

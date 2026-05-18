@@ -202,12 +202,11 @@ def _ensure_qdrant_collection() -> None:
     configured embedding model.  Raises RuntimeError on dimension mismatch so
     that startup fails loudly rather than silently producing wrong embeddings.
     """
-    from app.services.app_config_store import load_app_config
-    from app.services.runtime_config import expected_vector_size
+    from app.services.runtime_config import expected_vector_size, load_runtime_config
 
     with SessionLocal() as db:
-        cfg = load_app_config(db)
-    embedding_model = str(cfg.get("embedding_model", settings.embedding_model))
+        runtime = load_runtime_config(db)
+    embedding_model = runtime.embedding_model
 
     try:
         client = QdrantClient(url=settings.qdrant_url)

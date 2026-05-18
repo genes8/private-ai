@@ -29,42 +29,42 @@ def finalize_chat_run(
     cost_usd = usage.total_tokens / 1000.0 * cost_per_1k_tokens
     now = datetime.now(UTC)
 
-    with db.begin():
-        row = db.get(DbSession, final.session_id)
-        if row is not None:
-            row.state_json = updated.model_dump(mode="json")
-            row.updated_at = now
+    row = db.get(DbSession, final.session_id)
+    if row is not None:
+        row.state_json = updated.model_dump(mode="json")
+        row.updated_at = now
 
-        db.add(
-            AuditLog(
-                id=str(uuid.uuid4()),
-                user_id=user_id,
-                session_id=final.session_id,
-                action_type="chat_query",
-                query_text=query[:500],
-                response_metadata={
-                    "trace_id": final.trace_id,
-                    "k_retrieved": k_retrieved,
-                    "status": "completed",
-                    "usage_source": usage.source,
-                    "prompt_tokens": usage.prompt_tokens,
-                    "completion_tokens": usage.completion_tokens,
-                    "total_tokens": usage.total_tokens,
-                },
-                latency_ms=latency_ms,
-                model_used=model_name,
-                trace_id=final.trace_id,
-            )
+    db.add(
+        AuditLog(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            session_id=final.session_id,
+            action_type="chat_query",
+            query_text=query[:500],
+            response_metadata={
+                "trace_id": final.trace_id,
+                "k_retrieved": k_retrieved,
+                "status": "completed",
+                "usage_source": usage.source,
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+            },
+            latency_ms=latency_ms,
+            model_used=model_name,
+            trace_id=final.trace_id,
         )
-        db.add(
-            AgentRun(
-                id=str(uuid.uuid4()),
-                session_id=final.session_id,
-                started_at=now,
-                finished_at=now,
-                status="completed",
-                cost_usd=cost_usd,
-                final_output=None,
-                error=None,
-            )
+    )
+    db.add(
+        AgentRun(
+            id=str(uuid.uuid4()),
+            session_id=final.session_id,
+            started_at=now,
+            finished_at=now,
+            status="completed",
+            cost_usd=cost_usd,
+            final_output=None,
+            error=None,
         )
+    )
+    db.commit()

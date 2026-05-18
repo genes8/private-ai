@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.services.provider_clients import ProviderUsage
 
 
 class Message(BaseModel):
@@ -47,6 +51,8 @@ class RouterDecision(BaseModel):
 
 
 class PrivateAIState(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     session_id: str
     user_id: str
     messages: list[Message] = Field(default_factory=list)
@@ -81,6 +87,7 @@ class PrivateAIState(BaseModel):
     # observability
     trace_id: str = ""
     cost_usd: float = 0.0
+    provider_usage: ProviderUsage | None = None
     errors: list[str] = Field(default_factory=list)
 
     # human review flag — set by graph when answer quality is insufficient

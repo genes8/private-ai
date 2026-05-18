@@ -414,7 +414,7 @@ async def chat_stream(
         usage = _usage_or_estimate(
             body.question,
             final.draft_answer or "",
-            getattr(final, "usage", None),
+            final.provider_usage,
         )
 
         runtime = None

@@ -218,7 +218,13 @@ def build_graph(
             prompt = template.template.format(context=context, query=query)
 
             try:
-                answer = (await _llm_generate(prompt, timeout=120.0)).strip()
+                provider_usage = None
+                if chat_client is not None:
+                    result = await chat_client.chat("", prompt)
+                    answer = result.content.strip()
+                    provider_usage = result.usage
+                else:
+                    answer = (await _llm_generate(prompt, timeout=120.0)).strip()
             except Exception as exc:
                 return {
                     "draft_answer": _NO_ANSWER,
@@ -241,6 +247,7 @@ def build_graph(
                 "citations": citations,
                 "generation_context": relevant,
                 "current_step": "output_filter",
+                "provider_usage": provider_usage,
             }
 
     async def output_filter_node(state: PrivateAIState) -> dict[str, Any]:
