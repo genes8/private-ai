@@ -9,7 +9,7 @@ import structlog
 from langgraph.graph import END, StateGraph
 from opentelemetry import trace as otel_trace
 
-from app.agents.adaptive_router import decide_next_step, route_after_grade
+from app.agents.adaptive_router import route_after_grade, route_quality_gate
 from app.agents.document_grader import grade_chunks
 from app.agents.query_decomposer import decompose_query
 from app.components.hybrid_retriever import HybridRetriever
@@ -48,6 +48,7 @@ def build_graph(
     ollama_url: str | None = None,
     ollama_model: str | None = None,
     retrieval_top_k: int = 6,
+    rerank_threshold: float = 0.45,
     http_client: httpx.AsyncClient | None = None,
 ) -> Any:
     """Build and compile the LangGraph StateGraph for the RAG pipeline."""
@@ -101,7 +102,7 @@ def build_graph(
                 rewritten = await _llm_generate(prompt)
                 return {"rewritten_query": rewritten.strip() or query, "current_step": "retrieve"}
             except Exception as exc:
-                logger.warning("rewrite_node_failed", error=str(exc))
+                logger.warning("rewrite_node_failed", error=str(exc), exc_type=type(exc).__name__)
                 return {"rewritten_query": query, "current_step": "retrieve"}
 
     async def retrieve_node(state: PrivateAIState) -> dict[str, Any]:
@@ -137,24 +138,12 @@ def build_graph(
                 ollama_url=_ollama_url,
                 model=_ollama_model,
                 client=http_client,
+                rerank_threshold=rerank_threshold,
             )
             relevant_count = sum(1 for c in graded if c.relevant)
             span.set_attribute("relevant_chunks", relevant_count)
             routing_state = state.model_copy(update={"graded_chunks": graded})
-            try:
-                decision = await decide_next_step(
-                    routing_state,
-                    ["generate", "decompose"],
-                    chat_client=chat_client,
-                    ollama_url=_ollama_url,
-                    model=_ollama_model,
-                    client=http_client,
-                )
-            except Exception as exc:
-                logger.warning("grade_routing_failed", error=str(exc))
-                decision = route_after_grade(routing_state)
-            if decision == "generate" and route_after_grade(routing_state) == "decompose":
-                decision = "decompose"
+            decision = route_after_grade(routing_state)
             span.set_attribute("routing_decision", decision)
             return {"graded_chunks": graded, "current_step": decision}
 
@@ -182,6 +171,7 @@ def build_graph(
                         ollama_url=_ollama_url,
                         model=_ollama_model,
                         client=http_client,
+                        rerank_threshold=rerank_threshold,
                     )
                     all_graded.extend(graded)
                 except Exception as exc:
@@ -285,20 +275,15 @@ def build_graph(
                 allowed = ["respond", "retrieve", "fallback"]
 
             routing_state = state.model_copy(update={"grounded": grounded})
-            try:
-                decision = await decide_next_step(
-                    routing_state,
-                    allowed,
-                    chat_client=chat_client,
-                    ollama_url=_ollama_url,
-                    model=_ollama_model,
-                    client=http_client,
-                )
-            except Exception as exc:
-                logger.warning("quality_gate_routing_failed", error=str(exc))
-                decision = "respond" if grounded else "fallback"
-            if decision == "respond" and not grounded:
-                decision = "fallback"
+            decision = route_quality_gate(routing_state)
+            no_answer_without_context = state.draft_answer == _NO_ANSWER and not has_relevant
+            if (
+                state.retrieval_attempts < _MAX_RETRIEVAL_ATTEMPTS
+                and not grounded
+                and decision == "fallback"
+                and not no_answer_without_context
+            ):
+                decision = "retrieve"
             span.set_attribute("grounded", grounded)
             span.set_attribute("routing_decision", decision)
             return {"grounded": grounded, "current_step": decision}

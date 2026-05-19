@@ -12,6 +12,18 @@ from app.prompts.registry import get_prompt
 _MAX_CONCURRENT_GRADES = 5
 
 
+def grade_chunks_by_score(chunks: list[RankedChunk], threshold: float) -> list[GradedChunk]:
+    """Grade chunks using rerank score only — no LLM call."""
+    return [
+        GradedChunk(
+            **chunk.model_dump(),
+            relevant=chunk.rerank_score >= threshold,
+            reason="rerank",
+        )
+        for chunk in chunks
+    ]
+
+
 async def grade_chunks(
     query: str,
     chunks: list[RankedChunk],
@@ -20,9 +32,13 @@ async def grade_chunks(
     ollama_url: str = "",
     model: str = "",
     client: httpx.AsyncClient | None = None,
+    rerank_threshold: float | None = None,
 ) -> list[GradedChunk]:
     if not chunks:
         return []
+
+    if rerank_threshold is not None:
+        return grade_chunks_by_score(chunks, rerank_threshold)
 
     template = get_prompt("document_grader", "v1")
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_GRADES)

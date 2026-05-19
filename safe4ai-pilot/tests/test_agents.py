@@ -85,12 +85,12 @@ def _smart_ollama_handler(
     return handler
 
 
-def _build_graph(handler: Any) -> Any:
+def _build_graph(handler: Any, *, chunks: list[RankedChunk] | None = None) -> Any:
     from app.agents.graph import build_graph
     from app.components.hybrid_retriever import HybridRetriever
     from app.components.reranker import Reranker
 
-    two_chunks = [_make_ranked_chunk(), _make_ranked_chunk(chunk_id="c2")]
+    two_chunks = chunks or [_make_ranked_chunk(), _make_ranked_chunk(chunk_id="c2")]
     retriever = MagicMock(spec=HybridRetriever)
     retriever.retrieve = AsyncMock(return_value=two_chunks)
 
@@ -143,12 +143,17 @@ async def test_scenario_single_turn_grounded_answer() -> None:
 
 @pytest.mark.asyncio
 async def test_scenario_out_of_scope_goes_to_fallback() -> None:
+    low_score_chunks = [
+        _make_ranked_chunk(rerank_score=0.1),
+        _make_ranked_chunk(chunk_id="c2", rerank_score=0.2),
+    ]
     graph, client = _build_graph(
         _smart_ollama_handler(
             grade_relevant=False,
             grade_decision="decompose",
             quality_gate_decision="fallback",
-        )
+        ),
+        chunks=low_score_chunks,
     )
     async with client:
         state = _make_state(
@@ -175,7 +180,11 @@ async def test_scenario_decomposer_triggers_when_few_relevant_chunks() -> None:
             grade_decision="decompose",
             quality_gate_decision="fallback",
             decompose_sub_queries=["What is leave policy?", "How many vacation days?"],
-        )
+        ),
+        chunks=[
+            _make_ranked_chunk(rerank_score=0.9),
+            _make_ranked_chunk(chunk_id="c2", rerank_score=0.2),
+        ],
     )
     async with client:
         state = _make_state(
@@ -193,39 +202,34 @@ async def test_scenario_decomposer_triggers_when_few_relevant_chunks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scenario_self_correction_loop_guard() -> None:
-    """quality_gate routes to 'retrieve' once, then loop guard forces fallback."""
-    call_counts: dict[str, int] = {"quality_gate": 0}
-
+async def test_no_answer_with_no_relevant_chunks_does_not_self_correct() -> None:
+    """No relevant chunks already produce a final fallback; do not retrieve/rerank again."""
     def stateful_handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         prompt: str = body.get("prompt", "")
 
         if "search query optimizer" in prompt:
             return httpx.Response(200, json={"response": "refined query"})
-        if "grading whether a document chunk" in prompt:
-            payload = {"relevant": False, "reason": "off topic"}
-            return httpx.Response(200, json={"response": json.dumps(payload)})
         if "simpler sub-questions" in prompt:
             return httpx.Response(200, json={"response": json.dumps({"sub_queries": ["sub-q"]})})
-        if "pipeline router" in prompt and "Current step: quality_gate" in prompt:
-            call_counts["quality_gate"] += 1
-            # First quality_gate call: try self-correction; second: only fallback is sensible
-            decision = "retrieve" if call_counts["quality_gate"] == 1 else "fallback"
-            return httpx.Response(200, json={"response": json.dumps({"decision": decision})})
-        if "pipeline router" in prompt:
-            return httpx.Response(200, json={"response": json.dumps({"decision": "decompose"})})
-        if "Answer the following question" in prompt:
-            return httpx.Response(200, json={"response": ""})
+        if "grading whether a document chunk" in prompt or "pipeline router" in prompt:
+            return httpx.Response(500, json={"error": "unexpected LLM call"})
         return httpx.Response(200, json={"response": ""})
 
-    graph, client = _build_graph(stateful_handler)
+    graph, client = _build_graph(
+        stateful_handler,
+        chunks=[
+            _make_ranked_chunk(rerank_score=0.1),
+            _make_ranked_chunk(chunk_id="c2", rerank_score=0.2),
+        ],
+    )
     async with client:
         state = _make_state()
         result = await graph.ainvoke(state)
 
     final = result if isinstance(result, PrivateAIState) else PrivateAIState(**result)
-    assert final.retrieval_attempts >= 2
+    assert final.retrieval_attempts == 1
+    assert final.current_step == "fallback"
     assert final.status == "completed"
 
 
@@ -452,32 +456,32 @@ class TestRuntimeSafety:
         assert final.grounded is False
 
     @pytest.mark.asyncio
-    async def test_grade_router_500_with_no_relevant_chunks_routes_to_decompose(self) -> None:
-        """HTTP 500 from grade router → sync fallback (route_after_grade) → decompose."""
+    async def test_no_relevant_chunks_route_to_decompose_without_grade_router(self) -> None:
+        """0 score-relevant chunks → sync route_after_grade → decompose."""
 
         def handler(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content)
             prompt: str = body.get("prompt", "")
             if "search query optimizer" in prompt:
                 return httpx.Response(200, json={"response": "refined"})
-            if "grading whether a document chunk" in prompt:
-                payload = {"relevant": False, "reason": "off topic"}
-                return httpx.Response(200, json={"response": json.dumps(payload)})
             if "simpler sub-questions" in prompt:
                 return httpx.Response(200, json={"response": json.dumps({"sub_queries": ["sub"]})})
-            if "pipeline router" in prompt and "Current step: quality_gate" in prompt:
-                return httpx.Response(200, json={"response": json.dumps({"decision": "fallback"})})
-            if "pipeline router" in prompt:
-                return httpx.Response(500, json={"error": "router down"})
+            if "grading whether a document chunk" in prompt or "pipeline router" in prompt:
+                return httpx.Response(500, json={"error": "unexpected LLM call"})
             return httpx.Response(200, json={"response": ""})
 
-        graph, client = _build_graph(handler)
+        graph, client = _build_graph(
+            handler,
+            chunks=[
+                _make_ranked_chunk(rerank_score=0.1),
+                _make_ranked_chunk(chunk_id="c2", rerank_score=0.2),
+            ],
+        )
         async with client:
             result = await graph.ainvoke(_make_state())
 
         final = result if isinstance(result, PrivateAIState) else PrivateAIState(**result)
-        # sync fallback: 0 relevant chunks → decompose → sub_queries populated
-        assert len(final.sub_queries) > 0, "decompose must have run after grade router 500"
+        assert len(final.sub_queries) > 0, "decompose must run when score grading finds no relevant chunks"
         assert final.status == "completed"
 
     @pytest.mark.asyncio
@@ -504,6 +508,55 @@ class TestRuntimeSafety:
 
         final = result if isinstance(result, PrivateAIState) else PrivateAIState(**result)
         assert final.requires_human_review is True
+
+    @pytest.mark.asyncio
+    async def test_graph_uses_score_grading_and_sync_routing_without_extra_llm_calls(self) -> None:
+        from app.agents.graph import build_graph
+        from app.components.hybrid_retriever import HybridRetriever
+        from app.components.reranker import Reranker
+
+        requests: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            prompt: str = body.get("prompt", "")
+            requests.append(prompt)
+            if "search query optimizer" in prompt:
+                return httpx.Response(200, json={"response": "refined query"})
+            if "Answer the following question" in prompt:
+                return httpx.Response(200, json={"response": "Evidence-backed answer."})
+            return httpx.Response(500)
+
+        retriever = MagicMock(spec=HybridRetriever)
+        retriever.retrieve = AsyncMock(
+            return_value=[
+                _make_ranked_chunk(chunk_id="c1", rerank_score=0.9),
+                _make_ranked_chunk(chunk_id="c2", rerank_score=0.8),
+            ]
+        )
+        reranker = MagicMock(spec=Reranker)
+        reranker.rerank.return_value = retriever.retrieve.return_value
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            graph = build_graph(
+                retriever=retriever,
+                reranker=reranker,
+                ollama_url="http://mock",
+                ollama_model="test",
+                http_client=client,
+            )
+            result = await graph.ainvoke(_make_state())
+
+        final = result if isinstance(result, PrivateAIState) else PrivateAIState(**result)
+        assert final.status == "completed"
+        assert final.current_step == "respond"
+        assert final.draft_answer == "Evidence-backed answer."
+        assert len(requests) == 2
+        assert any("search query optimizer" in prompt for prompt in requests)
+        assert any("Answer the following question" in prompt for prompt in requests)
+        assert not any("grading whether a document chunk" in prompt for prompt in requests)
+        assert not any("pipeline router" in prompt for prompt in requests)
 
 
 class TestComponentUnit:

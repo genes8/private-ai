@@ -167,5 +167,6 @@ def build_runtime_components(db: Session) -> tuple[RuntimeConfig, HybridRetrieve
         ollama_url=runtime.provider_base_url,
         ollama_model=runtime.chat_model,
         retrieval_top_k=runtime.retrieval_k,
+        rerank_threshold=runtime.score_floor,
     )
     return runtime, retriever, reranker, graph

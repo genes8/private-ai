@@ -169,7 +169,8 @@ class OllamaProvider:
             )
         response.raise_for_status()
         payload = response.json()
-        content = payload.get("message", {}).get("content", "") or payload.get("response", "")
+        message = payload.get("message")
+        content = (message.get("content", "") if isinstance(message, dict) else "") or payload.get("response", "")
         return ChatResult(content=str(content), usage=None)
 
     async def embed_query(self, query: str) -> list[float]:

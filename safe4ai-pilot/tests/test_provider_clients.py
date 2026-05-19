@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from unittest.mock import patch
 
-from app.services.provider_clients import OpenAICompatibleProvider
+from app.services.provider_clients import OllamaProvider, OpenAICompatibleProvider
 
 
 @pytest.mark.asyncio
@@ -47,3 +48,32 @@ async def test_openai_provider_describe_image_uses_multimodal_payload() -> None:
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"] == "data:image/png;base64,ZmFrZS1iNjQ="
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_chat_handles_null_message_with_response_fallback() -> None:
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, *_args: object, **_kwargs: object) -> httpx.Response:
+            request = httpx.Request("POST", "http://ollama.test/api/chat")
+            return httpx.Response(
+                200,
+                json={"message": None, "response": "fallback text"},
+                request=request,
+            )
+
+    with patch("app.services.provider_clients.httpx.AsyncClient", return_value=_Client()):
+        provider = OllamaProvider(
+            base_url="http://ollama.test",
+            chat_model="qwen",
+            embedding_model="nomic",
+            vision_model="vision",
+        )
+        result = await provider.chat("", "hello")
+
+    assert result.content == "fallback text"
