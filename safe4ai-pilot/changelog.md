@@ -32,5 +32,18 @@ Full middleware security audit performed. 10 findings identified and fixed acros
 ### New files
 - `audit-code-report.md` — Full security audit report with detailed findings
 
+### Test harness
+- `tests/test_security_audit.py` — 36 regression tests covering all 10 findings:
+  - F-01: CL/TE desync rejection (3 tests)
+  - F-02: Chat body size bypass (2 tests)
+  - F-03: Port exposure check (1 test)
+  - F-04: SSRF protection (12 tests — localhost, metadata, RFC1918, IPv6, scheme, DNS)
+  - F-05: Safe body replay (2 tests)
+  - F-06: Health info masking (2 tests)
+  - F-07: SSE error sanitization (1 test)
+  - F-08: nginx hardening (4 tests)
+  - F-09: Default credentials (3 tests)
+  - F-10: CSRF gap (6 tests)
+
 ### Test results
-- 233 tests passing, 0 failures
+- 269 tests passing, 0 failures (233 original + 36 new security audit)
