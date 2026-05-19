@@ -236,6 +236,14 @@ def _build_run_state(
     )
 
 
+def _merge_stream_state(current: PrivateAIState, update: PrivateAIState | dict[str, Any]) -> PrivateAIState:
+    if isinstance(update, PrivateAIState):
+        return update
+    merged = current.model_dump()
+    merged.update(update)
+    return PrivateAIState(**merged)
+
+
 def _save_assistant_reply(
     convo: ConversationManager, final: PrivateAIState
 ) -> None:
@@ -355,6 +363,7 @@ async def chat_stream(
 
         started_at = time.monotonic()
         final: PrivateAIState | None = None
+        stream_state = run_state
         active_step: str | None = None
 
         try:
@@ -375,10 +384,9 @@ async def chat_stream(
 
                     # Capture the last node state as final
                     node_state = chunk[node_name]
-                    if isinstance(node_state, PrivateAIState):
-                        final = node_state
-                    elif isinstance(node_state, dict):
-                        final = PrivateAIState(**node_state)
+                    if isinstance(node_state, PrivateAIState | dict):
+                        stream_state = _merge_stream_state(stream_state, node_state)
+                        final = stream_state
 
             # Close last step
             if active_step:

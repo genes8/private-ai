@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -173,6 +174,52 @@ def test_chat_stream_rejects_when_monthly_cost_ceiling_reached(authed_client: Te
 
     assert response.status_code == 429
     assert "Monthly cost ceiling reached" in response.json()["detail"]
+
+
+def test_chat_stream_merges_langgraph_partial_updates(authed_client: TestClient) -> None:
+    class _PartialUpdateGraph:
+        async def astream(self, _state: PrivateAIState) -> Any:
+            yield {"intake": {"current_step": "rewrite"}}
+            yield {"rewrite": {"rewritten_query": "rewritten question", "current_step": "retrieve"}}
+            yield {
+                "generate": {
+                    "draft_answer": "Streamed answer",
+                    "citations": [
+                        Citation(
+                            filename="doc.pdf",
+                            page_number=1,
+                            excerpt="Streamed answer",
+                            score=0.8,
+                        )
+                    ],
+                    "current_step": "output_filter",
+                }
+            }
+            yield {"respond": {"status": "completed", "current_step": "respond"}}
+
+    session_id = "sess-stream"
+    new_session = "app.services.conversation.ConversationManager.new_session"
+    load_session = "app.services.conversation.ConversationManager.load_session"
+    with patch(new_session, return_value=session_id), patch(
+        load_session,
+        return_value=PrivateAIState(session_id=session_id, user_id="u1"),
+    ), patch("app.api.chat_routes.finalize_chat_run"), patch(
+        "app.api.chat_routes.load_runtime_config",
+        return_value=MagicMock(sse_done_mode="strict", provider_type="ollama"),
+    ):
+        authed_client.app.state.graph = _PartialUpdateGraph()  # type: ignore[union-attr]
+        with authed_client.stream(
+            "POST",
+            "/chat/stream",
+            json={"question": "What is streamed?"},
+        ) as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "Pipeline error" not in body
+    assert 'event: token\ndata: {"delta": "Streamed ' in body
+    assert 'event: token\ndata: {"delta": "answer"}' in body
+    assert f'"sessionId": "{session_id}"' in body
 
 
 def test_chat_rejects_when_projected_request_cost_exceeds_daily_ceiling(
