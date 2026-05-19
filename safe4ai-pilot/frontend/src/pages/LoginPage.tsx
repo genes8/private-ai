@@ -1,12 +1,15 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
+import { apiFetch } from "../api/client";
 import { login } from "../api/auth";
 import Button from "../components/Button";
 import Logo from "../components/Logo";
+
+const fetchHealth = () => apiFetch<{ status: string }>("/health");
 
 const schema = z.object({
   email:    z.string().email("Enter a valid email"),
@@ -18,6 +21,10 @@ export default function LoginPage() {
   const [serverError, setServerError] = useState("");
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { data: health, error: healthError } = useQuery({ queryKey: ["health"], queryFn: fetchHealth, staleTime: 30_000, retry: 1 });
+  const healthChecking = !health && !healthError;
+  const healthOk = health?.status === "ok";
+  const healthLabel = healthChecking ? "Checking…" : healthOk ? "All systems operational" : "Some systems degraded";
 
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<Form>({
     resolver: zodResolver(schema),
@@ -70,8 +77,8 @@ export default function LoginPage() {
         </div>
 
         <div className="relative flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#2f8f5e" }} />
-          <span className="font-mono text-[10.5px]" style={{ color: "#4a4f57" }}>All systems operational</span>
+          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: healthChecking || healthOk ? "#2f8f5e" : "#e07a3e" }} />
+          <span className="font-mono text-[10.5px]" style={{ color: "#4a4f57" }}>{healthLabel}</span>
         </div>
       </div>
 

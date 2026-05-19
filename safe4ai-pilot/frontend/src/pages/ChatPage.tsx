@@ -1,6 +1,8 @@
 import { BookOpen, Settings, Square } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "../api/client";
 import type { SseCite } from "../api/chat";
 import Avatar from "../components/Avatar";
 import Button from "../components/Button";
@@ -13,13 +15,12 @@ import StreamingPipeline from "../components/chat/StreamingPipeline";
 import SuggestedPrompt from "../components/chat/SuggestedPrompt";
 import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
-import { useDocuments } from "../hooks/useDocuments";
 
 const SUGGESTED = [
-  { tag: "Policy",    question: "What is the annual leave entitlement?",         source: "hr_policy.pdf" },
-  { tag: "Finance",   question: "Who approves capital expenditure over €50,000?", source: "finance_policy.pdf" },
-  { tag: "IT",        question: "What is the minimum password length?",            source: "it_policy.pdf" },
-  { tag: "Compliance",question: "What are our data retention obligations?",        source: "compliance_policy.pdf" },
+  { tag: "Policy",    question: "What is the annual leave entitlement?" },
+  { tag: "Finance",   question: "Who approves capital expenditure over €50,000?" },
+  { tag: "IT",        question: "What is the minimum password length?" },
+  { tag: "Compliance",question: "What are our data retention obligations?" },
 ];
 
 function timeOfDay() {
@@ -30,15 +31,19 @@ function timeOfDay() {
 export default function ChatPage() {
   const { me, isAdmin, signOut } = useAuth();
   const { messages, steps, streaming, sendMessage, rate, stop } = useChat();
-  const { docs } = useDocuments();
+  const { data: corpusStats } = useQuery({
+    queryKey: ["corpus-stats"],
+    queryFn: () => apiFetch<{ docCount: number; chunkCount: number }>("/admin/corpus-stats"),
+    staleTime: 10_000,
+  });
   const [composer, setComposer] = useState("");
   const [activeCitationId, setActiveCitationId] = useState<string | null>(null);
   const [drawerMessageId, setDrawerMessageId] = useState<string | null>(null);
   const [mobileSourcesOpen, setMobileSourcesOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const totalChunks = docs.reduce((sum, d) => sum + d.chunks, 0);
-  const totalDocs = docs.length;
+  const totalChunks = corpusStats?.chunkCount ?? 0;
+  const totalDocs = corpusStats?.docCount ?? 0;
 
   const latestAssistantWithSources = messages
     .filter((m) => m.role === "assistant" && m.sources.length > 0)
@@ -127,7 +132,6 @@ export default function ChatPage() {
                       tag={s.tag}
                       icon={<BookOpen size={12} />}
                       question={s.question}
-                      source={s.source}
                       onSelect={() => {
                         setComposer(s.question);
                         setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);

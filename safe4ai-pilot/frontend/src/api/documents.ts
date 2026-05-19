@@ -24,6 +24,7 @@ interface RawDoc {
   file_type: string;
   ingestion_status: string;
   uploaded_at: string;
+  uploaded_by_email: string | null;
   chunk_count: number;
   file_size_bytes: number | null;
 }
@@ -50,7 +51,7 @@ function mapDoc(r: RawDoc): DocumentRecord {
     chunks: r.chunk_count,
     status: r.ingestion_status as DocStatus,
     addedAt: r.uploaded_at,
-    addedBy: "—",
+    addedBy: r.uploaded_by_email ?? "—",
   };
 }
 

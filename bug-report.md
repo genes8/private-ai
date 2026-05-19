@@ -1,180 +1,452 @@
-# Verified Status — 2026-05-15 (Round 3 + Round 4 + Round 5 + Provider Runtime Hardening)
+# Bug Hunting & Mockup Analysis — safe4ai-pilot/ (2026-05-18)
 
-Ovaj fajl više nije lista otvorenih pretpostavki, nego provereno stanje posle više audit i patch prolaza.
+## 🔴 CRITICAL — Mockup Data / Fake Data Reaching Users
 
-## Verification
+### 1. Hardcoded "sources" in Settings API response — `app/api/admin_routes.py:194-204`
 
-- Backend: `.venv/bin/pytest -q` -> `228 passed`
-- Frontend: `npm run build` -> uspešno
+The `/settings` GET endpoint returns a **hardcoded single source** instead of real data from the DB:
 
-## Item-by-item Status
+```python
+"sources": [
+    {
+        "id": "src-1",
+        "kind": "watch",
+        "label": "data/raw",
+        "detail": "Local filesystem watch",
+        "docCount": db.query(Document).count(),
+        "syncedAt": "2h ago",      # ← ALWAYS "2h ago", never a real timestamp
+        "status": "ok",            # ← ALWAYS "ok"
+    },
+],
+```
 
-| # | Status | Napomena |
-|---|---|---|
-| 1 | Fixed | `require_role()` sada normalizuje role vrednost pre poređenja. |
-| 2 | Not reproducible | Posle zaključavanja aktivnih ingestion poslova i brisanja DB reda, `reindex` više ne može validno da krene nad istim dokumentom. |
-| 3 | Fixed | `reindex_document` na Qdrant reset failure ponovo učitava `job` i `doc` iz sesije pre status update-a. |
-| 4 | Fixed | `POST /auth/login` sada zahteva allowed `Origin`; dodati su regresioni testovi za missing/cross-origin. |
-| 5 | Fixed | Deleted-user sentinel sada dobija validan bcrypt hash. |
-| 6 | Fixed | `feedback.py` više ne radi dupli `db.get()` po redu; korisnici se batch-učitavaju. |
-| 7 | Fixed | BM25 rebuild više ne čita pod lock-om pa rebuild-uje van lock-a. |
-| 8 | Not reproducible | Na client strani `useChat` već gasi `streaming` u `finally`; disconnect ne ostavlja trajno zaglavljen UI u trenutnom toku. |
-| 9 | Fixed | `run_ingestion` više ne pregazi `skipped` status sa `indexed`. |
-| 10 | Bounded limitation | Upload i dalje baferuje dozvoljenu veličinu u memoriji, ali više ne može neograničeno da raste; ovo nije otvoren correctness bug u trenutnoj implementaciji. |
-| 11 | Fixed | `deactivate_user` sada postavlja `token_valid_after`. |
-| 12 | Fixed | Orphaned raw fajl se čisti ako DB commit za upload padne. |
-| 13 | Fixed | Settings PATCH pozivi su sada serijalizovani i optimistic cache sprečava stale overwrite. |
-| 14 | Fixed | SSE `data:` parser skida samo opcioni jedan razmak, ne sav leading whitespace. |
-| 15 | Not reproducible | `sessionRef` je vezan za lifecycle hook-a; pri realnom remount-u stranice ne opstaje kao trajno stale stanje. |
-| 16 | Fixed | `NumberInput` clamp-uje vrednost na `min`/`max` pri commit-u. |
-| 17 | Intentional UX | Suggested prompt puni composer bez auto-submit-a; ostavljeno namerno. |
-| 18 | Fixed | Citation drawer sada može da prati izvore iz ranije assistant poruke, ne samo poslednje. |
-| 19 | Fixed | Toggle sada ima `type="button"`, `role="switch"` i `aria-checked`. |
-| 20 | Not a bug | `pollStatus` ne loop-uje beskonačno; prekida na error ili po isteku timeout-a. |
-| 21 | Fixed | Uklonjen mrtav `task is None` guard iz `_schedule_ingestion_task`. |
-| 22 | Fixed | Test-only `Mock` import je uklonjen iz runtime koda. |
-| 23 | Fixed | CSV export više ne učitava sve redove odjednom; stream-uje izlaz. |
-| 24 | Fixed | `limit` i `offset` sada imaju eksplicitnu validaciju. |
-| 25 | Fixed | `days` je ograničen na `1..366`. |
-| 26 | Fixed | `HybridRetriever` i `SemanticCache` koriste `/api/embed`. |
-| 27 | Not a bug | `fetch(FormData)` namerno ne postavlja ručno `Content-Type`; browser ispravno dodaje boundary. |
-| 28 | Fixed | `Session.updated_at` sada ima `server_default=func.now()`. |
-| 29 | Fixed | `_coerce_bool` sada ispravno obrađuje `"0"`, `"1"`, `"false"`, `"true"` i slične vrednosti. |
-
-## Residual Notes
-
-- Stavke `#2`, `#8`, `#10`, `#15`, `#17`, `#20` i `#27` nisu ostale otvoreni bugovi posle proverene reprodukcije; ili su već pokrivene drugim zaštitama, ili predstavljaju nameran UX/implementacioni tradeoff.
-- Ako bude potreban dodatni hardening za upload memorijski profil iz `#10`, to je sledeći kandidat za zaseban refactor ka stream-to-disk pristupu umesto novog bugfix hotfix-a.
+**Impact**: The Document Sources section on Settings always shows exactly one fake entry with a static "2h ago" timestamp. The `syncedAt` and `status` fields are never updated from real sync state. The `docCount` uses a raw `db.query(Document).count()` which is a full-table scan on every settings load — no caching, no pagination.
 
 ---
 
-## Round 3 Fixes (pre-audit Round 4)
+### 2. Settings Source card buttons are dead (no-ops) — `frontend/src/pages/admin/SettingsPage.tsx:641-642`
 
-| # | Status | Napomena |
-|---|---|---|
-| R3-1 | Fixed | `_ensure_deleted_user` sada koristi `token_urlsafe(24)` umesto slabog predvidivog password-a. |
-| R3-2 | Fixed | `feedback.py` `list_for_admin` sada ima limit cap na 1000 (`max(1, min(limit, 1000))`). |
-| R3-3 | Fixed | `audit_cleanup.py` više ne briše svoje vlastite `system_cleanup` audit logove. |
-| R3-4 | Fixed | `/admin/stats` `days` parametar sada ima bounds validaciju (`1..366`). |
+```tsx
+onSync={() => {/* TODO: trigger sync */}}
+onRemove={() => {/* TODO: confirm + remove */}}
+```
 
----
-
-## Round 4 Findings & Fixes
-
-| # | Severity | Status | Bug | Fajl |
-|---|----------|--------|-----|------|
-| R4-1 | Medium | Fixed | XLSX workbook file handle leak — `openpyxl.load_workbook(read_only=True)` ne poziva `wb.close()`, curi file descriptor po svakom XLSX ingestion-u. | `app/services/rag_pipeline.py` |
-| R4-2 | High | Fixed | Cost ceiling nije enforce-ovan — `daily_ceiling_usd` i `monthly_ceiling_usd` su sačuvani i prikazani u settings UI, ali `/chat` i `/chat/stream` nikada ne proveravaju da li je limit dostignut pre obrade upita. Dodata `_check_cost_ceiling()` funkcija koja vraća 429 ako je dnevni ili mesečni limit prekoračen. | `app/api/chat_routes.py` |
-| R4-3 | Medium | Fixed | `AgentRun` redovi orphan-ovani pri deaktivaciji korisnika — `deactivate_user` briše `DbSession` redove ali ne i povezane `AgentRun` redove. Sada se prvo brišu AgentRun redovi za korisnikove sesije, pa tek onda sesije. | `app/api/admin_routes.py` |
-| R4-4 | Medium | Fixed | Corrupted session `ValueError` neuhvaćen — `_resolve_session` hvata samo `KeyError`, ali `load_session` baca i `ValueError` za pokvareno stanje. Sada se hvataju oba exception-a i kreira nova sesija. | `app/api/chat_routes.py` |
-| R4-5 | Low | Fixed | `unique_users` u `/admin/stats` broji sve aktivne korisnike umesto korisnika koji su zapravo slali upite u periodu. Sada koristi `count(distinct AuditLog.user_id)` sa timestamp filterom. | `app/api/admin_routes.py` |
-| R4-6 | Medium | Fixed | `cost_tracker.get_stats` učitava sve `AgentRun` redove u memoriju umesto SQL agregacije. Refaktorisano da koristi `func.sum()`, `func.count()`, `func.date()` sa `group_by` — performanse drastično poboljšane za velike datasetove. | `observability/cost_tracker.py` |
-| R4-7 | Low | Fixed | `CreateUserRequest.email` nema validaciju formata — backend prihvata bilo koji string kao email. Dodat je stroži validator koji odbija whitespace i zahteva oblik `local@domain.tld`. | `app/api/admin_routes.py` |
-| R4-8 | Medium | Fixed | Chunked transfer encoding zaobilazi body size limit — middleware proverava samo `Content-Length` header, a chunked zahtevi nemaju taj header. Sada se chunked body konzumira sa size cap-om. | `app/main.py` |
-| R4-9 | Low | Fixed | `cache_total_hits` je bio semantički netačan — brojao je lifetime hitove za cache unose kreirane u periodu, ne hit događaje u periodu. Dodata je posebna tabela `semantic_cache_hits`, lookup sada zapisuje hit event, a `/admin/stats` broji period hitove iz te tabele. | `app/api/admin_routes.py`, `app/services/semantic_cache.py`, `app/db/models.py` |
-| R4-10 | Medium | Fixed | `reindex_document` je imao partial failure inconsistency — DB chunk obrisi i version bump su se dešavali pre Qdrant reset-a. Flow je preuređen tako da se Qdrant/BM25 reset radi prvo, a DB transakcija kreće tek nakon uspešnog spoljnog reset-a. | `app/api/admin_routes.py` |
-
-## Round 4 Residual Notes
-
-- Round 4 više nije samo “implemented”; sada postoje direktni regresioni testovi za ceiling blokadu, corrupted-session fallback, invalid email, AgentRun cleanup, distinct `unique_users` metric, chunked-body middleware path, period-scoped cache hit metric i reindex failure bez parcijalnog DB reset-a.
-- `semantic_cache.hit_count` je zadržan kao lifetime counter, dok je period metric prebačen na `semantic_cache_hits` događaje. Time su pokrivena oba use-case-a bez mešanja značenja.
-- Ukupno kroz 5 rundi audita: 73 + 35 = 108 stavki pregledano, 79 fixed, 14 not-a-bug/not-reproducible, 7 bounded-limitation/intentional-UX, 3 improved, 5 code-quality/not-a-bug-open.
+Both Sync and Remove buttons on source cards are non-functional. No corresponding API endpoint exists on the backend either.
 
 ---
 
-## Round 5 Findings & Verification
+### 3. "Add source" buttons (S3, Google Drive, Watch folder) are dead — `frontend/src/pages/admin/SettingsPage.tsx:647-655`
 
-| # | Severity | Status | Bug | Fajl | Napomena |
-|---|----------|--------|-----|------|----------|
-| R5-1 | — | Not a bug | `applyDiff` `??` za falsy `0` vrednosti | `SettingsPage.tsx` | `??` ne guta `0`, samo `null`/`undefined`. |
-| R5-2 | Critical | Fixed | `queueSave` race condition — optimistic cache overwrite pri paralelnim save-ovima | `SettingsPage.tsx` | `unsavedDiffRef` + `mergeDiffs` + `subtractConfirmedDiff` akumuliraju i čuvaju difove; error pravi invalidate + re-apply. |
-| R5-3 | High | Fixed | DB session posle commit u `chat_stream` — `ExpiredSessionError` rizik | `chat_routes.py` | `finalize_chat_run()` helper u `chat_finalizer.py` izvršava sve post-stream operacije (reply, audit, cost) u jednoj `db.begin()` transakciji. Jedan commit = atomičan zapis bez `ExpiredSessionError` rizika. |
-| R5-4 | High | Fixed | Cost ceiling check je jedan upit iza — može preći limit | `chat_routes.py` | `_check_cost_ceiling(db, projected_question=body.question)` sada projektuje trošak pre izvršenja. |
-| R5-5 | High | Fixed (caveat) | Token estimation koristi word-count heuristiku | `chat_routes.py` | `OpenAICompatibleProvider.chat()` vraća `ProviderUsage` sa stvarnim token counts iz API odgovora (`usage.source = "actual"`). Ollama nema usage endpoint pa ostaje `source = "estimated"` (`chars/4`). |
-| R5-6 | Critical | Not a bug | `deactivate_user` nema transaction wrapping | `admin_routes.py` | SQLAlchemy sesija je uvek u implicitnoj transakciji; `db.commit()` na kraju obezbeđuje atomičnost. |
-| R5-7 | Critical | Fixed | `reindex_document` TOCTOU race — briše Qdrant pre rezervacije posla | `admin_routes.py` | Prvo rezerviše job u `with db.begin()` sa `with_for_update`, pa briše Qdrant/BM25, pa čisti DB chunks. Na failure se job+doc markiraju kao failed. |
-| R5-8 | High | Fixed | Settings model select-ovi hardcoded — ne poklapaju se sa Ollama modelima | `SettingsPage.tsx` | `s.availableModels.ollama` i `s.availableModels.reranker` sada dolaze dinamički sa servera (`/api/tags`). |
-| R5-9 | High | Fixed | (Isto kao R5-8, odnosi se na sve model select-e) | `SettingsPage.tsx` | Vidi R5-8. |
-| R5-10 | Medium | Fixed | `NumberInput` `useEffect` resetuje draft tokom aktivnog editovanja | `SettingsPage.tsx` | Draft/commit pattern pravilno razdvaja editovanje od snimanja; `value` se menja samo posle commit-a. |
-| R5-11 | High | Fixed | Login nema hint za minimum 12 karaktera | `LoginPage.tsx` | `z.string().min(12, "Password must be at least 12 characters")` + "Use at least 12 characters" hint. |
-| R5-12 | — | Intentional UX | Settings auto-save bez eksplicitnog "Save" dugmeta | `SettingsPage.tsx` | Namerna design odluka; row-level saving indikatori dodati (R5-13). |
-| R5-13 | Medium | Fixed | Nema loading indikatora na pojedinačnim settings redovima | `SettingsPage.tsx` | `savingFields` state + `saving={isSavingField("...")}` na svakom Row. |
-| R5-14 | High | Fixed | Citation drawer nevidljiv na mobile | `ChatPage.tsx` | `mobileSourcesOpen` state + "Show/Hide" button za mobile. |
-| R5-15 | — | Intentional UX | Suggested prompt puni composer bez auto-submit | `ChatPage.tsx` | Namerna UX odluka; jasniji affordance dodat. |
-| R5-16 | — | Not a bug | CSRF Origin check za login — samo browser-based zaštita | `main.py` | Origin check je adekvatan za browser-based napade; API-only zaobilazi by design. |
-| R5-17 | Medium | Fixed | Seed script ima hardcoded admin lozinku | `scripts/seed.py` | `SEED_ADMIN_PASSWORD` env var ili auto-generisana + ispisana lozinka. |
-| R5-18 | Medium | Fixed | `.env.example` SECRET_KEY ruši startup | `.env.example` | `replace-me-with-a-random-32-char-secret` + comment sa generisanje komandom (36 karaktera, nije u weak set-u). |
-| R5-19 | High | Fixed | `limit_body_size` middleware čita ceo chunked body u memoriju | `main.py` | `SpooledTemporaryFile` umesto bytearray; preliva na disk ako pređe limit. |
-| R5-20 | Medium | Bounded limitation | `AuditLog.user_id` FK nema `ondelete` — audit logovi se anonymizuju ali zadržavaju | `models.py` | Namerno — audit trail se čuva sa `user_id=NULL` po deaktivaciji. |
-| R5-21 | Medium | Fixed | `AgentRun` redovi orphan-ovani pri deaktivaciji korisnika | `admin_routes.py` | `deactivate_user` sada eksplicitno briše `AgentRun` redove za korisnikove sesije. |
-| R5-22 | — | Code quality | `upsert_app_config` ne poziva commit — caller mora | `app_config_store.py` | Konzistentan caller-commit pattern; nije bug. |
-| R5-23 | Medium | Fixed | `_serialize_settings` radi DB query na svakom GET | `admin_routes.py` | `_SETTINGS_LIVE_TTL_SECONDS = 15.0` TTL cache za cost + available models. |
-| R5-24 | — | Not a bug | `invalidate_cache_for_document` koristi `@>` jsonb containment | `semantic_cache.py` | `@>` operator radi ispravno za containment check. |
-| R5-25 | Medium | Fixed | `useDocuments` polling loop ne čisti na unmount | `useDocuments.ts` | `mountedRef` + `timeoutIdsRef` sa cleanup u `useEffect`; timeout-i se čiste na unmount. |
-| R5-26 | Medium | Fixed | Backend nema password complexity validaciju | `admin_routes.py` | Server-side validacija dodata: uppercase, lowercase, digit, special char. |
-| R5-27 | — | Not a bug | `page_number=0` u citations | `models.py` | `page_number=0` je validan (prva strana); kozmetičko. |
-| R5-28 | — | Not a bug | CSRF ne štiti login od same-origin form submission | `main.py` | Login CSRF rizik je nizak (napadač loguje žrtvu, ne krade credentials). |
-| R5-29 | — | Addressed | SSE "done" delayed by DB operations | `chat_routes.py` | `sse_done_mode` setting: `"strict"` (default) emituje "done" posle commit-a za garantovanu korektnost; `"async"` emituje odmah i commit-uje u background task-u za nižu latenciju. Konfigurabilno per-deployment. |
-| R5-30 | Medium | Fixed | `res.body!` non-null assertion može pući runtime | `chat.ts` | `if (!res.body)` null check pre `getReader()`. |
-| R5-31 | — | Not reproducible | `useAuth` signOut stale closure | `useAuth.ts` | useRef pattern uvek vraća current vrednost. |
-| R5-32 | — | Not a bug | `HybridRetriever` nije importovan ali se koristi kao type hint | `admin_routes.py` | `from __future__ import annotations` — lazy evaluacija, runtime OK. |
-| R5-33 | — | Not a bug | Upload `Content-Type` fragilan pri refaktoru | `documents.ts` | Kod je ispravan; `fetch(FormData)` ne postavlja `Content-Type` namerno. |
-| R5-34 | Low | Fixed | `DocumentsPage` upload-uje fajlove sekvencijalno | `DocumentsPage.tsx` | `Promise.allSettled(...)` za paralelni multi-file upload. |
-| R5-35 | — | Not a bug | `useChat` `rate` koristi `messagesRef.current` | `useChat.ts` | useRef `.current` je uvek ažuran; prazan dependency array je OK za refs. |
-
-## Round 5 Residual Notes
-
-- **R5-3** (DB session posle commit): Potpuno rešeno u provider runtime hardening (Tasks 7). `finalize_chat_run()` u `chat_finalizer.py` koristi jednu `db.begin()` transakciju za sve post-stream operacije.
-- **R5-5** (Token estimation): Rešeno za OpenAI-compatible provajdere — `ProviderUsage.source = "actual"` kada API vrati usage. Ollama ostaje `source = "estimated"` jer nema usage endpoint.
-- **R5-20** (AuditLog FK ondelete): Namerna design odluka — audit trail se zadržava sa `user_id=NULL` po deaktivaciji, čime se poštuje i audit zahtev i GDPR princip.
-- **R5-29** (SSE done delay): Rešeno konfiguracijom — `sse_done_mode = "strict"` (default) ili `"async"` per-deployment.
-- **R5-12** (Auto-save UX): Namerna design odluka sa row-level indikatorima. Ako korisnici budu tražili eksplicitan "Save", dodati kasnije.
-- Ukupno kroz 5 rundi + provider runtime hardening: 108 stavki, 82 fixed, 14 not-a-bug/not-reproducible, 7 bounded/intentional, 3 improved, 5 code-quality.
+Three "Connect another location" buttons do nothing when clicked. No onClick handlers, no API endpoints, no modals.
 
 ---
 
-## Round 6 Findings & Fixes (2026-05-18)
+### 4. Feedback detail "trace" grid is entirely mockup data — `frontend/src/pages/admin/FeedbackPage.tsx:157-167`
 
-| # | Severity | Status | Bug | Fajl | Napomena |
-|---|----------|--------|-----|------|----------|
-| R6-1 | High | Fixed | CSRF bypass — CSRF token provjera preskočena za login bez `access_token` cookie | `main.py`, `auth/router.py`, `frontend/auth.ts` | Dodat `GET /auth/csrf` endpoint koji emituje pre-login CSRF cookie. `protect_csrf` sada uvijek zahtijeva CSRF double-submit za `/auth/login` (ne samo kad postoji cookie). Frontend poziva `/auth/csrf` prije svakog login zahtjeva. `limit_body_size` reorderovan da se izvrši prije `protect_csrf` (LIFO). |
-| R6-2 | High | Fixed | `provider_api_key` čuvan nešifrovano u bazi | `app_config_store.py` | Dodat `"provider_api_key"` u `_SENSITIVE_KEYS` — Fernet enkriptovan pri upisu. |
-| R6-3 | Low | Fixed | Login password length rani-exit curio timing info | `auth/router.py` | Uklonjen rani exit za kratke passworde — bcrypt sada uvek teče po istoj putanji. |
-| R6-4 | Medium | Fixed | `session_id` bez UUID validacije | `chat_routes.py` | `field_validator` + regex `[0-9a-f]{8}-...-[0-9a-f]{12}`. |
-| R6-5 | Medium | Fixed | `runtime` varijabla provjeravana sa `"runtime" in dir()` | `chat_routes.py` | Inicijalizovana na `None` pre try bloka; check `if runtime is not None`. |
-| R6-6 | Medium | Fixed | DB sesija zatvorena pre async `_finalize()` | `chat_routes.py` | Async path otvara svoju `SessionLocal` instancu — ne zavisi od FastAPI dependency cleanup-a. |
-| R6-7 | Medium | Fixed | `AuditLog.model_used` čuva trace_id umjesto naziva modela | `chat_finalizer.py` | `finalize_chat_run()` prima `model_name: str` parametar; `model_used` kolona sada čuva `runtime.provider_type`. |
-| R6-8 | Low | Fixed | `_settings_live_cache` nije thread-safe | `admin_routes.py` | `threading.Lock` omotava read-check-write blok. |
-| R6-9 | Low | Fixed | `list_users` nema paginaciju | `admin_routes.py` | `limit` (1-1000, default 200) i `offset` parametri dodati. |
-| R6-10 | Medium | Fixed | `OllamaProvider.chat` concatenira system+user prompt | `provider_clients.py` | Prebačeno na `/api/chat` sa `messages` formatom — system prompt poštuje model. |
-| R6-11 | Medium | Fixed | Input guard bypass via Unicode homoglyphs/encoding | `input_guard.py` | `html.unescape()` + `unicodedata.normalize("NFKC")` + whitespace collapse pre injection checka; paterni koriste `\s+` umjesto literal razmaka. |
-| R6-12 | Low | Fixed (partial) | Passport regex false positives | `content_filter.py`, `output_filter.py` | Regex tighten: `\d{7,9}` + lookaround assertions. Manji false positivi ali ne 0. Dodavanje `-`/`/` u lookaround bi stvorilo false negative (passport/AB1234567, AB1234567/2024) — gori od false positive. Zahtijeva kontekstualni/ML pristup za kompletno rješenje. |
-| R6-13 | Low | Fixed | Login page neupotrebljiv na mobileu | `LoginPage.tsx` | `grid-cols-1 md:grid-cols-2`; brand panel skriven na mobileu (`hidden md:flex`). |
-| R6-14 | Low | Fixed | Invite modal bez email format validacije | `UsersPage.tsx` | Regex email check u `handleSubmit` pre submit-a. |
-| R6-15 | Low | Fixed | Temp password predvidljive strukture (`${seed}Aa!9`) | `UsersPage.tsx` | `crypto.getRandomValues(Uint8Array(20))` sa mixed charset; kompleksnost osigurana. |
-| R6-16 | Low | Fixed | Settings page bez ErrorBoundary | `App.tsx` | `<SettingsPage />` omotan u `<ErrorBoundary>`. |
-| R6-17 | Low | Fixed | `uploadDocument` ne emituje 401 unauthorized | `documents.ts` | Eksplicitni `res.status === 401` check + `emitUnauthorized()`; baca `ApiError` umjesto golog `Error`. |
-| R6-18 | Low | Fixed | `useChat` ne cancela stream na unmount | `useChat.ts` | `mountedRef` + `useEffect` cleanup poziva `abortRef.current?.abort()`; `setMessages`/`setSteps` u finally zaštićeni checkom. |
-| R6-19 | — | Not a bug | `provider_api_key` vraća samo boolean u API odgovoru | `admin_routes.py` | `"apiKeyConfigured": bool(provider_api_key_raw)` — vrijednost nikad ne napušta backend. |
-| R6-20 | — | Not a bug | CSV export bez CSRF headera | `audit.ts` | GET zahtjevi izuzeti iz CSRF po standardu. `SameSite=strict` cookie sprečava cross-site čitanje. |
-| R6-21 | — | Bounded limitation | Deaktivirani korisnik može koristiti JWT do isteka | `middleware.py` | `token_valid_after` setovan odmah; JWT ipak vrijedi do `exp`. Bez token blacklist-a ovo je inherentno JWT ograničenje. |
-| R6-22 | — | Bounded limitation | `AgentRun.session_id` bez FK constrainta | `models.py` | Orphaned records mogući, ne utiče na funkcionalnost. Promjena zahtijeva migraciju. |
-| R6-23 | — | Bounded limitation | Document delete: Qdrant cleanup nakon DB commit-a | `admin_routes.py` | Namjeran tradeoff — Qdrant failure ne blokira brisanje dokumenta; loguje se kao warning. |
+```tsx
+{[
+  ["latency",     "—"],    // ← ALWAYS "—"
+  ["cache",       "—"],    // ← ALWAYS "—"
+  ["model",       "—"],    // ← ALWAYS "—"
+  ["k retrieved", "—"],    // ← ALWAYS "—"
+].map(([k, v]) => (
+```
 
-## Round 6 Verification
+All four trace fields (latency, cache, model, k retrieved) are hardcoded as "—". The backend `QueryFeedback` model doesn't store any trace metadata at all — only `trace_id`, `session_id`, `rating`, `comment`. There's no backend endpoint to look up trace details by trace_id. The entire "trace" section is decorative.
 
-- Backend: `.venv/bin/pytest -q` → `232 passed, 4 skipped`
-- Frontend: `npm run build` → uspješno
+---
 
-## Round 6 Residual Notes
+### 5. "Suspected cause" on Feedback detail is static text — `frontend/src/pages/admin/FeedbackPage.tsx:172-185`
 
-- **R6-1** (CSRF login): Potpuno fixovano — `GET /auth/csrf` endpoint + uvijek obavezan CSRF na login. Middleware reorderovan (body limit prije CSRF). 2 nova testa.
-- **R6-12** (Passport regex): 7+ cifara smanjuje false positive rate ali tehničke oznake poput `AB1234567` i dalje prolaze. Alternativa: whitelist-based pristup za dokumentspe specifikacije.
-- **R6-21** (JWT expiry): Za produkciju razmotriti token blacklist u Redis-u + provjeru `token_valid_after` u SSE stream loop-u.
-- **R6-22** (AgentRun FK): Dodati u backlog za sljedeći migration batch.
-- Ukupno kroz 6 rundi + Round 7 CSRF fix: ~131 stavki pregledano, 102 fixed, 17 not-a-bug/not-reproducible, 9 bounded/intentional, 4 improved.
+Always shows "Review the trace and retrieved chunks above for coverage gaps." — this is not derived from any analysis. It's a placeholder.
 
+---
 
+### 6. Activity page "Retention" sidebar text is hardcoded — `frontend/src/pages/admin/ActivityPage.tsx:121`
 
+```
+All audit events retained <b>365 days</b>, then archived to immutable storage.
+```
 
+The "365 days" is hardcoded, but the actual configurable retention is `auditRetentionDays` in Settings. Should read from settings like UsersPage does.
 
+---
+
+### 7. Chat suggested prompts are hardcoded — `frontend/src/pages/ChatPage.tsx:18-23`
+
+```tsx
+const SUGGESTED = [
+  { tag: "Policy",    question: "What is the annual leave entitlement?",         source: "hr_policy.pdf" },
+  { tag: "Finance",   question: "Who approves capital expenditure over €50,000?", source: "finance_policy.pdf" },
+  { tag: "IT",        question: "What is the minimum password length?",            source: "it_policy.pdf" },
+  { tag: "Compliance",question: "What are our data retention obligations?",        source: "compliance_policy.pdf" },
+];
+```
+
+These are static suggestions that never change. The `source` field is cosmetic — not linked to actual document names.
+
+---
+
+### 8. Login page "All systems operational" is fake — `frontend/src/pages/LoginPage.tsx:73-75`
+
+Hardcoded status indicator with a green dot and "All systems operational" — no health check API call.
+
+---
+
+## 🔴 CRITICAL — Settings API Integration Gaps
+
+### 9. `providerApiKey` bypasses Ollama model validation — `app/api/admin_routes.py:988-1005`
+
+When `providerApiKey` is sent alongside model fields (e.g., `generationModel`), the PATCH handler calls `_validate_ollama_model_exists()` which checks models against the Ollama `/api/tags` endpoint. But if the provider is `openai_compatible`, these models won't be in Ollama, causing a **422 error**. The validation is triggered by the presence of model fields, not by the provider type. **Fix:** skip Ollama model validation when `effective_provider == "openai_compatible"`.
+
+---
+
+### 10. Settings `ollamaModelOptions` includes `visionModel` for chat models — `frontend/src/pages/admin/SettingsPage.tsx:449-457`
+
+```tsx
+const ollamaModelOptions = s?.availableModels
+    ? Array.from(new Set([
+      ...s.availableModels.ollama,
+      s.generationModel,
+      s.generationFallback,
+      s.embeddingModel,
+      s.visionModel,    // ← Vision model listed as option for chat model select
+    ]))
+    : [];
+```
+
+This single merged list is used for Generation, Fallback, Embedding, AND OCR model selects. Vision-specific models (like `qwen2.5vl:7b`) appear as options for the generation model, and chat models appear as options for embedding. These should be separate lists.
+
+---
+
+### 11. Backend `/settings` doesn't return `availableModels` for OpenAI-compatible providers — `app/api/admin_routes.py:178`
+
+`availableModels.ollama` always fetches from the Ollama `/api/tags` endpoint. When the provider is `openai_compatible`, the Ollama models list may be empty/irrelevant, and there's no `availableModels.openai_compatible` field. The frontend just uses `ollamaModelOptions` for all model selects regardless of provider type.
+
+---
+
+### 12. Provider test endpoint not called from frontend — `app/api/admin_routes.py:1106-1148`
+
+The backend has `POST /settings/provider/test` for validating provider credentials, but the frontend SettingsPage never calls it. There's no "Test connection" button.
+
+---
+
+### 13. `docCount` in settings sources does full table scan — `app/api/admin_routes.py:200`
+
+`db.query(Document).count()` executes on every GET `/settings` call with no caching. This is a `SELECT COUNT(*) FROM documents` that can be slow with large corpora.
+
+---
+
+## 🟠 HIGH — Logic Errors
+
+### 14. Race condition in Settings save queue — `frontend/src/pages/admin/SettingsPage.tsx:359-392`
+
+The `queueSave` function uses a `saveQueueRef` promise chain but reads `unsavedDiffRef.current` inside the `.then()` callback. If two saves are queued rapidly:
+
+1. First save starts with diff A
+2. Second save merges diff B into `unsavedDiffRef` → now contains A+B
+3. First save completes, reads `unsavedDiffRef.current` (A+B), sends both A and B
+4. Second `.then()` reads `unsavedDiffRef.current` again, which has already been subtracted by step 3
+
+This means the second save may send an empty diff, or the `subtractConfirmedDiff` logic may incorrectly remove pending changes that weren't part of the first request.
+
+---
+
+### 15. `subtractConfirmedDiff` uses shallow equality — `frontend/src/pages/admin/SettingsPage.tsx:285-296`
+
+```tsx
+if (remaining[key] === confirmed[key]) {
+    delete remaining[key];
+}
+```
+
+For object values (nested objects like `provider`), `===` comparison always fails for different references, so nested diffs may never be subtracted from the pending queue.
+
+---
+
+### 16. `dailyCeilingUsd` min allows 0 in NumberInput but backend requires ≥ 1 — `frontend/src/pages/admin/SettingsPage.tsx:706`
+
+Frontend: `<NumberInput value={s.cost.dailyCeilingUsd} unit="USD" min={1} max={10000}>`
+
+But the `NumberInput` component's `commit()` function clamps with `Math.min(max ?? next, Math.max(min ?? next, next))` — if `min` is `undefined`, it defaults to `next`, allowing any value. The `min={1}` is correctly passed here, but the `monthlyCeilingUsd` has `min={30}` while the backend also validates `≥ 30`. These are aligned, but the `NumberInput` component doesn't show validation errors — it silently clamps, which could confuse users.
+
+---
+
+### 17. Reindex race condition — double check without lock — `app/api/admin_routes.py:543-572`
+
+The `reindex_document` endpoint checks for active ingestion jobs at line 543-555, then again inside `db.begin()` at line 560-572. Between these two checks, another reindex request could slip through. The outer check is redundant and should be removed, or a proper lock should be used.
+
+---
+
+### 18. Audit log `action_type` mismatch — `app/api/chat_routes.py:73` vs `frontend/src/api/audit.ts:25-31`
+
+The chat route writes `action_type="chat_query"` to the audit log, but the frontend `mapKind()` function only recognizes `"query"`, `"upload"`, `"feedback"`, `"login"`, `"fallback"`. `"chat_query"` falls through to the default `"query"`. This is functionally OK but semantically lossy — the distinction between a chat query and other query types is lost in the UI.
+
+---
+
+## 🟠 HIGH — Data Integrity Risks
+
+### 19. Deactivate user orphans AgentRun records — `app/api/admin_routes.py:721-726`
+
+```python
+user_session_ids = [s.id for s in db.query(DbSession).filter(DbSession.user_id == user_id).all()]
+if user_session_ids:
+    db.query(AgentRun).filter(AgentRun.session_id.in_(user_session_ids)).delete(synchronize_session=False)
+```
+
+AgentRun has no FK to sessions, so the delete-by-session-IDs is a manual cascade. But `AgentRun.session_id` is not an indexed column and has no FK constraint, meaning:
+- If a session is deleted by other code paths, AgentRuns become orphans
+- The `IN` clause could be very large for active users
+
+---
+
+### 20. SemanticCache vector dimension hardcoded to 768 — `app/db/models.py:115`
+
+```python
+query_embedding = Column(Vector(768), nullable=False)
+```
+
+If the embedding model changes (e.g., to `text-embedding-3-small` with 1536 dimensions), existing cache entries become incompatible and will cause runtime errors. The dimension should be configurable or at least validated against the current model on startup.
+
+---
+
+### 21. No cascade delete from Document to Qdrant points on reindex — `app/api/admin_routes.py:576-582`
+
+If `_delete_qdrant_points` fails, the old points remain in Qdrant while the document is re-ingested, potentially creating duplicate points.
+
+---
+
+### 22. AppConfig `value` column is JSON but no type validation — `app/db/models.py:208`
+
+```python
+value = Column(JSON, nullable=False)
+```
+
+Any JSON value can be stored. The `upsert_app_config` function writes raw Python values (int, bool, str) which get serialized as JSON. But there's no schema validation on read — `load_app_config` returns raw values that could be of unexpected types if the DB is modified directly.
+
+---
+
+## 🟡 MEDIUM — Security Concerns
+
+### 23. `.env` file committed with real SECRET_KEY — `safe4ai-pilot/.env:6`
+
+```
+SECRET_KEY=68d543ad135bb451bf0e0a26a7fa6cf5151cb1d0b0c6b1366d18f5543a93927e
+```
+
+The `.env` file contains a real secret key and is in the workspace. While `.gitignore` may exclude it, the file is present and contains production-viable credentials.
+
+---
+
+### 24. Default Postgres credentials in config — `app/config.py:8`
+
+```python
+postgres_url: str = "postgresql+psycopg2://safe4ai:safe4ai@localhost:5432/safe4ai"
+```
+
+Hardcoded default credentials `safe4ai:safe4ai` — if the environment variable is not set, the app runs with these weak credentials.
+
+---
+
+### 25. `_serialize_settings` leaks `provider_api_key` existence but not value — `app/api/admin_routes.py:158,167`
+
+```python
+provider_api_key_raw = _val("provider_api_key", "")
+...
+"apiKeyConfigured": bool(provider_api_key_raw),
+```
+
+The boolean `apiKeyConfigured` leaks whether an API key is configured. While this is intentional for the UI, it's an information disclosure vector.
+
+---
+
+### 26. Test provider endpoint logs API key in error — `app/api/admin_routes.py:1126-1128`
+
+The `test_provider_connection` endpoint sends the API key in an Authorization header via `httpx.Client`. If the request fails and the error message includes the URL or headers, the key could appear in logs. The `except Exception as exc` at line 1135 passes `str(exc)` directly to the HTTPException detail, which could include the key in error responses.
+
+---
+
+### 27. CSRF token only checked on non-GET methods, but SSE stream uses POST — `frontend/src/api/chat.ts:31`
+
+The chat stream POST includes CSRF headers, which is good. However, the `exportAuditCsv` function in `audit.ts:52-53` uses raw `fetch()` without CSRF headers for the CSV download (GET request), which is fine for GET, but the pattern is inconsistent.
+
+---
+
+### 28. `generateTemporaryPassword` has non-uniform distribution — `frontend/src/pages/admin/UsersPage.tsx:46-59`
+
+```tsx
+const chars = Array.from(array).map((b) => all[b % all.length]);
+```
+
+`b % all.length` introduces modulo bias because `256 % all.length != 0`. For `all.length = 62`, the bias is small but present. The fixed-position overwrites at positions 0-3 help, but the remaining 16 characters are biased.
+
+---
+
+## 🟡 MEDIUM — UI/UX Issues
+
+### 29. Settings left nav doesn't scroll to sections — `frontend/src/pages/admin/SettingsPage.tsx:500-501`
+
+```tsx
+href={`#${item.id}`}
+onClick={() => setActive(item.id)}
+```
+
+Clicking nav items sets `active` state but the `href="#provider"` doesn't actually scroll because React intercepts the click. There's no `scrollIntoView` call. The `scroll-mt-4` class on sections (line 57) suggests scrolling was intended but never implemented.
+
+---
+
+### 30. Settings grid layout breaks on mobile — `frontend/src/pages/admin/SettingsPage.tsx:487`
+
+```tsx
+<div className="h-full grid grid-cols-[200px_1fr] bg-paper">
+```
+
+The 200px fixed left sidebar doesn't collapse on mobile, making the Settings page unusable on narrow screens.
+
+---
+
+### 31. Feedback page detail has no loading state — `frontend/src/pages/admin/FeedbackPage.tsx:85-196`
+
+When a feedback item is selected, the detail panel shows immediately with all "—" values. There's no loading indicator for fetching trace data (which doesn't exist anyway — see issue #4).
+
+---
+
+### 32. No "Retry" button on settings save failure — `frontend/src/pages/admin/SettingsPage.tsx:715-720`
+
+If the settings API fails after initial load, the user sees the error state. But if they change a setting and the save fails, the optimistic update remains visible. The error banner is good, but there's no "Retry" button.
+
+---
+
+### 33. DocumentsPage `addedBy` always shows "—" — `frontend/src/api/documents.ts:53`
+
+```tsx
+addedBy: "—",
+```
+
+The backend `/admin/documents` endpoint doesn't return `uploaded_by` user info (only the ID is in the DB), and the frontend mapping just hardcodes "—". The `added by` column header in the table is misleading.
+
+---
+
+## 🟢 LOW — Minor Issues
+
+### 34. Settings version string hardcoded — `frontend/src/pages/admin/SettingsPage.tsx:729`
+
+```tsx
+<span>Settings v0.4.18 · loaded from server</span>
+```
+
+Hardcoded version string "v0.4.18" that will become stale.
+
+---
+
+### 35. `DEFAULT_PROVIDER` vision model hardcoded — `frontend/src/pages/admin/SettingsPage.tsx:49`
+
+```tsx
+visionModel: "qwen2.5vl:7b",
+```
+
+This default should come from the backend, not be hardcoded in the frontend.
+
+---
+
+### 36. Chat page loads all documents just to count them — `frontend/src/pages/ChatPage.tsx:33`
+
+```tsx
+const { docs } = useDocuments();
+```
+
+`useDocuments()` fetches the full document list (with 10-second polling) just to display `totalChunks` and `totalDocs` in the empty state. A lightweight stats endpoint would be more efficient.
+
+---
+
+### 37. Audit export CSV doesn't include CSRF headers — `frontend/src/api/audit.ts:52-53`
+
+```tsx
+export const exportAuditCsv = () =>
+    fetch(apiUrl("/admin/audit-logs/export.csv"), { credentials: "include" }).then((r) => r.blob());
+```
+
+No CSRF token header is sent. While the backend CSRF middleware may only check mutation requests, this is inconsistent with the pattern used elsewhere.
+
+---
+
+### 38. `ollamaModelOptions` used for embedding model select is wrong — `frontend/src/pages/admin/SettingsPage.tsx:587-592`
+
+Chat models and embedding models are fundamentally different, but the same dropdown is used for both. An admin could accidentally set the embedding model to a chat model, which would cause runtime failures during document ingestion.
+
+---
+
+### 39. Double Ollama model validation in PATCH — `app/api/admin_routes.py:989-1005`
+
+When the provider is `openai_compatible`, the backend still validates model names against Ollama's `/api/tags` if `generationModel` etc. are sent. But in openai_compatible mode, models should be validated against the OpenAI-compatible provider's model list, not Ollama's. This causes a **422 error** when trying to set models in openai_compatible mode.
+
+---
+
+## Summary
+
+| Priority | Count | Key Themes |
+|----------|-------|------------|
+| 🔴 Critical | 13 | Mockup data in Settings sources, Feedback traces; dead buttons; Ollama validation blocks openai_compatible |
+| 🟠 High | 9 | Settings save race condition; shallow diff comparison; orphaned AgentRuns; hardcoded vector dims |
+| 🟡 Medium | 11 | Security: key leakage, modulo bias; UX: no scroll, broken mobile, no retry, misleading columns |
+| 🟢 Low | 6 | Hardcoded strings; inefficient queries; same model dropdown for all selects |
+| **Total** | **39** | |
+
+## Round 7 — Fixed (2026-05-18, review follow-up 2026-05-19)
+
+| # | Status | Notes |
+|---|--------|-------|
+| 1 | ✅ Fixed | `syncedAt: "2h ago"` → `null`; `docCount` moved to TTL cache |
+| 2 | ✅ Fixed | Dead Sync/Remove buttons removed from SourceCard |
+| 3 | ✅ Fixed | Dead "Add source" footer section removed |
+| 4 | ✅ Fixed | Fake trace grid replaced with "Trace detail not recorded" message |
+| 5 | ✅ Fixed | Fake "Suspected cause" section removed |
+| 6 | ✅ Fixed | Activity page now reads `auditRetentionDays` from settings API |
+| 7 | ✅ Fixed | Fake `source` filenames removed from SUGGESTED prompts |
+| 8 | ✅ Fixed | Login page "All systems operational" now calls `/health` API |
+| 9 | ✅ Fixed | Ollama model validation skipped when `openai_compatible` is active |
+| 10 | ✅ Fixed | Separate `chatModelOptions`, `embeddingModelOptions`, `visionModelOptions` |
+| 11 | ✅ Fixed | Backend fetches & caches `/models` from openai_compatible provider; returned as `availableModels.provider` |
+| 12 | ✅ Fixed | "Test connection" button added to Provider section; calls `POST /settings/provider/test` |
+| 13 | ✅ Fixed | `docCount` moved to TTL cache — no longer a per-request full scan |
+| 14 | ✅ Fixed | Save queue snapshots and clears `unsavedDiffRef` before mutation; failed diffs restored for retry |
+| 15 | ✅ Fixed | `subtractConfirmedDiff` now uses `JSON.stringify` deep equality |
+| 16 | ✅ Fixed | `NumberInput.commit()` now always syncs draft to clamped value so displayed value matches applied value |
+| 17 | ✅ Fixed | Redundant outer reindex check removed; inner locked check is authoritative |
+| 18 | ✅ Fixed | `action_type="chat_query"` → `"query"` in audit log |
+| 19 | ✅ Fixed | `_ensure_agentrun_fk()` at startup: prunes orphans + adds `agent_runs_session_fkey` FK with ON DELETE CASCADE |
+| 20 | ✅ Fixed | `_ensure_semantic_cache_dimension()` warns at startup if embedding model dimension ≠ 768 |
+| 21 | ✅ Fixed | Qdrant delete failure now aborts reindex with 502 before DB chunk deletion or ingestion scheduling; this prevents stale vectors from remaining searchable beside newly indexed chunks |
+| 22 | ✅ Fixed | `load_app_config` coerces known keys to declared types, with explicit boolean string parsing for `"false"`, `"0"`, `"off"`, `"true"`, `"1"`, `"on"` |
+| 23 | ✅ Fixed | `_warn_default_credentials()` at startup logs warning if default SECRET_KEY is in use |
+| 24 | ✅ Fixed | `_warn_default_credentials()` at startup logs warning if default Postgres credentials are in use |
+| 25 | ✅ Not a Bug | `apiKeyConfigured` boolean is intentional — it's the safest way to tell the UI a key is set |
+| 26 | ✅ Fixed | `test_provider_connection` catches `httpx.HTTPError` and generic exceptions; returns sanitized message |
+| 27 | ✅ Not a Bug | Audit CSV uses GET — CSRF not required for GETs per HTTP spec |
+| 28 | ✅ Fixed | `generateTemporaryPassword` rewritten with rejection-sampling + Fisher-Yates |
+| 29 | ✅ Fixed | Settings nav onClick now calls `scrollIntoView` |
+| 30 | ✅ Fixed | Settings grid is now responsive (`flex-col` on mobile, `grid` on md+) |
+| 31 | ✅ Fixed | Trace section now shows honest "not recorded" message — no loading state needed |
+| 32 | ✅ Fixed | Retry button added to save error banner |
+| 33 | ✅ Fixed | `addedBy` now populated from `uploaded_by_email` join |
+| 34 | ✅ Fixed | Hardcoded "v0.4.18" version string removed |
+| 35 | ✅ Fixed | `DEFAULT_PROVIDER.visionModel` changed to `""` — actual value always comes from server |
+| 36 | ✅ Fixed | `GET /admin/corpus-stats` endpoint added; ChatPage uses it instead of loading all documents |
+| 37 | ✅ Not a Bug | Audit CSV GET without CSRF is correct per HTTP spec |
+| 38 | ✅ Fixed | Same as #10 — model dropdowns are now split by type |
+| 39 | ✅ Fixed | Same as #9 — Ollama validation skipped for openai_compatible |
+
+**All 39 issues resolved** (37 Fixed + 2 Not a Bug)
+
+## Review Follow-up Verification (2026-05-19)
+
+| Review item | Status | Evidence |
+|-------------|--------|----------|
+| P1 — reindex must not continue after Qdrant delete failure | ✅ Fixed | `tests/test_admin.py::TestDocumentReindex::test_reindex_qdrant_failure_does_not_delete_db_chunks_or_schedule` verifies 502 response, no DB chunk delete, no ingestion scheduling, and failed document status |
+| P2 — boolean config strings must not use Python truthiness | ✅ Fixed | `tests/test_models.py::test_load_app_config_coerces_boolean_strings_explicitly` verifies `"false"`, `"0"`, and `"off"` load as `False` |
+
+Fresh local verification:
+
+- Backend: `.venv/bin/pytest -q` → `231 passed, 6 skipped`
+- Changed-area backend: `.venv/bin/pytest tests/test_admin.py tests/test_models.py -q` → `58 passed`
+- Frontend: `npm run build` → successful production build

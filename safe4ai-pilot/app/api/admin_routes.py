@@ -47,6 +47,7 @@ from app.db.models import (
     UserRole,
 )
 from app.security.upload_validator import UploadValidator
+from app.security.url_validator import validate_provider_url
 from app.services.ingestion_service import run_ingestion
 from app.services.app_config_store import load_app_config, upsert_app_config
 from app.services.runtime_config import build_runtime_components
@@ -70,6 +71,8 @@ _settings_live_cache: dict[str, Any] = {
     "expires_at": 0.0,
     "today_cost": 0.0,
     "available_ollama_models": [],
+    "doc_count": 0,
+    "available_provider_models": [],
 }
 _settings_live_cache_lock = threading.Lock()
 
@@ -116,13 +119,31 @@ def _validate_password_strength(password: str) -> None:
         )
 
 
-def _get_settings_live_metadata(db: Session) -> tuple[float, list[str]]:
+def _fetch_provider_model_names(base_url: str, api_key: str) -> list[str]:
+    """Fetch model names from an OpenAI-compatible /models endpoint."""
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(
+                f"{base_url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        models = data.get("data", [])
+        return sorted({str(m.get("id", "")) for m in models if isinstance(m, dict) and m.get("id")})
+    except Exception:
+        return []
+
+
+def _get_settings_live_metadata(db: Session) -> tuple[float, list[str], int, list[str]]:
     now = time.monotonic()
     with _settings_live_cache_lock:
         if now < float(_settings_live_cache["expires_at"]):
             return (
                 float(_settings_live_cache["today_cost"]),
                 list(_settings_live_cache["available_ollama_models"]),
+                int(_settings_live_cache["doc_count"]),
+                list(_settings_live_cache["available_provider_models"]),
             )
 
     today_cost = CostTracker(settings.cost_per_1k_tokens).get_stats(db, days=1)["total_cost_usd"]
@@ -130,6 +151,16 @@ def _get_settings_live_metadata(db: Session) -> tuple[float, list[str]]:
         available_ollama_models = sorted(_fetch_ollama_model_names())
     except HTTPException:
         available_ollama_models = []
+    doc_count = db.query(func.count(Document.id)).scalar() or 0
+
+    db_config = load_app_config(db)
+    provider_type = str(db_config.get("provider_type", "ollama"))
+    available_provider_models: list[str] = []
+    if provider_type == "openai_compatible":
+        base_url = str(db_config.get("provider_base_url", ""))
+        api_key = str(db_config.get("provider_api_key", ""))
+        if base_url and api_key:
+            available_provider_models = _fetch_provider_model_names(base_url, api_key)
 
     with _settings_live_cache_lock:
         _settings_live_cache.update(
@@ -137,9 +168,11 @@ def _get_settings_live_metadata(db: Session) -> tuple[float, list[str]]:
                 "expires_at": now + _SETTINGS_LIVE_TTL_SECONDS,
                 "today_cost": today_cost,
                 "available_ollama_models": available_ollama_models,
+                "doc_count": doc_count,
+                "available_provider_models": available_provider_models,
             }
         )
-    return float(today_cost), list(available_ollama_models)
+    return float(today_cost), list(available_ollama_models), int(doc_count), list(available_provider_models)
 
 
 def _serialize_settings(db: Session) -> dict[str, Any]:
@@ -148,7 +181,7 @@ def _serialize_settings(db: Session) -> dict[str, Any]:
     def _val(key: str, default: Any) -> Any:
         return db_overrides.get(key, default)
 
-    today_cost, available_ollama_models = _get_settings_live_metadata(db)
+    today_cost, available_ollama_models, doc_count, available_provider_models = _get_settings_live_metadata(db)
     current_ollama_models = {
         str(_val("generation_model", settings.ollama_model)),
         str(_val("generation_fallback_model", settings.ollama_model)),
@@ -176,6 +209,7 @@ def _serialize_settings(db: Session) -> dict[str, Any]:
         "sseDoneMode": _val("sse_done_mode", "strict"),
         "availableModels": {
             "ollama": sorted(set(available_ollama_models) | current_ollama_models),
+            "provider": available_provider_models,
             "reranker": [
                 "cross-encoder/ms-marco-MiniLM-L-6-v2",
                 "bge-reranker-v2",
@@ -197,8 +231,8 @@ def _serialize_settings(db: Session) -> dict[str, Any]:
                 "kind": "watch",
                 "label": "data/raw",
                 "detail": "Local filesystem watch",
-                "docCount": db.query(Document).count(),
-                "syncedAt": "2h ago",
+                "docCount": doc_count,
+                "syncedAt": None,
                 "status": "ok",
             },
         ],
@@ -408,6 +442,19 @@ async def upload_document(
     return {"doc_id": doc_id, "job_id": job_id}
 
 
+@router.get("/admin/corpus-stats")
+@limiter.limit("100/minute")
+def get_corpus_stats(
+    request: Request,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> dict[str, int]:
+    """Lightweight document and chunk counts for the chat page empty state."""
+    doc_count = db.query(func.count(Document.id)).scalar() or 0
+    chunk_count = db.query(func.count(DocumentChunk.id)).scalar() or 0
+    return {"docCount": doc_count, "chunkCount": chunk_count}
+
+
 @router.get("/admin/documents")
 @limiter.limit("100/minute")
 def list_documents(
@@ -422,8 +469,9 @@ def list_documents(
         .subquery()
     )
     rows = (
-        db.query(Document, func.coalesce(chunk_count_sq.c.cnt, 0).label("chunk_count"))
+        db.query(Document, func.coalesce(chunk_count_sq.c.cnt, 0).label("chunk_count"), User.email)
         .outerjoin(chunk_count_sq, Document.id == chunk_count_sq.c.document_id)
+        .outerjoin(User, Document.uploaded_by == User.id)
         .order_by(Document.uploaded_at.desc())
         .all()
     )
@@ -434,12 +482,13 @@ def list_documents(
             "file_type": d.file_type,
             "ingestion_status": d.ingestion_status,
             "uploaded_at": d.uploaded_at,
+            "uploaded_by_email": email,
             "version": d.version,
             "active_version": d.active_version,
             "chunk_count": cnt,
             "file_size_bytes": d.file_size_bytes,
         }
-        for d, cnt in rows
+        for d, cnt, email in rows
     ]
 
 
@@ -540,20 +589,6 @@ async def reindex_document(
     if not raw_path.exists():
         raise HTTPException(status_code=409, detail="Raw file not found; upload again")
 
-    active_job = _lock_query(
-        db.query(IngestionJob).filter(
-            IngestionJob.document_id == doc_id,
-            IngestionJob.status.in_(
-                [IngestionJobStatus.embedding, IngestionJobStatus.pending]
-            ),
-        )
-    ).first()
-    if active_job:
-        raise HTTPException(
-            status_code=409,
-            detail="Document is currently being ingested. Wait for completion before reindexing.",
-        )
-
     retriever = getattr(request.app.state, "retriever", None)
     job_id = str(uuid.uuid4())
     with db.begin():
@@ -575,20 +610,19 @@ async def reindex_document(
 
     try:
         _delete_qdrant_points(doc_id)
-        if retriever is not None and hasattr(retriever, "remove_from_bm25"):
-            try:
-                retriever.remove_from_bm25(doc_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
-    except Exception as exc:
-        failed_job = db.get(IngestionJob, job_id)
-        if failed_job is not None:
-            failed_job.status = IngestionJobStatus.failed
-            failed_job.completed_at = datetime.now(UTC)
-            failed_job.error = "Failed to reset search indexes before reindex"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("qdrant_delete_failed_aborting_reindex", doc_id=doc_id, error=str(exc))
+        job.status = IngestionJobStatus.failed
+        job.completed_at = datetime.now(UTC)
+        job.error = "Failed to reset vector index before reindex"
         doc.ingestion_status = IngestionStatus.failed
         db.commit()
         raise HTTPException(status_code=502, detail="Failed to reset vector index for reindex") from exc
+    if retriever is not None and hasattr(retriever, "remove_from_bm25"):
+        try:
+            retriever.remove_from_bm25(doc_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
 
     with db.begin():
         invalidate_cache_for_document(db, doc_id, commit=False)
@@ -976,33 +1010,57 @@ def patch_settings(
     """Update mutable application settings stored in the DB."""
     current_config = load_app_config(db)
     updates: dict[str, Any] = {}
-    requested_ollama_models = any(
-        value is not None
-        for value in (
-            body.generationModel,
-            body.generationFallback,
-            body.embeddingModel,
-            body.visionModel,
+
+    # Determine the effective provider before any model validation so we can skip
+    # Ollama-specific checks when using an OpenAI-compatible API provider.
+    effective_provider = body.providerType or current_config.get("provider_type", "ollama")
+
+    if effective_provider == "ollama":
+        requested_ollama_models = any(
+            value is not None
+            for value in (
+                body.generationModel,
+                body.generationFallback,
+                body.embeddingModel,
+                body.visionModel,
+            )
         )
-    )
-    available_ollama_models = _fetch_ollama_model_names() if requested_ollama_models else set()
-    if body.generationModel is not None:
-        updates["generation_model"] = _validate_ollama_model_exists(
-            body.generationModel, "generationModel", available_ollama_models
-        )
-    if body.generationFallback is not None:
-        updates["generation_fallback_model"] = _validate_ollama_model_exists(
-            body.generationFallback, "generationFallback", available_ollama_models
-        )
-    if body.embeddingModel is not None:
-        updates["embedding_model"] = _validate_ollama_model_exists(
-            body.embeddingModel, "embeddingModel", available_ollama_models
-        )
-        _validate_embedding_model_dimension(body.embeddingModel)
-    if body.visionModel is not None:
-        updates["vision_model"] = _validate_ollama_model_exists(
-            body.visionModel, "visionModel", available_ollama_models
-        )
+        available_ollama_models = _fetch_ollama_model_names() if requested_ollama_models else set()
+        if body.generationModel is not None:
+            updates["generation_model"] = _validate_ollama_model_exists(
+                body.generationModel, "generationModel", available_ollama_models
+            )
+        if body.generationFallback is not None:
+            updates["generation_fallback_model"] = _validate_ollama_model_exists(
+                body.generationFallback, "generationFallback", available_ollama_models
+            )
+        if body.embeddingModel is not None:
+            updates["embedding_model"] = _validate_ollama_model_exists(
+                body.embeddingModel, "embeddingModel", available_ollama_models
+            )
+            _validate_embedding_model_dimension(body.embeddingModel)
+        if body.visionModel is not None:
+            updates["vision_model"] = _validate_ollama_model_exists(
+                body.visionModel, "visionModel", available_ollama_models
+            )
+    else:
+        if body.generationModel is not None:
+            updates["generation_model"] = _validate_model_identifier(
+                body.generationModel, "generationModel"
+            )
+        if body.generationFallback is not None:
+            updates["generation_fallback_model"] = _validate_model_identifier(
+                body.generationFallback, "generationFallback"
+            )
+        if body.embeddingModel is not None:
+            updates["embedding_model"] = _validate_model_identifier(
+                body.embeddingModel, "embeddingModel"
+            )
+            _validate_embedding_model_dimension(body.embeddingModel)
+        if body.visionModel is not None:
+            updates["vision_model"] = _validate_model_identifier(
+                body.visionModel, "visionModel"
+            )
     if body.rerankerEnabled is not None:
         updates["reranker_enabled"] = body.rerankerEnabled
     if body.rerankerModel is not None:
@@ -1061,7 +1119,7 @@ def patch_settings(
             )
         updates["provider_type"] = body.providerType
     if body.providerBaseUrl is not None:
-        updates["provider_base_url"] = body.providerBaseUrl.rstrip("/")
+        updates["provider_base_url"] = validate_provider_url(body.providerBaseUrl)
     if body.providerApiKey is not None:
         updates["provider_api_key"] = body.providerApiKey
     if body.providerChatModel is not None:
@@ -1083,7 +1141,6 @@ def patch_settings(
         updates["sse_done_mode"] = body.sseDoneMode
 
     # Require API key when switching to openai_compatible
-    effective_provider = body.providerType or current_config.get("provider_type", "ollama")
     effective_key = body.providerApiKey or current_config.get("provider_api_key")
     if effective_provider == "openai_compatible" and not effective_key:
         raise HTTPException(
@@ -1122,6 +1179,7 @@ def test_provider_connection(
     if provider_type == "openai_compatible":
         if not api_key:
             raise HTTPException(status_code=422, detail="providerApiKey is required for openai_compatible")
+        validate_provider_url(base_url)
         try:
             with httpx.Client(timeout=10.0) as client:
                 resp = client.get(
@@ -1137,8 +1195,10 @@ def test_provider_connection(
                     raise HTTPException(status_code=503, detail=detail)
         except HTTPException:
             raise
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Connection failed: {exc}") from exc
+        except httpx.HTTPError:
+            raise HTTPException(status_code=503, detail="Provider connection failed") from None
+        except Exception:
+            raise HTTPException(status_code=503, detail="Provider connection failed") from None
     else:
         try:
             with httpx.Client(timeout=5.0) as client:

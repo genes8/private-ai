@@ -1,4 +1,6 @@
 from datetime import UTC
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -84,6 +86,23 @@ def test_runtime_config_coerce_bool_handles_string_zero() -> None:
     assert _coerce_bool("0", True) is False
     assert _coerce_bool("false", True) is False
     assert _coerce_bool("1", False) is True
+
+
+def test_load_app_config_coerces_boolean_strings_explicitly() -> None:
+    from app.services.app_config_store import load_app_config
+
+    db = MagicMock()
+    db.query.return_value.all.return_value = [
+        SimpleNamespace(key="sso_only", value="false"),
+        SimpleNamespace(key="redact_pii", value="0"),
+        SimpleNamespace(key="reranker_enabled", value="off"),
+    ]
+
+    config = load_app_config(db)
+
+    assert config["sso_only"] is False
+    assert config["redact_pii"] is False
+    assert config["reranker_enabled"] is False
 
 
 @pytest.mark.asyncio

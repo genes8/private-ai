@@ -1,10 +1,12 @@
 import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ActivityEvent from "../../components/admin/ActivityEvent";
 import Button from "../../components/Button";
 import { exportAuditCsv } from "../../api/audit";
 import type { AuditKind } from "../../api/audit";
 import { useAuditStream } from "../../hooks/useAuditStream";
+import { getSettings } from "../../api/settings";
 import AdminLayout from "./AdminLayout";
 
 const KIND_FILTERS: { label: string; value: AuditKind | "all" }[] = [
@@ -37,6 +39,8 @@ export default function ActivityPage() {
   const [activeKind, setActiveKind] = useState<AuditKind | "all">("all");
   const [activeRange, setActiveRange] = useState("Today");
   const { events, isLoading, page, setPage, limit } = useAuditStream(rangeToStart(activeRange));
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings, staleTime: 60_000 });
+  const retentionDays = settings?.security?.auditRetentionDays ?? 365;
 
   useEffect(() => {
     setPage(0);
@@ -118,7 +122,7 @@ export default function ActivityPage() {
 
           <div className="mt-auto bg-[#f4f1ea] rounded-md p-3 font-mono text-[11px] text-text-3 leading-relaxed">
             <p className="font-medium text-ink text-[10.5px] uppercase tracking-[0.06em] mb-1.5">Retention</p>
-            All audit events retained <b className="text-text">365 days</b>, then archived to immutable storage.
+            All audit events retained <b className="text-text">{retentionDays} days</b>, then archived to immutable storage.
           </div>
         </aside>
 

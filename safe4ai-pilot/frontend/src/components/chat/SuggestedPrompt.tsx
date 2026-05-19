@@ -4,11 +4,10 @@ interface Props {
   tag: string;
   icon?: ReactNode;
   question: string;
-  source: string;
   onSelect: () => void;
 }
 
-export default function SuggestedPrompt({ tag, icon, question, source, onSelect }: Props) {
+export default function SuggestedPrompt({ tag, icon, question, onSelect }: Props) {
   return (
     <button
       onClick={onSelect}
@@ -21,7 +20,6 @@ export default function SuggestedPrompt({ tag, icon, question, source, onSelect 
         </span>
       </div>
       <p className="text-[13px] font-medium text-text leading-snug">{question}</p>
-      <p className="text-[11px] text-text-3 truncate">{source}</p>
     </button>
   );
 }

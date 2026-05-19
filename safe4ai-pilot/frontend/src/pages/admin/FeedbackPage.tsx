@@ -150,38 +150,12 @@ export default function FeedbackPage() {
                 </>
               )}
 
-              {/* Trace grid */}
+              {/* Trace grid — detail not stored */}
               <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-2">trace</p>
               <div className="bg-surface border border-line rounded-[10px] p-3.5 mb-3.5">
-                <div className="grid grid-cols-4 gap-3.5">
-                  {[
-                    ["latency",     "—"],
-                    ["cache",       "—"],
-                    ["model",       "—"],
-                    ["k retrieved", "—"],
-                  ].map(([k, v]) => (
-                    <div key={k}>
-                      <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-1">{k}</p>
-                      <p className="font-mono text-[13px] font-medium text-ink">{v}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Suspected cause card */}
-              <div
-                className="border border-line rounded-[10px] p-3.5 flex gap-3 items-start mb-4"
-                style={{ background: "var(--paper-2, #f4f1ea)" }}
-              >
-                <div className="w-8 h-8 rounded-lg bg-[#f9efd9] text-[#8b5a16] flex items-center justify-center font-medium text-[16px] shrink-0">
-                  !
-                </div>
-                <div className="flex-1">
-                  <p className="text-[13px] font-medium text-ink mb-0.5">Suspected cause</p>
-                  <p className="text-[12px] text-text-2 leading-relaxed">
-                    Review the trace and retrieved chunks above for coverage gaps.
-                  </p>
-                </div>
+                <p className="text-[12px] text-text-3 font-mono">
+                  Trace detail is not recorded. Use the trace ID below to correlate with server logs.
+                </p>
               </div>
 
               {/* Meta */}

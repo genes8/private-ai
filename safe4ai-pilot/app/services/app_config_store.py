@@ -9,6 +9,23 @@ from sqlalchemy.orm import Session
 
 from app.db.models import AppConfig
 
+# Expected Python types for known config keys. Values read from the DB are coerced
+# to these types so that callers can rely on consistent types even if the JSON value
+# was written as a string (e.g., via a direct DB edit).
+_KEY_TYPES: dict[str, type] = {
+    "audit_retention_days": int,
+    "session_hours": int,
+    "retrieval_k": int,
+    "chunk_size": int,
+    "chunk_overlap": int,
+    "daily_ceiling_usd": float,
+    "monthly_ceiling_usd": float,
+    "score_floor": float,
+    "reranker_enabled": bool,
+    "sso_only": bool,
+    "redact_pii": bool,
+}
+
 # Keys in this set are encrypted at rest using Fernet derived from SECRET_KEY.
 _SENSITIVE_KEYS: frozenset[str] = frozenset({
     "openai_api_key",
@@ -18,6 +35,8 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset({
 })
 
 _CIPHER_PREFIX = "enc:"
+_TRUE_STRINGS = {"1", "true", "yes", "on"}
+_FALSE_STRINGS = {"0", "false", "no", "off", ""}
 
 
 def _get_fernet(secret_key: str) -> Fernet:
@@ -38,6 +57,23 @@ def _decrypt(value: str, secret_key: str) -> str:
         return value
 
 
+def _coerce_value(value: Any, expected: type) -> Any:
+    if expected is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in _TRUE_STRINGS:
+                return True
+            if normalized in _FALSE_STRINGS:
+                return False
+            raise ValueError(f"Invalid boolean string: {value}")
+        return bool(value)
+    if isinstance(value, expected):
+        return value
+    return expected(value)
+
+
 def load_app_config(db: Session) -> dict[str, Any]:
     """Return all persisted app_config values as a flat key/value map.
 
@@ -48,9 +84,16 @@ def load_app_config(db: Session) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for row in db.query(AppConfig).all():
         if row.key in _SENSITIVE_KEYS and isinstance(row.value, str):
-            result[row.key] = _decrypt(row.value, settings.secret_key)
+            value: Any = _decrypt(row.value, settings.secret_key)
         else:
-            result[row.key] = row.value
+            value = row.value
+        if row.key in _KEY_TYPES:
+            try:
+                expected = _KEY_TYPES[row.key]
+                value = _coerce_value(value, expected)
+            except (TypeError, ValueError):
+                pass
+        result[row.key] = value
     return result
 
 

@@ -43,19 +43,37 @@ function generateTemporaryPassword(): string {
   const digits = '23456789';
   const special = '!@#$%&*';
   const all = lower + upper + digits + special;
-  const array = new Uint8Array(20);
-  crypto.getRandomValues(array);
-  const chars = Array.from(array).map((b) => all[b % all.length]);
-  // Ensure at least one of each required type at fixed positions
-  const pick = (charset: string) => {
-    const b = new Uint8Array(1);
-    crypto.getRandomValues(b);
-    return charset[b[0] % charset.length];
-  };
-  chars[0] = pick(upper);
-  chars[1] = pick(lower);
-  chars[2] = pick(digits);
-  chars[3] = pick(special);
+
+  function pickUnbiased(charset: string): string {
+    const max = 256 - (256 % charset.length);
+    const buf = new Uint8Array(1);
+    for (;;) {
+      crypto.getRandomValues(buf);
+      if (buf[0] < max) return charset[buf[0] % charset.length];
+    }
+  }
+
+  const chars: string[] = [
+    pickUnbiased(upper),
+    pickUnbiased(lower),
+    pickUnbiased(digits),
+    pickUnbiased(special),
+  ];
+  for (let i = 4; i < 20; i++) {
+    chars.push(pickUnbiased(all));
+  }
+  // Fisher-Yates shuffle
+  for (let i = chars.length - 1; i > 0; i--) {
+    const buf = new Uint8Array(1);
+    const max = 256 - (256 % (i + 1));
+    let j: number;
+    do {
+      crypto.getRandomValues(buf);
+      j = buf[0];
+    } while (j >= max);
+    j = j % (i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
   return chars.join('');
 }
 

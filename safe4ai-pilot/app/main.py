@@ -47,8 +47,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _ensure_documents_columns()
     _ensure_user_columns()
     _ensure_document_foreign_keys()
+    _ensure_agentrun_fk()
     _ensure_deleted_user()
     _ensure_qdrant_collection()
+    _ensure_semantic_cache_dimension()
+    _warn_default_credentials()
 
     with SessionLocal() as db:
         recover_stuck_jobs(db)
@@ -104,13 +107,8 @@ async def protect_csrf(
             response.headers.update(secure_headers.headers())
             return response
 
-        # Verify CSRF double-submit token for all authenticated requests and always for login
-        needs_csrf = (
-            request.cookies.get("access_token")
-            or request.cookies.get("csrf_token")
-            or request.url.path == "/auth/login"
-        )
-        if needs_csrf:
+        # F-10: Always verify CSRF double-submit token for unsafe methods
+        if True:
             csrf_cookie = request.cookies.get("csrf_token")
             csrf_header = request.headers.get("X-CSRF-Token")
             if not csrf_cookie or not csrf_header or not compare_digest(csrf_header, csrf_cookie):
@@ -125,7 +123,13 @@ async def limit_body_size(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     content_length = request.headers.get("content-length")
+    transfer_encoding = request.headers.get("transfer-encoding", "").lower()
     max_body_bytes = settings.max_upload_size_mb * 1024 * 1024
+
+    # F-01: Reject ambiguous requests with both CL and TE (RFC 7230 §3.3.3)
+    if content_length and transfer_encoding:
+        return Response(status_code=400, content="Ambiguous body framing: both Content-Length and Transfer-Encoding present")
+
     if content_length:
         try:
             length = int(content_length)
@@ -133,42 +137,33 @@ async def limit_body_size(
             return Response(status_code=400, content="Invalid content-length header")
         if length > max_body_bytes:
             return Response(status_code=413, content="Request body too large")
-    elif request.headers.get("transfer-encoding", "").lower() == "chunked":
-        # Skip chunked body replay for chat streaming — the body is always tiny JSON
-        # and the replay mechanism uses private ASGI internals that may break across versions.
-        if request.url.path not in {"/chat/stream", "/chat"}:
-            try:
-                total_bytes = 0
-                spooled_body = tempfile.SpooledTemporaryFile(max_size=max_body_bytes)
-                replay_done = False
-                async for chunk in request.stream():
-                    if chunk:
-                        total_bytes += len(chunk)
-                        spooled_body.write(chunk)
-                    if total_bytes > max_body_bytes:
-                        spooled_body.close()
-                        return Response(status_code=413, content="Request body too large")
-                spooled_body.seek(0)
-
-                async def replay_receive() -> dict[str, object]:
-                    nonlocal replay_done
-                    chunk = spooled_body.read(64 * 1024)
-                    if chunk:
-                        return {
-                            "type": "http.request",
-                            "body": chunk,
-                            "more_body": spooled_body.tell() < total_bytes,
-                        }
-                    if replay_done:
-                        return {"type": "http.request", "body": b"", "more_body": False}
-                    replay_done = True
+    elif transfer_encoding == "chunked":
+        # F-02: All paths including /chat and /chat/stream are now checked
+        spooled_body = None
+        try:
+            total_bytes = 0
+            spooled_body = tempfile.SpooledTemporaryFile(max_size=max_body_bytes)
+            async for chunk in request.stream():
+                if chunk:
+                    total_bytes += len(chunk)
+                    spooled_body.write(chunk)
+                if total_bytes > max_body_bytes:
                     spooled_body.close()
-                    return {"type": "http.request", "body": b"", "more_body": False}
+                    spooled_body = None
+                    return Response(status_code=413, content="Request body too large")
+            spooled_body.seek(0)
+            buffered_body = spooled_body.read()
+            spooled_body.close()
+            spooled_body = None
 
-                request._stream_consumed = False
-                request._receive = replay_receive
-            except Exception:
-                return Response(status_code=400, content="Failed to read request body")
+            # F-05: Set _body so Starlette's body()/stream() return it
+            # without consulting _stream_consumed or _receive.
+            request._body = buffered_body  # type: ignore[attr-defined]
+        except Exception:
+            return Response(status_code=400, content="Failed to read request body")
+        finally:
+            if spooled_body is not None:
+                spooled_body.close()
     return await call_next(request)
 
 
@@ -314,6 +309,77 @@ def _ensure_deleted_user() -> None:
         logger.warning("deleted_user_ensure_failed", error=str(exc))
 
 
+def _ensure_agentrun_fk() -> None:
+    """Add FK from agent_runs.session_id → sessions.id with ON DELETE CASCADE.
+
+    Orphaned agent_runs (no matching session) are pruned first so the constraint
+    can be added without violating referential integrity.
+    """
+    statements = [
+        "DELETE FROM agent_runs WHERE session_id NOT IN (SELECT id FROM sessions)",
+        "ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_runs_session_fkey",
+        (
+            "ALTER TABLE agent_runs ADD CONSTRAINT agent_runs_session_fkey "
+            "FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE"
+        ),
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+    except Exception as exc:
+        logger.warning("agentrun_fk_ensure_failed", error=str(exc))
+
+
+def _ensure_semantic_cache_dimension() -> None:
+    """Warn if the configured embedding model's dimension doesn't match the SemanticCache column (768)."""
+    try:
+        from app.services.runtime_config import expected_vector_size, load_runtime_config
+
+        with SessionLocal() as db:
+            runtime = load_runtime_config(db)
+        expected = expected_vector_size(runtime.embedding_model)
+        if expected is not None and expected != 768:
+            logger.warning(
+                "semantic_cache_dimension_mismatch",
+                embedding_model=runtime.embedding_model,
+                model_dimension=expected,
+                cache_column_dimension=768,
+                action="Cache similarity searches will fail — migrate the query_embedding column or switch to a 768-dim model",
+            )
+    except Exception as exc:
+        logger.warning("semantic_cache_dimension_check_failed", error=str(exc))
+
+
+def _warn_default_credentials() -> None:
+    """Log warnings if the service is running with known-default secrets.
+
+    F-09: In enforce_https mode (production), block startup entirely.
+    """
+    _DEFAULT_SECRET = "68d543ad135bb451bf0e0a26a7fa6cf5151cb1d0b0c6b1366d18f5543a93927e"
+    _DEFAULT_PG_URL = "postgresql+psycopg2://safe4ai:safe4ai@"
+    if settings.secret_key == _DEFAULT_SECRET:
+        if settings.enforce_https:
+            raise RuntimeError(
+                "FATAL: Default SECRET_KEY detected with enforce_https=True. "
+                "Rotate SECRET_KEY before running in production."
+            )
+        logger.warning(
+            "default_secret_key_in_use",
+            action="Rotate SECRET_KEY before exposing this service to the network",
+        )
+    if settings.postgres_url.startswith(_DEFAULT_PG_URL):
+        if settings.enforce_https:
+            raise RuntimeError(
+                "FATAL: Default PostgreSQL credentials detected with enforce_https=True. "
+                "Change the PostgreSQL password before running in production."
+            )
+        logger.warning(
+            "default_postgres_credentials_in_use",
+            action="Change the PostgreSQL password in .env and docker-compose.yml",
+        )
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
     checks: dict[str, str] = {}
@@ -326,36 +392,41 @@ async def health() -> dict[str, object]:
             conn.execute(text("SELECT 1"))
         checks["postgres"] = "ok"
     except Exception as exc:
-        checks["postgres"] = f"error: {exc}"
+        # F-06: Do not expose connection details in unauthenticated endpoint
+        logger.warning("health_postgres_failed", error=str(exc))
+        checks["postgres"] = "error"
 
     # Qdrant
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             r = await client.get(f"{settings.qdrant_url}/readyz")
-            checks["qdrant"] = "ok" if r.status_code == 200 else f"status {r.status_code}"
+            checks["qdrant"] = "ok" if r.status_code == 200 else "error"
     except Exception as exc:
-        checks["qdrant"] = f"error: {exc}"
+        logger.warning("health_qdrant_failed", error=str(exc))
+        checks["qdrant"] = "error"
 
     if runtime.provider_type == "openai_compatible":
         try:
             if not runtime.provider_api_key:
-                checks["provider"] = "error: missing api key"
+                checks["provider"] = "error"
             else:
                 async with httpx.AsyncClient(timeout=5) as client:
                     r = await client.get(
                         f"{runtime.provider_base_url}/models",
                         headers={"Authorization": f"Bearer {runtime.provider_api_key}"},
                     )
-                    checks["provider"] = "ok" if r.status_code < 400 else f"status {r.status_code}"
+                    checks["provider"] = "ok" if r.status_code < 400 else "error"
         except Exception as exc:
-            checks["provider"] = f"error: {exc}"
+            logger.warning("health_provider_failed", error=str(exc))
+            checks["provider"] = "error"
     else:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(f"{settings.ollama_url}/api/tags")
-                checks["provider"] = "ok" if r.status_code == 200 else f"status {r.status_code}"
+                checks["provider"] = "ok" if r.status_code == 200 else "error"
         except Exception as exc:
-            checks["provider"] = f"error: {exc}"
+            logger.warning("health_provider_failed", error=str(exc))
+            checks["provider"] = "error"
 
     overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return {"status": overall, "checks": checks}

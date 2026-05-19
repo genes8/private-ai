@@ -6,13 +6,10 @@ import {
   Folder,
   Lock,
   Activity,
-  Plus,
-  RefreshCw,
-  Trash2,
   AlertCircle,
   Plug,
 } from "lucide-react";
-import { getSettings, patchSettings, type AppSettings, type PatchableSettings } from "../../api/settings";
+import { getSettings, patchSettings, testProviderConnection, type AppSettings, type PatchableSettings } from "../../api/settings";
 import AdminLayout from "./AdminLayout";
 
 type SaveField =
@@ -46,7 +43,7 @@ const DEFAULT_PROVIDER: AppSettings["provider"] = {
   apiKeyConfigured: false,
   chatModel: "",
   embeddingModel: "",
-  visionModel: "qwen2.5vl:7b",
+  visionModel: "",
 };
 
 // ── Atoms ─────────────────────────────────────────────────────────────────
@@ -144,10 +141,9 @@ function NumberInput({ value, onChange, unit, min, max, step = 1 }: {
     const next = Number(nextRaw);
     if (Number.isFinite(next)) {
       const clamped = Math.min(max ?? next, Math.max(min ?? next, next));
+      setDraft(String(clamped));
       if (clamped !== value) {
         onChange(clamped);
-      } else {
-        setDraft(String(value));
       }
     } else {
       setDraft(String(value));
@@ -223,12 +219,9 @@ function PasswordInput({ placeholder, onCommit }: { placeholder: string; onCommi
   );
 }
 
-function SourceCard({ s, onSync, onRemove }: {
-  s: AppSettings["sources"][number];
-  onSync: () => void; onRemove: () => void;
-}) {
+function SourceCard({ s }: { s: AppSettings["sources"][number] }) {
   const tone = {
-    ok:      { dot: "bg-success",  label: "synced"  },
+    ok:      { dot: "bg-success",  label: "ok"      },
     syncing: { dot: "bg-accent animate-pulse", label: "syncing" },
     error:   { dot: "bg-danger",   label: "error"   },
   }[s.status];
@@ -247,17 +240,9 @@ function SourceCard({ s, onSync, onRemove }: {
           </span>
         </div>
         <div className="text-[11.5px] font-mono text-text-3 truncate">
-          {s.detail} · {s.docCount} docs · synced {s.syncedAt}
+          {s.detail} · {s.docCount} docs{s.syncedAt ? ` · synced ${s.syncedAt}` : ""}
         </div>
       </div>
-      <button onClick={onSync} title="Sync now"
-        className="w-7 h-7 rounded hover:bg-surface-2 flex items-center justify-center">
-        <RefreshCw className="w-3.5 h-3.5 text-text-3" strokeWidth={1.5} />
-      </button>
-      <button onClick={onRemove} title="Disconnect"
-        className="w-7 h-7 rounded hover:bg-surface-2 flex items-center justify-center">
-        <Trash2 className="w-3.5 h-3.5 text-text-3" strokeWidth={1.5} />
-      </button>
     </div>
   );
 }
@@ -282,23 +267,13 @@ function diffFieldKeys(diff: PatchableSettings): SaveField[] {
   return Object.keys(diff) as SaveField[];
 }
 
-function subtractConfirmedDiff(
-  pending: PatchableSettings,
-  confirmed: PatchableSettings,
-): PatchableSettings {
-  const remaining: PatchableSettings = { ...pending };
-  for (const key of Object.keys(confirmed) as Array<keyof PatchableSettings>) {
-    if (remaining[key] === confirmed[key]) {
-      delete remaining[key];
-    }
-  }
-  return remaining;
-}
 
 export default function SettingsPage() {
   const [active, setActive] = useState<SectionId>("models");
   const [saveErrorText, setSaveErrorText] = useState<string | null>(null);
   const [savingFields, setSavingFields] = useState<SaveField[]>([]);
+  const [testConnectionState, setTestConnectionState] = useState<"idle" | "testing" | "ok" | "error">("idle");
+  const [testConnectionMsg, setTestConnectionMsg] = useState<string>("");
   const qc = useQueryClient();
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const unsavedDiffRef = useRef<PatchableSettings>({});
@@ -368,16 +343,21 @@ export default function SettingsPage() {
     saveQueueRef.current = saveQueueRef.current
       .catch(() => undefined)
       .then(async () => {
+        // Snapshot and clear the pending diff atomically so concurrent queueSave
+        // calls after this point accumulate into a fresh batch rather than being
+        // re-sent by this handler.
         const diffToSave = unsavedDiffRef.current;
+        unsavedDiffRef.current = {};
         if (Object.keys(diffToSave).length === 0) {
           return;
         }
         try {
           const nextSettings = await save.mutateAsync(diffToSave);
           qc.setQueryData<AppSettings>(["settings"], nextSettings);
-          unsavedDiffRef.current = subtractConfirmedDiff(unsavedDiffRef.current, diffToSave);
           setSavingFields(diffFieldKeys(unsavedDiffRef.current));
         } catch (err) {
+          // Restore the failed diff so it can be retried
+          unsavedDiffRef.current = mergeDiffs(diffToSave, unsavedDiffRef.current);
           console.error("settings_save_failed", err);
           setSaveErrorText(err instanceof Error ? err.message : "Failed to save changes");
           await qc.invalidateQueries({ queryKey: ["settings"] });
@@ -446,16 +426,6 @@ export default function SettingsPage() {
     }
   };
 
-  const ollamaModelOptions = s?.availableModels
-    ? Array.from(new Set([
-      ...s.availableModels.ollama,
-      s.generationModel,
-      s.generationFallback,
-      s.embeddingModel,
-      s.visionModel,
-    ]))
-    : [];
-
   if (isLoading) {
     return (
       <AdminLayout>
@@ -482,15 +452,24 @@ export default function SettingsPage() {
     );
   }
 
+  const allOllamaModels = s.availableModels?.ollama ?? [];
+  const allProviderModels = s.availableModels?.provider ?? [];
+  const baseModels = s.provider?.type === "openai_compatible" && allProviderModels.length > 0
+    ? allProviderModels
+    : allOllamaModels;
+  const chatModelOptions = Array.from(new Set([...baseModels, s.generationModel, s.generationFallback].filter(Boolean)));
+  const embeddingModelOptions = Array.from(new Set([...baseModels, s.embeddingModel].filter(Boolean)));
+  const visionModelOptions = Array.from(new Set([...baseModels, s.visionModel].filter(Boolean)));
+
   return (
     <AdminLayout>
-      <div className="h-full grid grid-cols-[200px_1fr] bg-paper">
+      <div className="h-full flex flex-col md:grid md:grid-cols-[200px_1fr] bg-paper">
         {/* Left nav */}
-        <aside className="border-r border-line p-4 sticky top-0 self-start">
+        <aside className="border-b border-line md:border-b-0 md:border-r p-4 md:sticky md:top-0 md:self-start overflow-x-auto">
           <div className="text-[10.5px] font-mono uppercase tracking-[.06em] text-text-3 mb-2 px-2">
             settings
           </div>
-          <nav className="flex flex-col gap-0.5">
+          <nav className="flex flex-row md:flex-col gap-0.5 overflow-x-auto pb-1 md:pb-0">
             {NAV.map(item => {
               const Ic = item.icon;
               const on = item.id === active;
@@ -498,7 +477,11 @@ export default function SettingsPage() {
                 <a
                   key={item.id}
                   href={`#${item.id}`}
-                  onClick={() => setActive(item.id)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setActive(item.id);
+                    document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
                   className={`flex items-center gap-2.5 h-7 px-2 rounded text-[12.5px] font-medium transition-colors
                     ${on ? "bg-surface shadow-sm text-ink ring-1 ring-line" : "text-text-2 hover:bg-surface-2"}`}>
                   <Ic className={`w-3.5 h-3.5 ${on ? "text-ink" : "text-text-3"}`} strokeWidth={1.5} />
@@ -567,6 +550,35 @@ export default function SettingsPage() {
                   options={["strict", "async"] as const}
                   onChange={(v) => set("sseDoneMode", v)} />
               </Row>
+              <div className="px-5 py-3.5 flex items-center gap-3">
+                <button
+                  disabled={testConnectionState === "testing"}
+                  onClick={async () => {
+                    setTestConnectionState("testing");
+                    setTestConnectionMsg("");
+                    try {
+                      await testProviderConnection({
+                        providerType: provider.type,
+                        providerBaseUrl: provider.baseUrl,
+                      });
+                      setTestConnectionState("ok");
+                      setTestConnectionMsg("Connection successful");
+                    } catch (err) {
+                      setTestConnectionState("error");
+                      setTestConnectionMsg(err instanceof Error ? err.message : "Connection failed");
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 h-7 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-50"
+                >
+                  {testConnectionState === "testing" ? "Testing…" : "Test connection"}
+                </button>
+                {testConnectionState === "ok" && (
+                  <span className="text-[12px] text-success font-mono">{testConnectionMsg}</span>
+                )}
+                {testConnectionState === "error" && (
+                  <span className="text-[12px] text-danger font-mono">{testConnectionMsg}</span>
+                )}
+              </div>
             </Section>
 
             {/* MODELS */}
@@ -575,25 +587,25 @@ export default function SettingsPage() {
               <Row label="Generation model" hint="Used for every answer. Smaller = faster + cheaper." saving={isSavingField("generationModel")}>
                 <Select
                   value={s.generationModel}
-                  options={ollamaModelOptions}
+                  options={chatModelOptions}
                   onChange={(v) => set("generationModel", v)} />
               </Row>
               <Row label="Fallback model" hint="Tried on low-confidence retries. Set to the same model to disable." saving={isSavingField("generationFallback")}>
                 <Select
                   value={s.generationFallback}
-                  options={ollamaModelOptions}
+                  options={chatModelOptions}
                   onChange={(v) => set("generationFallback", v)} />
               </Row>
               <Row label="Embedding model" hint="Changing this triggers a full reindex of your corpus." saving={isSavingField("embeddingModel")}>
                 <Select
                   value={s.embeddingModel}
-                  options={ollamaModelOptions}
+                  options={embeddingModelOptions}
                   onChange={(v) => set("embeddingModel", v)} />
               </Row>
               <Row label="OCR model" hint="Used only for PDF pages that need vision fallback." saving={isSavingField("visionModel")}>
                 <Select
                   value={s.visionModel}
-                  options={ollamaModelOptions}
+                  options={visionModelOptions}
                   onChange={(v) => set("visionModel", v)} />
               </Row>
               <Row
@@ -637,24 +649,8 @@ export default function SettingsPage() {
             <Section id="sources" title="Document sources"
               subtitle="Indexed locations watched for changes. Drop a file in any of these and it shows up in chat within ~30s.">
               {s.sources.map(src => (
-                <SourceCard key={src.id} s={src}
-                  onSync={() => {/* TODO: trigger sync */}}
-                  onRemove={() => {/* TODO: confirm + remove */}} />
+                <SourceCard key={src.id} s={src} />
               ))}
-              <div className="px-5 py-3.5 flex items-center justify-between bg-surface-2">
-                <span className="text-[12px] text-text-2">Connect another location.</span>
-                <div className="flex gap-2">
-                  <button className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2">
-                    <Plus className="w-3 h-3" strokeWidth={2} /> S3 bucket
-                  </button>
-                  <button className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2">
-                    <Plus className="w-3 h-3" strokeWidth={2} /> Google Drive
-                  </button>
-                  <button className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2">
-                    <Plus className="w-3 h-3" strokeWidth={2} /> Watch folder
-                  </button>
-                </div>
-              </div>
             </Section>
 
             {/* SECURITY */}
@@ -714,8 +710,19 @@ export default function SettingsPage() {
 
             {saveErrorText && (
               <div className="flex items-center gap-2 p-3 rounded bg-danger-soft text-danger text-[12.5px]">
-                <AlertCircle className="w-4 h-4" strokeWidth={1.5} />
-                {saveErrorText}
+                <AlertCircle className="w-4 h-4 shrink-0" strokeWidth={1.5} />
+                <span className="flex-1">{saveErrorText}</span>
+                <button
+                  className="text-[12px] underline hover:no-underline shrink-0"
+                  onClick={() => {
+                    setSaveErrorText(null);
+                    if (Object.keys(unsavedDiffRef.current).length > 0) {
+                      queueSave(unsavedDiffRef.current);
+                    }
+                  }}
+                >
+                  Retry
+                </button>
               </div>
             )}
 
@@ -726,7 +733,7 @@ export default function SettingsPage() {
             )}
 
             <footer className="mt-6 mb-4 flex items-center justify-between text-[11px] font-mono text-text-3">
-              <span>Settings v0.4.18 · loaded from server</span>
+              <span>loaded from server</span>
             </footer>
           </div>
         </div>

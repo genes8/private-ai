@@ -19,6 +19,7 @@ export interface AppSettings {
   sseDoneMode: SseDoneMode;
   availableModels: {
     ollama: string[];
+    provider: string[];
     reranker: string[];
   };
   reranker: { enabled: boolean; model: string };
@@ -34,7 +35,7 @@ export interface AppSettings {
     label: string;
     detail: string;
     docCount: number;
-    syncedAt: string;
+    syncedAt: string | null;
     status: "ok" | "syncing" | "error";
   }>;
   security: {
@@ -83,4 +84,10 @@ export const patchSettings = (diff: PatchableSettings) =>
   apiFetch<AppSettings>("/settings", {
     method: "PATCH",
     body: JSON.stringify(diff),
+  });
+
+export const testProviderConnection = (body: Pick<PatchableSettings, "providerType" | "providerBaseUrl" | "providerApiKey">) =>
+  apiFetch<{ status: string }>("/settings/provider/test", {
+    method: "POST",
+    body: JSON.stringify(body),
   });

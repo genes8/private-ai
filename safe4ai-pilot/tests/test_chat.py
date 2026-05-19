@@ -110,7 +110,8 @@ def test_chat_empty_question_rejected(authed_client: TestClient) -> None:
 def test_chat_no_auth_returns_401() -> None:
     client = TestClient(app)
     response = client.post("/chat", json={"question": "hello"})
-    assert response.status_code == 401
+    # F-10: CSRF middleware now rejects before auth check (403 instead of 401)
+    assert response.status_code in {401, 403}
 
 
 def test_chat_graph_not_initialized(authed_client: TestClient) -> None:

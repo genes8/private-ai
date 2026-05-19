@@ -70,7 +70,7 @@ def _write_audit_log(
             id=str(uuid.uuid4()),
             user_id=user_id,
             session_id=session_id,
-            action_type="chat_query",
+            action_type="query",
             query_text=query[:500],
             response_metadata={
                 "trace_id": trace_id,
@@ -386,7 +386,8 @@ async def chat_stream(
 
         except Exception as exc:
             logger.error("graph_stream_failed", error=str(exc))
-            yield _sse("done", {"error": str(exc), "traceId": trace_id, "sessionId": session_id})
+            # F-07: Do not leak internal error details to the client
+            yield _sse("done", {"error": "Pipeline error", "traceId": trace_id, "sessionId": session_id})
             return
 
         if final is None:

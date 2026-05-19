@@ -176,8 +176,8 @@ class TestDocumentList:
     def test_list_documents_returns_200(self) -> None:
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
-        db.query.return_value.outerjoin.return_value.order_by.return_value.all.return_value = [
-            (_make_document(), 3)
+        db.query.return_value.outerjoin.return_value.outerjoin.return_value.order_by.return_value.all.return_value = [
+            (_make_document(), 3, "admin@test.com")
         ]
 
         with patch("pathlib.Path.mkdir"):
@@ -338,16 +338,17 @@ class TestDocumentReindex:
         from app.main import app
         app.dependency_overrides.clear()
 
-    def test_reindex_qdrant_failure_does_not_delete_db_chunks(self) -> None:
+    def test_reindex_qdrant_failure_does_not_delete_db_chunks_or_schedule(self) -> None:
+        """Qdrant delete failure must stop reindex to avoid stale vector hits."""
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
         doc = _make_document()
         db.get.side_effect = lambda model, pk: admin if model is User else doc
 
-        document_chunk_query = MagicMock()
-        document_chunk_query.filter.return_value.delete.return_value = 1
         ingestion_job_query = MagicMock()
         ingestion_job_query.filter.return_value.first.return_value = None
+        document_chunk_query = MagicMock()
+        document_chunk_query.filter.return_value.delete.return_value = 1
         generic_query = MagicMock()
 
         def _query(model: Any) -> Any:
@@ -362,12 +363,15 @@ class TestDocumentReindex:
 
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=True), \
-             patch("app.api.admin_routes._delete_qdrant_points", side_effect=RuntimeError("qdrant down")):
+             patch("app.api.admin_routes._delete_qdrant_points", side_effect=RuntimeError("qdrant down")), \
+             patch("app.api.admin_routes._schedule_ingestion_task") as mock_schedule:
             client = _make_test_client(db, admin)
             resp = client.post("/admin/documents/doc-1/reindex")
 
         assert resp.status_code == 502
         document_chunk_query.filter.return_value.delete.assert_not_called()
+        mock_schedule.assert_not_called()
+        assert doc.ingestion_status == IngestionStatus.failed
         from app.main import app
         app.dependency_overrides.clear()
 
