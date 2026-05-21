@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import csv
 import io
+import json
 import re
 import secrets
 import threading
@@ -188,6 +189,14 @@ def _serialize_settings(db: Session) -> dict[str, Any]:
         str(_val("embedding_model", settings.embedding_model)),
         str(_val("vision_model", "qwen2.5vl:7b")),
     }
+    custom_provider_models: list[str] = []
+    try:
+        raw_custom = _val("custom_provider_models", "[]")
+        parsed = json.loads(raw_custom) if isinstance(raw_custom, str) else raw_custom
+        custom_provider_models = [str(m) for m in parsed if isinstance(m, str)]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        custom_provider_models = []
+    all_provider_models = sorted(set(available_provider_models) | set(custom_provider_models))
     provider_api_key_raw = _val("provider_api_key", "")
     return {
         "generationModel": _val("generation_model", settings.ollama_model),
@@ -209,11 +218,12 @@ def _serialize_settings(db: Session) -> dict[str, Any]:
         "sseDoneMode": _val("sse_done_mode", "strict"),
         "availableModels": {
             "ollama": sorted(set(available_ollama_models) | current_ollama_models),
-            "provider": available_provider_models,
+            "provider": all_provider_models,
             "reranker": [
                 "cross-encoder/ms-marco-MiniLM-L-6-v2",
                 "bge-reranker-v2",
             ],
+            "customProvider": custom_provider_models,
         },
         "reranker": {
             "enabled": _val("reranker_enabled", True),
@@ -998,6 +1008,7 @@ class PatchSettingsRequest(BaseModel):
     providerEmbeddingModel: str | None = None
     providerVisionModel: str | None = None
     sseDoneMode: str | None = None
+    providerCustomModels: list[str] | None = None
 
 
 @router.patch("/settings", status_code=200)
@@ -1139,6 +1150,13 @@ def patch_settings(
         if body.sseDoneMode not in {"strict", "async"}:
             raise HTTPException(status_code=422, detail="sseDoneMode must be strict or async")
         updates["sse_done_mode"] = body.sseDoneMode
+    if body.providerCustomModels is not None:
+        if len(body.providerCustomModels) > 50:
+            raise HTTPException(status_code=422, detail="Too many custom models (max 50)")
+        validated_custom: list[str] = []
+        for m in body.providerCustomModels:
+            validated_custom.append(_validate_model_identifier(m, "providerCustomModels"))
+        updates["custom_provider_models"] = validated_custom
 
     # Require API key when switching to openai_compatible
     effective_key = body.providerApiKey or current_config.get("provider_api_key")
@@ -1148,14 +1166,20 @@ def patch_settings(
         )
 
     upsert_app_config(db, updates, commit=False)
-    db.commit()
     try:
         _runtime, retriever, reranker, graph = build_runtime_components(db)
-        request.app.state.retriever = retriever
-        request.app.state.reranker = reranker
-        request.app.state.graph = graph
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("runtime_refresh_failed", error=str(exc))
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail=f"Configuration is invalid and was not saved: {exc}",
+        ) from exc
+    db.commit()
+    request.app.state.retriever = retriever
+    request.app.state.reranker = reranker
+    request.app.state.graph = graph
+    with _settings_live_cache_lock:
+        _settings_live_cache["expires_at"] = 0.0
     logger.info("settings_updated", keys=list(updates.keys()))
     return _serialize_settings(db)
 

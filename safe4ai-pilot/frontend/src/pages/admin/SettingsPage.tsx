@@ -8,6 +8,8 @@ import {
   Activity,
   AlertCircle,
   Plug,
+  Plus,
+  X,
 } from "lucide-react";
 import { getSettings, patchSettings, testProviderConnection, type AppSettings, type PatchableSettings } from "../../api/settings";
 import AdminLayout from "./AdminLayout";
@@ -199,12 +201,17 @@ function TextInput({ value, onCommit }: { value: string; onCommit: (v: string) =
   );
 }
 
-function PasswordInput({ placeholder, onCommit }: { placeholder: string; onCommit: (v: string) => void }) {
+function PasswordInput({ placeholder, onCommit, onChange }: {
+  placeholder: string;
+  onCommit: (v: string) => void;
+  onChange?: (v: string) => void;
+}) {
   const [draft, setDraft] = useState("");
 
   function commit(v: string) {
     if (v) onCommit(v);
     setDraft("");
+    onChange?.("");
   }
 
   return (
@@ -212,10 +219,28 @@ function PasswordInput({ placeholder, onCommit }: { placeholder: string; onCommi
       type="password"
       value={draft}
       placeholder={placeholder}
-      onChange={(e) => setDraft(e.target.value)}
+      onChange={(e) => { setDraft(e.target.value); onChange?.(e.target.value); }}
       onBlur={(e) => commit(e.target.value)}
       onKeyDown={(e) => { if (e.key === "Enter") { commit(e.currentTarget.value); e.currentTarget.blur(); } }}
       className="w-64 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
+  );
+}
+
+function ModelSelect({ value, options, onChange, placeholder = "Select model" }: {
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const allOptions = Array.from(new Set([...options, value].filter(Boolean)));
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="h-8 px-2.5 pr-7 rounded border border-line bg-surface text-[12.5px] font-medium text-text outline-none focus:border-accent w-64">
+      {allOptions.length === 0 && <option value="">{placeholder}</option>}
+      {allOptions.map(o => <option key={o} value={o}>{o}</option>)}
+    </select>
   );
 }
 
@@ -274,6 +299,9 @@ export default function SettingsPage() {
   const [savingFields, setSavingFields] = useState<SaveField[]>([]);
   const [testConnectionState, setTestConnectionState] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testConnectionMsg, setTestConnectionMsg] = useState<string>("");
+  const [pendingApiKey, setPendingApiKey] = useState<string>("");
+  const [customModelInput, setCustomModelInput] = useState<string>("");
+  const [savingCustomModels, setSavingCustomModels] = useState(false);
   const qc = useQueryClient();
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const unsavedDiffRef = useRef<PatchableSettings>({});
@@ -509,77 +537,168 @@ export default function SettingsPage() {
             </header>
 
             {/* PROVIDER */}
-            <Section id="provider" title="Inference provider"
-              subtitle="Choose the runtime that handles chat, embeddings and OCR. Use local Ollama or an OpenAI-compatible API.">
-              <Row label="Mode" hint="Switch between a local Ollama instance and any OpenAI-compatible API endpoint." saving={isSavingField("providerType")}>
-                <Select
-                  value={provider.type}
-                  options={["ollama", "openai_compatible"] as const}
-                  onChange={(v) => set("provider", { ...provider, type: v })} />
-              </Row>
-              <Row label="Base URL" hint="Ollama default: http://localhost:11434. For API providers: https://api.openai.com/v1." saving={isSavingField("providerBaseUrl")}>
-                <TextInput
-                  value={provider.baseUrl}
-                  onCommit={(v) => set("provider", { ...provider, baseUrl: v })} />
-              </Row>
-              {provider.type === "openai_compatible" && (
-                <Row label="API key" hint={provider.apiKeyConfigured ? "A key is already configured. Enter a new key to rotate it." : "Required for API mode."} saving={isSavingField("providerApiKey")}>
-                  <PasswordInput
-                    placeholder={provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
-                    onCommit={(v) => v && queueSave({ providerApiKey: v })} />
-                </Row>
-              )}
-              <Row label="Chat model" hint="Used for query rewriting, grading, generation, and routing." saving={isSavingField("providerChatModel")}>
-                <TextInput
-                  value={provider.chatModel}
-                  onCommit={(v) => set("provider", { ...provider, chatModel: v })} />
-              </Row>
-              <Row label="Embedding model" hint="Changing this requires reindexing the entire document corpus." saving={isSavingField("providerEmbeddingModel")}>
-                <TextInput
-                  value={provider.embeddingModel}
-                  onCommit={(v) => set("provider", { ...provider, embeddingModel: v })} />
-              </Row>
-              <Row label="Vision model" hint="Used for OCR on PDF pages with insufficient text." saving={isSavingField("providerVisionModel")}>
-                <TextInput
-                  value={provider.visionModel}
-                  onCommit={(v) => set("provider", { ...provider, visionModel: v })} />
-              </Row>
-              <Row label="SSE completion mode" hint="Strict waits for persistence before sending done; async returns done immediately for lower p99 latency." saving={isSavingField("sseDoneMode")}>
-                <Select
-                  value={s.sseDoneMode}
-                  options={["strict", "async"] as const}
-                  onChange={(v) => set("sseDoneMode", v)} />
-              </Row>
-              <div className="px-5 py-3.5 flex items-center gap-3">
-                <button
-                  disabled={testConnectionState === "testing"}
-                  onClick={async () => {
-                    setTestConnectionState("testing");
-                    setTestConnectionMsg("");
-                    try {
-                      await testProviderConnection({
-                        providerType: provider.type,
-                        providerBaseUrl: provider.baseUrl,
-                      });
-                      setTestConnectionState("ok");
-                      setTestConnectionMsg("Connection successful");
-                    } catch (err) {
-                      setTestConnectionState("error");
-                      setTestConnectionMsg(err instanceof Error ? err.message : "Connection failed");
-                    }
-                  }}
-                  className="inline-flex items-center gap-1.5 h-7 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-50"
-                >
-                  {testConnectionState === "testing" ? "Testing…" : "Test connection"}
-                </button>
-                {testConnectionState === "ok" && (
-                  <span className="text-[12px] text-success font-mono">{testConnectionMsg}</span>
-                )}
-                {testConnectionState === "error" && (
-                  <span className="text-[12px] text-danger font-mono">{testConnectionMsg}</span>
-                )}
-              </div>
-            </Section>
+            {(() => {
+              const providerModels = s.availableModels?.provider ?? [];
+              const ollamaModels = s.availableModels?.ollama ?? [];
+              const customProviderModels = s.availableModels?.customProvider ?? [];
+              const modelOptions = provider.type === "openai_compatible" ? providerModels : ollamaModels;
+
+              const saveCustomModels = async (models: string[]) => {
+                setSavingCustomModels(true);
+                try {
+                  const next = await save.mutateAsync({ providerCustomModels: models });
+                  qc.setQueryData<AppSettings>(["settings"], next);
+                } catch (err) {
+                  console.error("custom_models_save_failed", err);
+                  setSaveErrorText(err instanceof Error ? err.message : "Failed to save custom models");
+                } finally {
+                  setSavingCustomModels(false);
+                }
+              };
+
+              return (
+                <Section id="provider" title="Inference provider"
+                  subtitle="Choose the runtime that handles chat, embeddings and OCR. Use local Ollama or an OpenAI-compatible API (DeepSeek, OpenAI, Qwen, GLM, etc.).">
+                  <Row label="Mode" hint="Local Ollama runs entirely on your server. OpenAI-compatible sends requests to an external API." saving={isSavingField("providerType")}>
+                    <Select
+                      value={provider.type}
+                      options={["ollama", "openai_compatible"] as const}
+                      onChange={(v) => set("provider", { ...provider, type: v })} />
+                  </Row>
+                  <Row label="Base URL" hint={provider.type === "ollama" ? "Default: http://localhost:11434" : "e.g. https://api.openai.com/v1 or https://api.deepseek.com/v1"} saving={isSavingField("providerBaseUrl")}>
+                    <TextInput
+                      value={provider.baseUrl}
+                      onCommit={(v) => set("provider", { ...provider, baseUrl: v })} />
+                  </Row>
+                  {provider.type === "openai_compatible" && (
+                    <Row label="API key" hint={provider.apiKeyConfigured ? "A key is configured. Enter a new key to rotate it." : "Required for API mode."} saving={isSavingField("providerApiKey")}>
+                      <PasswordInput
+                        placeholder={provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
+                        onCommit={(v) => { if (v) { queueSave({ providerApiKey: v }); setPendingApiKey(""); } }}
+                        onChange={setPendingApiKey} />
+                    </Row>
+                  )}
+                  <Row label="Chat model" hint="Used for query rewriting, grading, generation, and routing." saving={isSavingField("providerChatModel")}>
+                    <ModelSelect
+                      value={provider.chatModel}
+                      options={modelOptions}
+                      onChange={(v) => set("provider", { ...provider, chatModel: v })}
+                      placeholder={provider.type === "ollama" ? "No Ollama models found" : "Select or add a model"} />
+                  </Row>
+                  <Row label="Embedding model" hint="Changing this requires reindexing the entire document corpus." saving={isSavingField("providerEmbeddingModel")}>
+                    <ModelSelect
+                      value={provider.embeddingModel}
+                      options={modelOptions}
+                      onChange={(v) => set("provider", { ...provider, embeddingModel: v })}
+                      placeholder={provider.type === "ollama" ? "No Ollama models found" : "Select or add a model"} />
+                  </Row>
+                  <Row label="Vision model" hint="Used for OCR on PDF pages with insufficient text." saving={isSavingField("providerVisionModel")}>
+                    <ModelSelect
+                      value={provider.visionModel}
+                      options={modelOptions}
+                      onChange={(v) => set("provider", { ...provider, visionModel: v })}
+                      placeholder={provider.type === "ollama" ? "No Ollama models found" : "Select or add a model"} />
+                  </Row>
+
+                  {/* Custom model management — only for OpenAI-compatible */}
+                  {provider.type === "openai_compatible" && (
+                    <div className="px-5 py-4 border-t border-line">
+                      <div className="text-[12px] font-medium text-ink mb-1">Custom model names</div>
+                      <div className="text-[11.5px] text-text-2 mb-3 max-w-[55ch]">
+                        Add model IDs that aren't in the dropdown above — e.g. <span className="font-mono">deepseek-chat</span>, <span className="font-mono">qwen-plus</span>, <span className="font-mono">glm-4</span>. These are saved and appear in every model selector.
+                      </div>
+                      {customProviderModels.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          {customProviderModels.map(m => (
+                            <span key={m} className="inline-flex items-center gap-1 h-6 px-2 rounded-full bg-surface border border-line text-[11.5px] font-mono text-text">
+                              {m}
+                              <button
+                                disabled={savingCustomModels}
+                                onClick={() => saveCustomModels(customProviderModels.filter(x => x !== m))}
+                                className="text-text-3 hover:text-danger disabled:opacity-40 ml-0.5"
+                                aria-label={`Remove ${m}`}>
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={customModelInput}
+                          onChange={e => setCustomModelInput(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === "Enter" && customModelInput.trim()) {
+                              const name = customModelInput.trim();
+                              setCustomModelInput("");
+                              if (!customProviderModels.includes(name)) {
+                                saveCustomModels([...customProviderModels, name]);
+                              }
+                            }
+                          }}
+                          placeholder="e.g. deepseek-chat"
+                          className="w-52 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
+                        <button
+                          disabled={!customModelInput.trim() || savingCustomModels}
+                          onClick={() => {
+                            const name = customModelInput.trim();
+                            if (!name) return;
+                            setCustomModelInput("");
+                            if (!customProviderModels.includes(name)) {
+                              saveCustomModels([...customProviderModels, name]);
+                            }
+                          }}
+                          className="inline-flex items-center gap-1.5 h-8 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-40">
+                          <Plus className="w-3.5 h-3.5" />
+                          Add
+                        </button>
+                        {savingCustomModels && (
+                          <span className="text-[11px] font-mono text-accent animate-pulse">Saving…</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <Row label="SSE completion mode" hint="Strict waits for persistence before sending done; async returns done immediately for lower p99 latency." saving={isSavingField("sseDoneMode")}>
+                    <Select
+                      value={s.sseDoneMode}
+                      options={["strict", "async"] as const}
+                      onChange={(v) => set("sseDoneMode", v)} />
+                  </Row>
+                  <div className="px-5 py-3.5 flex items-center gap-3">
+                    <button
+                      disabled={testConnectionState === "testing"}
+                      onClick={async () => {
+                        setTestConnectionState("testing");
+                        setTestConnectionMsg("");
+                        try {
+                          await testProviderConnection({
+                            providerType: provider.type,
+                            providerBaseUrl: provider.baseUrl,
+                            ...(pendingApiKey ? { providerApiKey: pendingApiKey } : {}),
+                          });
+                          setTestConnectionState("ok");
+                          setTestConnectionMsg("Connection successful");
+                        } catch (err) {
+                          setTestConnectionState("error");
+                          setTestConnectionMsg(err instanceof Error ? err.message : "Connection failed");
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 h-7 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-50"
+                    >
+                      {testConnectionState === "testing" ? "Testing…" : "Test connection"}
+                    </button>
+                    {testConnectionState === "ok" && (
+                      <span className="text-[12px] text-success font-mono">{testConnectionMsg}</span>
+                    )}
+                    {testConnectionState === "error" && (
+                      <span className="text-[12px] text-danger font-mono">{testConnectionMsg}</span>
+                    )}
+                  </div>
+                </Section>
+              );
+            })()}
 
             {/* MODELS */}
             <Section id="models" title="Models"

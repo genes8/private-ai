@@ -63,6 +63,7 @@ def _write_audit_log(
     latency_ms: int,
     k_retrieved: int,
     status: str = "completed",
+    model_name: str = "",
 ) -> None:
     """Append an audit-log row. Swallows errors so logging never breaks the response."""
     try:
@@ -78,7 +79,7 @@ def _write_audit_log(
                 "status": status,
             },
             latency_ms=latency_ms,
-            model_used=settings.ollama_model,
+            model_used=model_name or settings.ollama_model,
             trace_id=trace_id,
         )
         db.add(entry)
@@ -92,6 +93,7 @@ def _record_cost(
     session_id: str,
     prompt_tokens: int,
     completion_tokens: int,
+    model_name: str = "",
 ) -> None:
     """Record agent-run cost. Swallows errors so costing never breaks the response."""
     try:
@@ -101,7 +103,7 @@ def _record_cost(
             session_id=session_id,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            model=settings.ollama_model,
+            model=model_name or settings.ollama_model,
             status="completed",
         )
     except Exception as exc:
@@ -308,6 +310,11 @@ async def chat(
 
     latency_ms = int((time.monotonic() - started_at) * 1000)
     _save_assistant_reply(convo, final)
+    try:
+        runtime_cfg = load_runtime_config(db)
+        _chat_model_name = runtime_cfg.chat_model
+    except Exception:
+        _chat_model_name = settings.ollama_model
     _write_audit_log(
         db,
         user_id=str(current_user.id),
@@ -317,10 +324,11 @@ async def chat(
         latency_ms=latency_ms,
         k_retrieved=len(final.retrieved_chunks),
         status="completed",
+        model_name=_chat_model_name,
     )
     prompt_tokens = estimate_tokens(body.question)
     completion_tokens = estimate_tokens(final.draft_answer or "")
-    _record_cost(db, session_id, prompt_tokens, completion_tokens)
+    _record_cost(db, session_id, prompt_tokens, completion_tokens, model_name=_chat_model_name)
 
     return ChatResponse(
         answer=final.draft_answer,
@@ -433,6 +441,8 @@ async def chat_stream(
         except Exception:
             sse_done_mode = "strict"
 
+        _model_name = runtime.chat_model if runtime is not None else settings.ollama_model
+
         async def _finalize() -> None:
             try:
                 finalize_chat_run(
@@ -444,7 +454,7 @@ async def chat_stream(
                     k_retrieved=len(final.retrieved_chunks),
                     usage=usage,
                     cost_per_1k_tokens=settings.cost_per_1k_tokens,
-                    model_name=runtime.provider_type if runtime is not None else "local",
+                    model_name=_model_name,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -468,7 +478,7 @@ async def chat_stream(
                             k_retrieved=len(final.retrieved_chunks),
                             usage=usage,
                             cost_per_1k_tokens=settings.cost_per_1k_tokens,
-                            model_name=runtime.provider_type if runtime is not None else "local",
+                            model_name=_model_name,
                         )
                     except Exception as exc:
                         logger.warning(

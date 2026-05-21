@@ -21,6 +21,7 @@ export interface AppSettings {
     ollama: string[];
     provider: string[];
     reranker: string[];
+    customProvider: string[];
   };
   reranker: { enabled: boolean; model: string };
   retrieval: {
@@ -75,6 +76,7 @@ export type PatchableSettings = Partial<{
   providerChatModel: string;
   providerEmbeddingModel: string;
   providerVisionModel: string;
+  providerCustomModels: string[];
   sseDoneMode: SseDoneMode;
 }>;
 

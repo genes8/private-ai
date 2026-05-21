@@ -424,6 +424,7 @@ class TestSettings:
         db.query.return_value.all.side_effect = [
             [],
             [updated_generation],
+            [updated_generation],
         ]
         db.query.return_value.count.return_value = 0
 
@@ -489,6 +490,58 @@ class TestSettings:
             "qwen3.5:9b",
         ]
         assert "bge-reranker-v2" in body["availableModels"]["reranker"]
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_rolls_back_when_runtime_rebuild_fails(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.get.side_effect = lambda model, pk: admin if model is User else None
+        db.query.return_value.all.return_value = []
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            return_value={"qwen3:latest"},
+        ), patch(
+            "app.api.admin_routes.build_runtime_components",
+            side_effect=RuntimeError("bad provider config"),
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"generationModel": "qwen3:latest"})
+
+        assert resp.status_code == 422
+        assert "Configuration is invalid and was not saved" in resp.json()["detail"]
+        db.rollback.assert_called_once()
+        db.commit.assert_not_called()
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_get_settings_includes_custom_provider_models(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        custom_models = MagicMock()
+        custom_models.key = "custom_provider_models"
+        custom_models.value = ["deepseek-chat", "qwen-plus"]
+        db.query.return_value.all.return_value = [custom_models]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            return_value=set(),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ), patch.dict(
+            "app.api.admin_routes._settings_live_cache", {"expires_at": 0.0}
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.get("/settings")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["availableModels"]["customProvider"] == ["deepseek-chat", "qwen-plus"]
+        assert "deepseek-chat" in body["availableModels"]["provider"]
+        assert "qwen-plus" in body["availableModels"]["provider"]
         from app.main import app
         app.dependency_overrides.clear()
 
