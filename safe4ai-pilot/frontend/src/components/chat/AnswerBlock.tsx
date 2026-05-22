@@ -1,5 +1,5 @@
 import { Copy, ThumbsDown, ThumbsUp } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SseCite } from "../../api/chat";
 import Logo from "../Logo";
 import CitationChip from "./CitationChip";
@@ -16,6 +16,26 @@ interface Props {
   onCitationOpen?: (id: string) => void;
   isStreaming?: boolean;
   rated?: "up" | "down";
+}
+
+function LiveTimer() {
+  const [secs, setSecs] = useState(0);
+  const startRef = useRef(Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setSecs(Math.floor((Date.now() - startRef.current) / 1000));
+    }, 250);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <span className="inline-flex items-center gap-2 font-mono text-[11px] text-text-3">
+      <span className="font-medium text-text-2">{secs}s</span>
+      <span className="text-text-mute">·</span>
+      <span className="text-text-mute">thinking…</span>
+    </span>
+  );
 }
 
 function renderWithCitations(
@@ -47,12 +67,10 @@ export default function AnswerBlock({ body, sources, trust, onCopy, onRate, onCi
         <Logo size={16} />
       </div>
       <div className="space-y-2 min-w-0">
-        {!isStreaming && (
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] font-semibold text-ink tracking-tight">private·ai</span>
-            <TrustSignal {...trust} />
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-semibold text-ink tracking-tight">private·ai</span>
+          {isStreaming ? <LiveTimer /> : <TrustSignal {...trust} />}
+        </div>
 
         <p className="text-[14.5px] leading-relaxed tracking-body text-text whitespace-pre-wrap">
           {renderWithCitations(body, handleCiteOpen, activeId)}

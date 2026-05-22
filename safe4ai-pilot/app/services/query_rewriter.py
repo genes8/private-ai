@@ -10,14 +10,14 @@ class QueryRewriter:
         self._ollama_url = ollama_url
         self._model = model
 
-    async def rewrite(self, query: str) -> str:
+    async def rewrite(self, query: str, *, history: str = "") -> str:
         try:
             template = get_prompt("query_rewriter", "v1")
-            prompt = template.template.format(query=query)
+            prompt = template.template.format(query=query, history=history)
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
                     f"{self._ollama_url}/api/generate",
-                    json={"model": self._model, "prompt": prompt, "stream": False},
+                    json={"model": self._model, "prompt": prompt, "stream": False, "think": False},
                     timeout=30.0,
                 )
                 resp.raise_for_status()

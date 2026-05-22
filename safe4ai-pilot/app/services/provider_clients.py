@@ -165,7 +165,7 @@ class OllamaProvider:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
                 f"{self._base_url}/api/chat",
-                json={"model": self._chat_model, "messages": messages, "stream": False},
+                json={"model": self._chat_model, "messages": messages, "stream": False, "think": False},
             )
         response.raise_for_status()
         payload = response.json()
@@ -227,7 +227,7 @@ class OllamaProvider:
         async def _call(c: httpx.AsyncClient) -> str:
             resp = await c.post(
                 f"{self._base_url}/api/generate",
-                json={"model": self._chat_model, "prompt": prompt, "stream": False},
+                json={"model": self._chat_model, "prompt": prompt, "stream": False, "think": False},
                 timeout=timeout,
             )
             resp.raise_for_status()

@@ -424,6 +424,7 @@ async def chat_stream(
                 "file": c.filename,
                 "page": c.page_number,
                 "score": c.score,
+                "excerpt": c.excerpt,
             })
 
         latency_ms = int((time.monotonic() - started_at) * 1000)

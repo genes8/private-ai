@@ -14,11 +14,14 @@ TEMPLATES: list[PromptTemplate] = [
         name="query_rewriter",
         version="v1",
         template=(
-            "You are a search query optimizer. Given the user question below, "
-            "write a hypothetical document excerpt that would perfectly answer it. "
-            "Return only the hypothetical excerpt, no explanation.\n\nQuestion: {query}"
+            "You are a search query optimizer. Given the conversation history and the user's latest question, "
+            "write a hypothetical document excerpt that would perfectly answer the question. "
+            "Use context from the conversation to resolve pronouns and vague references (e.g. 'it', 'this', 'the alliance', 'tell me more'). "
+            "Return only the hypothetical excerpt, no explanation.\n\n"
+            "{history}"
+            "Question: {query}"
         ),
-        input_variables=["query"],
+        input_variables=["query", "history"],
     ),
     PromptTemplate(
         name="document_grader",

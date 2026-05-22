@@ -69,7 +69,7 @@ def build_graph(
         async def _call(c: httpx.AsyncClient) -> str:
             resp = await c.post(
                 f"{_ollama_url}/api/generate",
-                json={"model": _ollama_model, "prompt": prompt, "stream": False},
+                json={"model": _ollama_model, "prompt": prompt, "stream": False, "think": False},
                 timeout=timeout,
             )
             resp.raise_for_status()
@@ -97,7 +97,15 @@ def build_graph(
         with _node_span("rewrite", state):
             query = state.messages[-1].content if state.messages else ""
             template = get_prompt("query_rewriter", "v1")
-            prompt = template.template.format(query=query)
+            # Include up to last 3 prior exchanges so follow-up questions resolve correctly.
+            prior = state.messages[:-1][-6:]  # up to 6 messages = 3 user+assistant pairs
+            if prior:
+                history = "".join(
+                    f"{m.role.capitalize()}: {m.content}\n" for m in prior
+                ) + "\n"
+            else:
+                history = ""
+            prompt = template.template.format(query=query, history=history)
             try:
                 rewritten = await _llm_generate(prompt)
                 return {"rewritten_query": rewritten.strip() or query, "current_step": "retrieve"}

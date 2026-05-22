@@ -6,7 +6,7 @@ export type StepState = "pending" | "active" | "done";
 
 export interface SseStep   { name: StepName; state: StepState; t: number; meta?: Record<string, unknown> }
 export interface SseToken  { delta: string }
-export interface SseCite   { id: string; file: string; page: number; score: number }
+export interface SseCite   { id: string; file: string; page: number; score: number; excerpt?: string }
 export interface SseDone   {
   traceId: string; latencyMs: number; cache: boolean;
   model: string; kRetrieved: number; sessionId: string; error?: string;
