@@ -10,8 +10,11 @@ import {
   Plug,
   Plus,
   X,
+  Server,
+  CloudLightning,
+  Cloud,
 } from "lucide-react";
-import { getSettings, patchSettings, testProviderConnection, type AppSettings, type PatchableSettings } from "../../api/settings";
+import { getSettings, patchSettings, testProviderConnection, type AppSettings, type PatchableSettings, type ProviderMode, type EmbeddingSource } from "../../api/settings";
 import AdminLayout from "./AdminLayout";
 
 type SaveField =
@@ -37,7 +40,9 @@ type SaveField =
   | "providerChatModel"
   | "providerEmbeddingModel"
   | "providerVisionModel"
-  | "sseDoneMode";
+  | "sseDoneMode"
+  | "providerMode"
+  | "embeddingSource";
 
 const DEFAULT_PROVIDER: AppSettings["provider"] = {
   type: "ollama",
@@ -46,6 +51,8 @@ const DEFAULT_PROVIDER: AppSettings["provider"] = {
   chatModel: "",
   embeddingModel: "",
   visionModel: "",
+  embeddingSource: "ollama" as EmbeddingSource,
+  providerMode: "local" as ProviderMode,
 };
 
 // ── Atoms ─────────────────────────────────────────────────────────────────
@@ -302,6 +309,7 @@ export default function SettingsPage() {
   const [pendingApiKey, setPendingApiKey] = useState<string>("");
   const [customModelInput, setCustomModelInput] = useState<string>("");
   const [savingCustomModels, setSavingCustomModels] = useState(false);
+  const [reindexRequired, setReindexRequired] = useState(false);
   const qc = useQueryClient();
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const unsavedDiffRef = useRef<PatchableSettings>({});
@@ -333,6 +341,8 @@ export default function SettingsPage() {
       chatModel: diff.providerChatModel ?? (current.provider?.chatModel ?? DEFAULT_PROVIDER.chatModel),
       embeddingModel: diff.providerEmbeddingModel ?? (current.provider?.embeddingModel ?? DEFAULT_PROVIDER.embeddingModel),
       visionModel: diff.providerVisionModel ?? (current.provider?.visionModel ?? DEFAULT_PROVIDER.visionModel),
+      embeddingSource: (diff.embeddingSource ?? current.provider?.embeddingSource) ?? DEFAULT_PROVIDER.embeddingSource,
+      providerMode: diff.providerMode ?? current.provider?.providerMode ?? DEFAULT_PROVIDER.providerMode,
     },
     reranker: {
       enabled: diff.rerankerEnabled ?? current.reranker.enabled,
@@ -382,6 +392,9 @@ export default function SettingsPage() {
         try {
           const nextSettings = await save.mutateAsync(diffToSave);
           qc.setQueryData<AppSettings>(["settings"], nextSettings);
+          if ((nextSettings as AppSettings & { reindexRequired?: boolean }).reindexRequired) {
+            setReindexRequired(true);
+          }
           setSavingFields(diffFieldKeys(unsavedDiffRef.current));
         } catch (err) {
           // Restore the failed diff so it can be retried
@@ -440,11 +453,13 @@ export default function SettingsPage() {
     }
     if (key === "provider") {
       const provider = value as AppSettings["provider"];
-      if (provider.type !== (s.provider?.type ?? DEFAULT_PROVIDER.type)) diff.providerType = provider.type;
-      if (provider.baseUrl !== (s.provider?.baseUrl ?? DEFAULT_PROVIDER.baseUrl)) diff.providerBaseUrl = provider.baseUrl;
-      if (provider.chatModel !== (s.provider?.chatModel ?? DEFAULT_PROVIDER.chatModel)) diff.providerChatModel = provider.chatModel;
-      if (provider.embeddingModel !== (s.provider?.embeddingModel ?? DEFAULT_PROVIDER.embeddingModel)) diff.providerEmbeddingModel = provider.embeddingModel;
-      if (provider.visionModel !== (s.provider?.visionModel ?? DEFAULT_PROVIDER.visionModel)) diff.providerVisionModel = provider.visionModel;
+      const cur = s.provider ?? DEFAULT_PROVIDER;
+      if (provider.type !== cur.type) diff.providerType = provider.type;
+      if (provider.baseUrl !== cur.baseUrl) diff.providerBaseUrl = provider.baseUrl;
+      if (provider.chatModel !== cur.chatModel) diff.providerChatModel = provider.chatModel;
+      if (provider.embeddingModel !== cur.embeddingModel) diff.providerEmbeddingModel = provider.embeddingModel;
+      if (provider.visionModel !== cur.visionModel) diff.providerVisionModel = provider.visionModel;
+      if (provider.providerMode !== cur.providerMode) diff.providerMode = provider.providerMode;
     }
     if (key === "sseDoneMode" && value !== s.sseDoneMode) {
       diff.sseDoneMode = value as AppSettings["sseDoneMode"];
@@ -541,7 +556,7 @@ export default function SettingsPage() {
               const providerModels = s.availableModels?.provider ?? [];
               const ollamaModels = s.availableModels?.ollama ?? [];
               const customProviderModels = s.availableModels?.customProvider ?? [];
-              const modelOptions = provider.type === "openai_compatible" ? providerModels : ollamaModels;
+              const mode = provider.providerMode ?? "local";
 
               const saveCustomModels = async (models: string[]) => {
                 setSavingCustomModels(true);
@@ -556,149 +571,223 @@ export default function SettingsPage() {
                 }
               };
 
+              const CustomModelManager = () => (
+                <div className="px-5 py-4 border-t border-line">
+                  <div className="text-[12px] font-medium text-ink mb-1">Custom model names</div>
+                  <div className="text-[11.5px] text-text-2 mb-3 max-w-[55ch]">
+                    Add model IDs that aren't in the dropdown above — e.g. <span className="font-mono">deepseek-chat</span>, <span className="font-mono">qwen-plus</span>, <span className="font-mono">glm-4</span>.
+                  </div>
+                  {customProviderModels.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-3">
+                      {customProviderModels.map(m => (
+                        <span key={m} className="inline-flex items-center gap-1 h-6 px-2 rounded-full bg-surface border border-line text-[11.5px] font-mono text-text">
+                          {m}
+                          <button
+                            disabled={savingCustomModels}
+                            onClick={() => saveCustomModels(customProviderModels.filter(x => x !== m))}
+                            className="text-text-3 hover:text-danger disabled:opacity-40 ml-0.5"
+                            aria-label={`Remove ${m}`}>
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={customModelInput}
+                      onChange={e => setCustomModelInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter" && customModelInput.trim()) {
+                          const name = customModelInput.trim();
+                          setCustomModelInput("");
+                          if (!customProviderModels.includes(name)) saveCustomModels([...customProviderModels, name]);
+                        }
+                      }}
+                      placeholder="e.g. deepseek-chat"
+                      className="w-52 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
+                    <button
+                      disabled={!customModelInput.trim() || savingCustomModels}
+                      onClick={() => {
+                        const name = customModelInput.trim();
+                        if (!name) return;
+                        setCustomModelInput("");
+                        if (!customProviderModels.includes(name)) saveCustomModels([...customProviderModels, name]);
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-40">
+                      <Plus className="w-3.5 h-3.5" />
+                      Add
+                    </button>
+                    {savingCustomModels && <span className="text-[11px] font-mono text-accent animate-pulse">Saving…</span>}
+                  </div>
+                </div>
+              );
+
+              type ModeCard = { id: ProviderMode; title: string; subtitle: string; badge?: string; Icon: React.ComponentType<{ className?: string; strokeWidth?: string | number }> };
+              const MODE_CARDS: ModeCard[] = [
+                { id: "local", title: "Local only", subtitle: "Chat and document search run entirely on your server via Ollama. No data leaves.", Icon: Server },
+                { id: "hybrid", title: "Hybrid", subtitle: "Cloud LLM for answers, Ollama for document search. Best quality — documents stay local.", badge: "Recommended", Icon: CloudLightning },
+                { id: "cloud", title: "Fully cloud", subtitle: "Chat and document search both via a cloud API (requires /embeddings support, e.g. OpenAI).", Icon: Cloud },
+              ];
+
               return (
                 <Section id="provider" title="Inference provider"
-                  subtitle="Choose the runtime that handles chat, embeddings and OCR. Use local Ollama or an OpenAI-compatible API (DeepSeek, OpenAI, Qwen, GLM, etc.).">
-                  <Row label="Mode" hint="Local Ollama runs entirely on your server. OpenAI-compatible sends requests to an external API." saving={isSavingField("providerType")}>
-                    <Select
-                      value={provider.type}
-                      options={["ollama", "openai_compatible"] as const}
-                      onChange={(v) => set("provider", { ...provider, type: v })} />
-                  </Row>
-                  <Row label="Base URL" hint={provider.type === "ollama" ? "Default: http://localhost:11434" : "e.g. https://api.openai.com/v1 or https://api.deepseek.com/v1"} saving={isSavingField("providerBaseUrl")}>
-                    <TextInput
-                      value={provider.baseUrl}
-                      onCommit={(v) => set("provider", { ...provider, baseUrl: v })} />
-                  </Row>
-                  {provider.type === "openai_compatible" && (
-                    <Row label="API key" hint={provider.apiKeyConfigured ? "A key is configured. Enter a new key to rotate it." : "Required for API mode."} saving={isSavingField("providerApiKey")}>
-                      <PasswordInput
-                        placeholder={provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
-                        onCommit={(v) => { if (v) { queueSave({ providerApiKey: v }); setPendingApiKey(""); } }}
-                        onChange={setPendingApiKey} />
-                    </Row>
-                  )}
-                  <Row label="Chat model" hint="Used for query rewriting, grading, generation, and routing." saving={isSavingField("providerChatModel")}>
-                    <ModelSelect
-                      value={provider.chatModel}
-                      options={modelOptions}
-                      onChange={(v) => set("provider", { ...provider, chatModel: v })}
-                      placeholder={provider.type === "ollama" ? "No Ollama models found" : "Select or add a model"} />
-                  </Row>
-                  <Row label="Embedding model" hint="Changing this requires reindexing the entire document corpus." saving={isSavingField("providerEmbeddingModel")}>
-                    <ModelSelect
-                      value={provider.embeddingModel}
-                      options={modelOptions}
-                      onChange={(v) => set("provider", { ...provider, embeddingModel: v })}
-                      placeholder={provider.type === "ollama" ? "No Ollama models found" : "Select or add a model"} />
-                  </Row>
-                  <Row label="Vision model" hint="Used for OCR on PDF pages with insufficient text." saving={isSavingField("providerVisionModel")}>
-                    <ModelSelect
-                      value={provider.visionModel}
-                      options={modelOptions}
-                      onChange={(v) => set("provider", { ...provider, visionModel: v })}
-                      placeholder={provider.type === "ollama" ? "No Ollama models found" : "Select or add a model"} />
-                  </Row>
-
-                  {/* Custom model management — only for OpenAI-compatible */}
-                  {provider.type === "openai_compatible" && (
-                    <div className="px-5 py-4 border-t border-line">
-                      <div className="text-[12px] font-medium text-ink mb-1">Custom model names</div>
-                      <div className="text-[11.5px] text-text-2 mb-3 max-w-[55ch]">
-                        Add model IDs that aren't in the dropdown above — e.g. <span className="font-mono">deepseek-chat</span>, <span className="font-mono">qwen-plus</span>, <span className="font-mono">glm-4</span>. These are saved and appear in every model selector.
-                      </div>
-                      {customProviderModels.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mb-3">
-                          {customProviderModels.map(m => (
-                            <span key={m} className="inline-flex items-center gap-1 h-6 px-2 rounded-full bg-surface border border-line text-[11.5px] font-mono text-text">
-                              {m}
-                              <button
-                                disabled={savingCustomModels}
-                                onClick={() => saveCustomModels(customProviderModels.filter(x => x !== m))}
-                                className="text-text-3 hover:text-danger disabled:opacity-40 ml-0.5"
-                                aria-label={`Remove ${m}`}>
-                                <X className="w-3 h-3" />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={customModelInput}
-                          onChange={e => setCustomModelInput(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === "Enter" && customModelInput.trim()) {
-                              const name = customModelInput.trim();
-                              setCustomModelInput("");
-                              if (!customProviderModels.includes(name)) {
-                                saveCustomModels([...customProviderModels, name]);
-                              }
-                            }
-                          }}
-                          placeholder="e.g. deepseek-chat"
-                          className="w-52 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
+                  subtitle="Choose how AI models are served. Hybrid gives you cloud quality with local privacy.">
+                  {/* Mode selector cards */}
+                  <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {MODE_CARDS.map(({ id, title, subtitle, badge, Icon }) => {
+                      const selected = mode === id;
+                      return (
                         <button
-                          disabled={!customModelInput.trim() || savingCustomModels}
-                          onClick={() => {
-                            const name = customModelInput.trim();
-                            if (!name) return;
-                            setCustomModelInput("");
-                            if (!customProviderModels.includes(name)) {
-                              saveCustomModels([...customProviderModels, name]);
-                            }
-                          }}
-                          className="inline-flex items-center gap-1.5 h-8 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-40">
-                          <Plus className="w-3.5 h-3.5" />
-                          Add
+                          key={id}
+                          type="button"
+                          onClick={() => set("provider", { ...provider, providerMode: id })}
+                          className={`relative flex flex-col items-start gap-2 p-4 rounded-lg border text-left transition-all ${
+                            selected ? "border-ink bg-ink/5 ring-1 ring-ink shadow-sm" : "border-line bg-surface hover:bg-paper-2"
+                          }`}>
+                          {badge && (
+                            <span className="absolute top-2.5 right-2.5 inline-flex items-center h-4 px-1.5 rounded-full bg-accent text-[9px] font-mono font-semibold text-paper uppercase tracking-wide">
+                              {badge}
+                            </span>
+                          )}
+                          <div className={`w-7 h-7 rounded-md flex items-center justify-center ${selected ? "bg-ink text-paper" : "bg-paper-2 text-text-2"}`}>
+                            <Icon className="w-4 h-4" strokeWidth={1.5} />
+                          </div>
+                          <div>
+                            <div className={`text-[13px] font-medium ${selected ? "text-ink" : "text-text"}`}>{title}</div>
+                            <div className="text-[11.5px] text-text-2 mt-0.5 leading-relaxed">{subtitle}</div>
+                          </div>
                         </button>
-                        {savingCustomModels && (
-                          <span className="text-[11px] font-mono text-accent animate-pulse">Saving…</span>
-                        )}
+                      );
+                    })}
+                  </div>
+
+                  {/* Local mode: all models from Ollama */}
+                  {mode === "local" && (
+                    <>
+                      <Row label="Chat model" hint="Used for query rewriting, grading, generation, and routing." saving={isSavingField("providerChatModel")}>
+                        <ModelSelect value={provider.chatModel} options={ollamaModels}
+                          onChange={(v) => set("provider", { ...provider, chatModel: v })} placeholder="No Ollama models found" />
+                      </Row>
+                      <Row label="Embedding model" hint="Changing this requires reindexing the entire document corpus." saving={isSavingField("providerEmbeddingModel")}>
+                        <ModelSelect value={provider.embeddingModel} options={ollamaModels}
+                          onChange={(v) => set("provider", { ...provider, embeddingModel: v })} placeholder="No Ollama models found" />
+                      </Row>
+                      <Row label="Vision model" hint="Used for OCR on PDF pages with insufficient text." saving={isSavingField("providerVisionModel")}>
+                        <ModelSelect value={provider.visionModel} options={ollamaModels}
+                          onChange={(v) => set("provider", { ...provider, visionModel: v })} placeholder="No Ollama models found" />
+                      </Row>
+                    </>
+                  )}
+
+                  {/* Hybrid mode: cloud chat, Ollama embeddings + vision */}
+                  {mode === "hybrid" && (
+                    <>
+                      <Row label="API base URL" hint="e.g. https://api.deepseek.com/v1" saving={isSavingField("providerBaseUrl")}>
+                        <TextInput value={provider.baseUrl} onCommit={(v) => set("provider", { ...provider, baseUrl: v })} />
+                      </Row>
+                      <Row label="API key" hint={provider.apiKeyConfigured ? "A key is configured. Enter a new key to rotate it." : "Required for cloud API access."} saving={isSavingField("providerApiKey")}>
+                        <PasswordInput
+                          placeholder={provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
+                          onCommit={(v) => { if (v) { queueSave({ providerApiKey: v }); setPendingApiKey(""); } }}
+                          onChange={setPendingApiKey} />
+                      </Row>
+                      <Row label="Chat model" hint="Model for answers — e.g. deepseek-chat or deepseek-reasoner." saving={isSavingField("providerChatModel")}>
+                        <ModelSelect value={provider.chatModel} options={providerModels}
+                          onChange={(v) => set("provider", { ...provider, chatModel: v })} placeholder="Select or add a model" />
+                      </Row>
+                      <div className="px-5 py-3 flex items-start gap-2.5 bg-blue-50/60 border-t border-line">
+                        <svg className="w-4 h-4 mt-0.5 text-blue-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                          <circle cx="8" cy="8" r="7" fillOpacity=".15" />
+                          <path d="M7.25 6.5h1.5v5h-1.5zm0-2.5h1.5v1.5h-1.5z" />
+                        </svg>
+                        <p className="text-[12px] text-text-2 leading-relaxed">
+                          Document search embeddings are always generated by <span className="font-mono text-text">nomic-embed-text</span> on your local Ollama. DeepSeek does not provide an <span className="font-mono text-text">/embeddings</span> API — no documents leave your server.
+                        </p>
                       </div>
-                    </div>
+                      <CustomModelManager />
+                    </>
+                  )}
+
+                  {/* Cloud mode: chat + embeddings + vision from cloud provider */}
+                  {mode === "cloud" && (
+                    <>
+                      <Row label="API base URL" hint="e.g. https://api.openai.com/v1" saving={isSavingField("providerBaseUrl")}>
+                        <TextInput value={provider.baseUrl} onCommit={(v) => set("provider", { ...provider, baseUrl: v })} />
+                      </Row>
+                      <Row label="API key" hint={provider.apiKeyConfigured ? "A key is configured. Enter a new key to rotate it." : "Required for cloud API access."} saving={isSavingField("providerApiKey")}>
+                        <PasswordInput
+                          placeholder={provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
+                          onCommit={(v) => { if (v) { queueSave({ providerApiKey: v }); setPendingApiKey(""); } }}
+                          onChange={setPendingApiKey} />
+                      </Row>
+                      <Row label="Chat model" hint="Model for answers — e.g. gpt-4o or gpt-4o-mini." saving={isSavingField("providerChatModel")}>
+                        <ModelSelect value={provider.chatModel} options={providerModels}
+                          onChange={(v) => set("provider", { ...provider, chatModel: v })} placeholder="Select or add a model" />
+                      </Row>
+                      <Row label="Embedding model" hint="Changing this requires reindexing. Use text-embedding-3-small or ada-002." saving={isSavingField("providerEmbeddingModel")}>
+                        <ModelSelect value={provider.embeddingModel} options={providerModels}
+                          onChange={(v) => set("provider", { ...provider, embeddingModel: v })} placeholder="Select or add a model" />
+                      </Row>
+                      <Row label="Vision model" hint="Used for OCR on PDF pages with insufficient text." saving={isSavingField("providerVisionModel")}>
+                        <ModelSelect value={provider.visionModel} options={providerModels}
+                          onChange={(v) => set("provider", { ...provider, visionModel: v })} placeholder="Select or add a model" />
+                      </Row>
+                      <CustomModelManager />
+                    </>
                   )}
 
                   <Row label="SSE completion mode" hint="Strict waits for persistence before sending done; async returns done immediately for lower p99 latency." saving={isSavingField("sseDoneMode")}>
-                    <Select
-                      value={s.sseDoneMode}
-                      options={["strict", "async"] as const}
-                      onChange={(v) => set("sseDoneMode", v)} />
+                    <Select value={s.sseDoneMode} options={["strict", "async"] as const} onChange={(v) => set("sseDoneMode", v)} />
                   </Row>
                   <div className="px-5 py-3.5 flex items-center gap-3">
-                    <button
-                      disabled={testConnectionState === "testing"}
-                      onClick={async () => {
-                        setTestConnectionState("testing");
-                        setTestConnectionMsg("");
-                        try {
-                          await testProviderConnection({
-                            providerType: provider.type,
-                            providerBaseUrl: provider.baseUrl,
-                            ...(pendingApiKey ? { providerApiKey: pendingApiKey } : {}),
-                          });
-                          setTestConnectionState("ok");
-                          setTestConnectionMsg("Connection successful");
-                        } catch (err) {
-                          setTestConnectionState("error");
-                          setTestConnectionMsg(err instanceof Error ? err.message : "Connection failed");
-                        }
-                      }}
-                      className="inline-flex items-center gap-1.5 h-7 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-50"
-                    >
-                      {testConnectionState === "testing" ? "Testing…" : "Test connection"}
-                    </button>
-                    {testConnectionState === "ok" && (
-                      <span className="text-[12px] text-success font-mono">{testConnectionMsg}</span>
-                    )}
-                    {testConnectionState === "error" && (
-                      <span className="text-[12px] text-danger font-mono">{testConnectionMsg}</span>
+                    {mode === "local" ? (
+                      <span className="text-[12px] text-text-3 font-mono">Local Ollama — no API key required</span>
+                    ) : (
+                      <>
+                        <button
+                          disabled={testConnectionState === "testing"}
+                          onClick={async () => {
+                            setTestConnectionState("testing");
+                            setTestConnectionMsg("");
+                            try {
+                              await testProviderConnection({
+                                providerType: "openai_compatible",
+                                providerBaseUrl: provider.baseUrl,
+                                ...(pendingApiKey ? { providerApiKey: pendingApiKey } : {}),
+                              });
+                              setTestConnectionState("ok");
+                              setTestConnectionMsg("Cloud provider connected");
+                            } catch (err) {
+                              setTestConnectionState("error");
+                              setTestConnectionMsg(err instanceof Error ? err.message : "Connection failed");
+                            }
+                          }}
+                          className="inline-flex items-center gap-1.5 h-7 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-50">
+                          {testConnectionState === "testing" ? "Testing…" : "Test cloud connection"}
+                        </button>
+                        {testConnectionState === "ok" && <span className="text-[12px] text-success font-mono">{testConnectionMsg}</span>}
+                        {testConnectionState === "error" && <span className="text-[12px] text-danger font-mono">{testConnectionMsg}</span>}
+                      </>
                     )}
                   </div>
                 </Section>
               );
             })()}
+
+            {/* Reindex warning banner */}
+            {reindexRequired && (
+              <div className="flex items-center gap-3 mb-6 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-[12.5px] text-amber-900">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" strokeWidth={1.5} />
+                <span className="flex-1">
+                  Embedding configuration changed — reindex all documents to apply the new embedding model.
+                </span>
+                <button className="shrink-0 text-[12px] underline hover:no-underline" onClick={() => setReindexRequired(false)}>
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             {/* MODELS */}
             <Section id="models" title="Models"

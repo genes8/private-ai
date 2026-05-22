@@ -176,6 +176,12 @@ def _get_settings_live_metadata(db: Session) -> tuple[float, list[str], int, lis
     return float(today_cost), list(available_ollama_models), int(doc_count), list(available_provider_models)
 
 
+def _derive_provider_mode(*, provider_type: str, embedding_source: str) -> str:
+    if provider_type == "ollama":
+        return "local"
+    return "hybrid" if embedding_source == "ollama" else "cloud"
+
+
 def _serialize_settings(db: Session) -> dict[str, Any]:
     db_overrides = load_app_config(db)
 
@@ -198,6 +204,9 @@ def _serialize_settings(db: Session) -> dict[str, Any]:
         custom_provider_models = []
     all_provider_models = sorted(set(available_provider_models) | set(custom_provider_models))
     provider_api_key_raw = _val("provider_api_key", "")
+    _provider_type_val = str(_val("provider_type", "ollama"))
+    _embedding_source_default = "provider" if _provider_type_val == "openai_compatible" else "ollama"
+    _embedding_source_val = str(_val("embedding_source", _embedding_source_default))
     return {
         "generationModel": _val("generation_model", settings.ollama_model),
         "generationFallback": _val("generation_fallback_model", settings.ollama_model),
@@ -214,6 +223,11 @@ def _serialize_settings(db: Session) -> dict[str, Any]:
                 "provider_embedding_model", _val("embedding_model", settings.embedding_model)
             ),
             "visionModel": _val("provider_vision_model", "qwen2.5vl:7b"),
+            "embeddingSource": _embedding_source_val,
+            "providerMode": _derive_provider_mode(
+                provider_type=_provider_type_val,
+                embedding_source=_embedding_source_val,
+            ),
         },
         "sseDoneMode": _val("sse_done_mode", "strict"),
         "availableModels": {
@@ -541,24 +555,24 @@ def delete_document(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     try:
-        with db.begin():
-            active_job = _lock_query(
-                db.query(IngestionJob).filter(
-                    IngestionJob.document_id == doc_id,
-                    IngestionJob.status.in_(
-                        [IngestionJobStatus.embedding, IngestionJobStatus.pending]
-                    ),
-                )
-            ).first()
-            if active_job:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Document is currently being ingested. Wait for completion before deleting.",
-                )
-            invalidate_cache_for_document(db, doc_id, commit=False)
-            db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
-            db.query(IngestionJob).filter(IngestionJob.document_id == doc_id).delete()
-            db.delete(doc)
+        active_job = _lock_query(
+            db.query(IngestionJob).filter(
+                IngestionJob.document_id == doc_id,
+                IngestionJob.status.in_(
+                    [IngestionJobStatus.embedding, IngestionJobStatus.pending]
+                ),
+            )
+        ).first()
+        if active_job:
+            raise HTTPException(
+                status_code=409,
+                detail="Document is currently being ingested. Wait for completion before deleting.",
+            )
+        invalidate_cache_for_document(db, doc_id, commit=False)
+        db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
+        db.query(IngestionJob).filter(IngestionJob.document_id == doc_id).delete()
+        db.delete(doc)
+        db.commit()
     except Exception:
         db.rollback()
         raise
@@ -601,7 +615,7 @@ async def reindex_document(
 
     retriever = getattr(request.app.state, "retriever", None)
     job_id = str(uuid.uuid4())
-    with db.begin():
+    try:
         active_job = _lock_query(
             db.query(IngestionJob).filter(
                 IngestionJob.document_id == doc_id,
@@ -617,6 +631,13 @@ async def reindex_document(
             )
         job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
         db.add(job)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
     try:
         _delete_qdrant_points(doc_id)
@@ -634,13 +655,17 @@ async def reindex_document(
         except Exception as exc:  # noqa: BLE001
             logger.warning("bm25_prune_failed", doc_id=doc_id, error=str(exc))
 
-    with db.begin():
+    try:
         invalidate_cache_for_document(db, doc_id, commit=False)
         db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
         doc.version = (doc.version or 1) + 1
         doc.active_version = doc.version
         doc.ingestion_status = IngestionStatus.queued
         doc.ingestion_started_at = None
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     _schedule_ingestion_task(
         request,
@@ -1009,6 +1034,8 @@ class PatchSettingsRequest(BaseModel):
     providerVisionModel: str | None = None
     sseDoneMode: str | None = None
     providerCustomModels: list[str] | None = None
+    embeddingSource: str | None = None   # "ollama" | "provider"
+    providerMode: str | None = None      # "local" | "hybrid" | "cloud"
 
 
 @router.patch("/settings", status_code=200)
@@ -1022,9 +1049,98 @@ def patch_settings(
     current_config = load_app_config(db)
     updates: dict[str, Any] = {}
 
-    # Determine the effective provider before any model validation so we can skip
-    # Ollama-specific checks when using an OpenAI-compatible API provider.
-    effective_provider = body.providerType or current_config.get("provider_type", "ollama")
+    # Expand providerMode into constituent raw fields before any other processing.
+    if body.providerMode is not None:
+        if body.providerMode == "local":
+            # Write provider_base_url directly into updates to bypass SSRF validation —
+            # settings.ollama_url is always a trusted local address, never user-supplied.
+            updates["provider_base_url"] = settings.ollama_url.rstrip("/")
+            body = body.model_copy(update={
+                "providerType": "ollama",
+                "embeddingSource": "ollama",
+                "providerBaseUrl": None,  # already saved above; don't re-validate via SSRF check
+            })
+        elif body.providerMode == "hybrid":
+            body = body.model_copy(update={
+                "providerType": "openai_compatible",
+                "embeddingSource": "ollama",
+                "providerBaseUrl": body.providerBaseUrl or "https://api.deepseek.com/v1",
+            })
+        elif body.providerMode == "cloud":
+            body = body.model_copy(update={
+                "providerType": "openai_compatible",
+                "embeddingSource": "provider",
+            })
+        else:
+            raise HTTPException(status_code=422, detail="providerMode must be local, hybrid, or cloud")
+
+    # Snapshot current embedding config to detect changes and compute reindexRequired later.
+    prev_embedding_model = str(current_config.get("embedding_model", settings.embedding_model))
+    prev_embedding_source = str(current_config.get("embedding_source", "ollama"))
+
+    # Determine effective provider and embedding source for validation below.
+    effective_provider = str(body.providerType or current_config.get("provider_type", "ollama"))
+    _eff_embed_default = "provider" if effective_provider == "openai_compatible" else "ollama"
+    effective_embedding_source = str(body.embeddingSource or current_config.get("embedding_source", _eff_embed_default))
+
+    # Hybrid: validate that local Ollama is reachable and the embedding model is available there.
+    if effective_provider == "openai_compatible" and effective_embedding_source == "ollama":
+        try:
+            available_ollama_for_hybrid = _fetch_ollama_model_names()
+        except HTTPException:
+            raise HTTPException(
+                status_code=422,
+                detail="Hybrid mode requires local Ollama for embeddings but Ollama is not reachable. "
+                       "Start Ollama first, then switch to Hybrid.",
+            )
+        current_embedding = str(current_config.get("embedding_model", settings.embedding_model))
+        effective_local_embedding = body.embeddingModel or current_embedding
+        if effective_local_embedding not in available_ollama_for_hybrid:
+            # Current model isn't available locally — try the default Ollama embedding model.
+            # This handles switching from cloud mode where embedding_model was a cloud-only model.
+            fallback = settings.embedding_model
+            if fallback not in available_ollama_for_hybrid:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Embedding model '{fallback}' is not available in Ollama. "
+                        f"Pull it with: ollama pull {fallback}"
+                    ),
+                )
+            body = body.model_copy(update={"embeddingModel": fallback})
+            effective_local_embedding = fallback
+
+    # Cloud: verify the provider's /embeddings endpoint returns HTTP 200.
+    if effective_provider == "openai_compatible" and effective_embedding_source == "provider":
+        effective_base_url = body.providerBaseUrl or str(current_config.get("provider_base_url", ""))
+        effective_api_key = body.providerApiKey or str(current_config.get("provider_api_key", ""))
+        effective_embedding_model = (
+            body.providerEmbeddingModel
+            or body.embeddingModel
+            or str(current_config.get("provider_embedding_model", ""))
+            or str(current_config.get("embedding_model", settings.embedding_model))
+        )
+        if effective_base_url and effective_api_key and effective_embedding_model:
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    emb_test_resp = client.post(
+                        f"{effective_base_url.rstrip('/')}/embeddings",
+                        headers={"Authorization": f"Bearer {effective_api_key}"},
+                        json={"model": effective_embedding_model, "input": "test"},
+                    )
+                if emb_test_resp.status_code != 200:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "This provider does not appear to support embeddings "
+                            f"(expected HTTP 200, got {emb_test_resp.status_code}). "
+                            "Use Hybrid mode instead: cloud chat + local Ollama embeddings."
+                        ),
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                pass  # Network error — let pipeline rebuild catch it
 
     if effective_provider == "ollama":
         requested_ollama_models = any(
@@ -1056,22 +1172,31 @@ def patch_settings(
             )
     else:
         if body.generationModel is not None:
-            updates["generation_model"] = _validate_model_identifier(
+            generation_model = _validate_model_identifier(
                 body.generationModel, "generationModel"
             )
+            updates["generation_model"] = generation_model
+            if body.providerChatModel is None:
+                updates["provider_chat_model"] = generation_model
         if body.generationFallback is not None:
             updates["generation_fallback_model"] = _validate_model_identifier(
                 body.generationFallback, "generationFallback"
             )
         if body.embeddingModel is not None:
-            updates["embedding_model"] = _validate_model_identifier(
+            embedding_model = _validate_model_identifier(
                 body.embeddingModel, "embeddingModel"
             )
+            updates["embedding_model"] = embedding_model
+            if body.providerEmbeddingModel is None:
+                updates["provider_embedding_model"] = embedding_model
             _validate_embedding_model_dimension(body.embeddingModel)
         if body.visionModel is not None:
-            updates["vision_model"] = _validate_model_identifier(
+            vision_model = _validate_model_identifier(
                 body.visionModel, "visionModel"
             )
+            updates["vision_model"] = vision_model
+            if body.providerVisionModel is None:
+                updates["provider_vision_model"] = vision_model
     if body.rerankerEnabled is not None:
         updates["reranker_enabled"] = body.rerankerEnabled
     if body.rerankerModel is not None:
@@ -1134,18 +1259,27 @@ def patch_settings(
     if body.providerApiKey is not None:
         updates["provider_api_key"] = body.providerApiKey
     if body.providerChatModel is not None:
-        updates["provider_chat_model"] = _validate_model_identifier(
+        provider_chat_model = _validate_model_identifier(
             body.providerChatModel, "providerChatModel"
         )
+        updates["provider_chat_model"] = provider_chat_model
+        if effective_provider == "openai_compatible" and body.generationModel is None:
+            updates["generation_model"] = provider_chat_model
     if body.providerEmbeddingModel is not None:
-        updates["provider_embedding_model"] = _validate_model_identifier(
+        provider_embedding_model = _validate_model_identifier(
             body.providerEmbeddingModel, "providerEmbeddingModel"
         )
+        updates["provider_embedding_model"] = provider_embedding_model
+        if effective_provider == "openai_compatible" and body.embeddingModel is None:
+            updates["embedding_model"] = provider_embedding_model
         _validate_embedding_model_dimension(body.providerEmbeddingModel)
     if body.providerVisionModel is not None:
-        updates["provider_vision_model"] = _validate_model_identifier(
+        provider_vision_model = _validate_model_identifier(
             body.providerVisionModel, "providerVisionModel"
         )
+        updates["provider_vision_model"] = provider_vision_model
+        if effective_provider == "openai_compatible" and body.visionModel is None:
+            updates["vision_model"] = provider_vision_model
     if body.sseDoneMode is not None:
         if body.sseDoneMode not in {"strict", "async"}:
             raise HTTPException(status_code=422, detail="sseDoneMode must be strict or async")
@@ -1157,6 +1291,10 @@ def patch_settings(
         for m in body.providerCustomModels:
             validated_custom.append(_validate_model_identifier(m, "providerCustomModels"))
         updates["custom_provider_models"] = validated_custom
+    if body.embeddingSource is not None:
+        if body.embeddingSource not in {"ollama", "provider"}:
+            raise HTTPException(status_code=422, detail="embeddingSource must be ollama or provider")
+        updates["embedding_source"] = body.embeddingSource
 
     # Require API key when switching to openai_compatible
     effective_key = body.providerApiKey or current_config.get("provider_api_key")
@@ -1181,7 +1319,12 @@ def patch_settings(
     with _settings_live_cache_lock:
         _settings_live_cache["expires_at"] = 0.0
     logger.info("settings_updated", keys=list(updates.keys()))
-    return _serialize_settings(db)
+    result = _serialize_settings(db)
+    result["reindexRequired"] = (
+        updates.get("embedding_model", prev_embedding_model) != prev_embedding_model
+        or updates.get("embedding_source", prev_embedding_source) != prev_embedding_source
+    )
+    return result
 
 
 @router.post("/settings/provider/test", status_code=200)

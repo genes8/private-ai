@@ -39,6 +39,7 @@ class RuntimeConfig:
     provider_type: str
     provider_base_url: str
     provider_api_key: str | None
+    embedding_source: str  # "ollama" | "provider"
     generation_model: str
     generation_fallback_model: str
     chat_model: str
@@ -52,6 +53,12 @@ class RuntimeConfig:
     chunk_overlap: int
     sse_done_mode: str
     usage_source: str
+
+    @property
+    def provider_mode(self) -> str:
+        if self.provider_type == "ollama":
+            return "local"
+        return "hybrid" if self.embedding_source == "ollama" else "cloud"
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -109,10 +116,18 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
     if sse_done_mode not in {"strict", "async"}:
         sse_done_mode = "strict"
 
+    # Default embedding_source to "provider" when provider_type is openai_compatible and
+    # no explicit embedding_source is stored — preserves backward compat for existing cloud setups.
+    _embedding_source_default = "provider" if provider_type == "openai_compatible" else "ollama"
+    embedding_source = str(cfg.get("embedding_source", _embedding_source_default))
+    if embedding_source not in {"ollama", "provider"}:
+        embedding_source = _embedding_source_default
+
     return RuntimeConfig(
         provider_type=provider_type,
         provider_base_url=provider_base_url.rstrip("/"),
         provider_api_key=cfg.get("provider_api_key"),
+        embedding_source=embedding_source,
         generation_model=generation_model,
         generation_fallback_model=str(cfg.get("generation_fallback_model", generation_model)),
         chat_model=provider_chat_model,
@@ -130,7 +145,7 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
 
 
 def build_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleProvider:
-    """Instantiate the configured inference provider."""
+    """Instantiate the chat inference provider."""
     if runtime.provider_type == "openai_compatible":
         if not runtime.provider_api_key:
             raise RuntimeError("OpenAI-compatible provider requires an API key")
@@ -149,21 +164,54 @@ def build_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleP
     )
 
 
+def build_embedding_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleProvider:
+    """Return the provider for embed_query / embed_documents calls.
+
+    In hybrid mode embeddings always use local Ollama — NOT runtime.provider_base_url
+    which is the cloud provider URL.
+    """
+    if runtime.embedding_source == "provider":
+        return build_provider(runtime)
+    return OllamaProvider(
+        base_url=settings.ollama_url,
+        chat_model=runtime.chat_model,
+        embedding_model=runtime.embedding_model,
+        vision_model=runtime.vision_model,
+    )
+
+
+def build_vision_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleProvider:
+    """Return the provider for describe_image / OCR calls.
+
+    In hybrid mode vision always uses local Ollama — vision_model (qwen2.5vl:7b) is an
+    Ollama model and typically not available on cloud chat providers like DeepSeek.
+    """
+    if runtime.embedding_source == "provider":
+        return build_provider(runtime)
+    return OllamaProvider(
+        base_url=settings.ollama_url,
+        chat_model=runtime.chat_model,
+        embedding_model=runtime.embedding_model,
+        vision_model=runtime.vision_model,
+    )
+
+
 def build_runtime_components(db: Session) -> tuple[RuntimeConfig, HybridRetriever, Reranker, Any]:
     """Build the runtime retriever, reranker, and compiled graph from persisted config."""
     runtime = load_runtime_config(db)
-    provider = build_provider(runtime)
+    chat_provider = build_provider(runtime)
+    embedding_provider = build_embedding_provider(runtime)
     retriever = HybridRetriever(
         qdrant_url=settings.qdrant_url,
         collection="documents",
         embedding_model=runtime.embedding_model,
-        embedding_client=provider,
+        embedding_client=embedding_provider,
     )
     reranker = Reranker(model_name=runtime.reranker_model, enabled=runtime.reranker_enabled)
     graph = build_graph(
         retriever=retriever,
         reranker=reranker,
-        chat_client=provider,
+        chat_client=chat_provider,
         ollama_url=runtime.provider_base_url,
         ollama_model=runtime.chat_model,
         retrieval_top_k=runtime.retrieval_k,

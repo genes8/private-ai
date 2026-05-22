@@ -190,10 +190,9 @@ async def test_ingest_triggers_needs_review() -> None:
 
         await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
 
-    # _set_status was called — verified via db.get call
+    # Low-confidence OCR pages still result in indexed status — chunks are in Qdrant.
     db.get.assert_called()
-    # With 1 page and 1 low confidence page: 1/1 > 0.5 → needs_review
-    assert mock_doc.ingestion_status == "skipped"
+    assert mock_doc.ingestion_status == "indexed"
 
 
 @pytest.mark.asyncio
@@ -277,3 +276,110 @@ async def test_embed_batch_prefers_batch_embed_endpoint() -> None:
     assert result == [FAKE_EMBEDDING, FAKE_EMBEDDING]
     client.post.assert_awaited_once()
     assert client.post.call_args.args[0].endswith("/api/embed")
+
+
+# ---------------------------------------------------------------------------
+# Split-client tests: each client routes to the correct provider
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_uses_embedding_client_not_chat_client() -> None:
+    """embedding_client.embed_documents is called; chat_client is never touched."""
+    chat_client = MagicMock()
+    embedding_client = MagicMock()
+    embedding_client.embed_documents = AsyncMock(return_value=[FAKE_EMBEDDING])
+
+    with patch("app.services.rag_pipeline.QdrantClient"):
+        pipeline = RagPipeline(
+            retriever=MagicMock(),
+            reranker=MagicMock(),
+            ollama_url="http://localhost:11434",
+            ollama_model="qwen3.5:9b",
+            embedding_model="nomic-embed-text",
+            qdrant_url="http://localhost:6333",
+            collection="test",
+            db_session=MagicMock(),
+            chat_client=chat_client,
+            embedding_client=embedding_client,
+        )
+
+    result = await pipeline._embed_batch(["hello"])
+
+    embedding_client.embed_documents.assert_awaited_once_with(["hello"])
+    chat_client.embed_documents = MagicMock()  # should not exist / not be called
+    chat_client.chat.assert_not_called()
+    assert result == [FAKE_EMBEDDING]
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_chat_client_not_embedding_client() -> None:
+    """chat_client.chat is called; embedding_client is never touched."""
+    chat_result = MagicMock()
+    chat_result.content = "The answer is 42."
+
+    chat_client = MagicMock()
+    chat_client.chat = AsyncMock(return_value=chat_result)
+
+    embedding_client = MagicMock()
+    embedding_client.embed_documents = AsyncMock(return_value=[FAKE_EMBEDDING])
+
+    with patch("app.services.rag_pipeline.QdrantClient"):
+        pipeline = RagPipeline(
+            retriever=MagicMock(),
+            reranker=MagicMock(),
+            ollama_url="http://localhost:11434",
+            ollama_model="qwen3.5:9b",
+            embedding_model="nomic-embed-text",
+            qdrant_url="http://localhost:6333",
+            collection="test",
+            db_session=MagicMock(),
+            chat_client=chat_client,
+            embedding_client=embedding_client,
+        )
+
+    answer = await pipeline._generate("What is 6 * 7?")
+
+    chat_client.chat.assert_awaited_once()
+    embedding_client.embed_documents.assert_not_awaited()
+    assert answer == "The answer is 42."
+
+
+@pytest.mark.asyncio
+async def test_ocr_page_uses_vision_client_not_chat_client() -> None:
+    """vision_client.describe_image is called; chat_client is never touched."""
+    vision_client = MagicMock()
+    vision_client.describe_image = AsyncMock(side_effect=["extracted text", "high confidence"])
+
+    chat_client = MagicMock()
+    chat_client.chat = AsyncMock()
+
+    import tempfile
+    import os
+
+    with patch("app.services.rag_pipeline.QdrantClient"):
+        pipeline = RagPipeline(
+            retriever=MagicMock(),
+            reranker=MagicMock(),
+            ollama_url="http://localhost:11434",
+            ollama_model="qwen3.5:9b",
+            embedding_model="nomic-embed-text",
+            qdrant_url="http://localhost:6333",
+            collection="test",
+            db_session=MagicMock(),
+            chat_client=chat_client,
+            vision_client=vision_client,
+        )
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        tmp_path = f.name
+
+    try:
+        text, quality = await pipeline._ocr_page(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    vision_client.describe_image.assert_awaited()
+    chat_client.chat.assert_not_awaited()
+    assert text == "extracted text"

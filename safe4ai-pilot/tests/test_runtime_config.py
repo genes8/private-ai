@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from app.services.runtime_config import load_runtime_config
+from app.services.provider_clients import OllamaProvider, OpenAICompatibleProvider
+from app.services.runtime_config import (
+    build_embedding_provider,
+    build_vision_provider,
+    load_runtime_config,
+)
 
 
 def test_runtime_config_defaults_to_ollama_provider() -> None:
@@ -81,3 +86,151 @@ def test_build_runtime_components_uses_openai_provider_clients() -> None:
     assert runtime.provider_type == "openai_compatible"
     assert retriever.embedding_model == "text-embedding-3-small"
     mock_build_graph.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# provider_mode derived property
+# ---------------------------------------------------------------------------
+
+
+def test_provider_mode_local_when_ollama() -> None:
+    db = MagicMock()
+    with patch("app.services.runtime_config.load_app_config", return_value={"provider_type": "ollama"}):
+        runtime = load_runtime_config(db)
+    assert runtime.provider_mode == "local"
+
+
+def test_provider_mode_hybrid_when_openai_and_ollama_embeddings() -> None:
+    db = MagicMock()
+    with patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={
+            "provider_type": "openai_compatible",
+            "provider_api_key": "sk-test",
+            "embedding_source": "ollama",
+        },
+    ):
+        runtime = load_runtime_config(db)
+    assert runtime.provider_mode == "hybrid"
+    assert runtime.embedding_source == "ollama"
+
+
+def test_provider_mode_cloud_when_openai_and_provider_embeddings() -> None:
+    db = MagicMock()
+    with patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={
+            "provider_type": "openai_compatible",
+            "provider_api_key": "sk-test",
+            "embedding_source": "provider",
+        },
+    ):
+        runtime = load_runtime_config(db)
+    assert runtime.provider_mode == "cloud"
+
+
+def test_openai_compatible_without_embedding_source_defaults_to_provider() -> None:
+    """Existing openai_compatible configs without embedding_source stored default to cloud (backward compat)."""
+    db = MagicMock()
+    with patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={"provider_type": "openai_compatible", "provider_api_key": "sk-test"},
+    ):
+        runtime = load_runtime_config(db)
+    assert runtime.embedding_source == "provider"
+    assert runtime.provider_mode == "cloud"
+
+
+# ---------------------------------------------------------------------------
+# build_embedding_provider and build_vision_provider factories
+# ---------------------------------------------------------------------------
+
+
+def test_build_embedding_provider_hybrid_returns_ollama() -> None:
+    """In hybrid mode (embedding_source=ollama), build_embedding_provider returns OllamaProvider."""
+    db = MagicMock()
+    with patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={
+            "provider_type": "openai_compatible",
+            "provider_api_key": "sk-test",
+            "provider_base_url": "https://api.deepseek.com/v1",
+            "embedding_source": "ollama",
+        },
+    ):
+        runtime = load_runtime_config(db)
+
+    provider = build_embedding_provider(runtime)
+    assert isinstance(provider, OllamaProvider)
+
+
+def test_build_embedding_provider_cloud_returns_openai_compatible() -> None:
+    """In cloud mode (embedding_source=provider), build_embedding_provider returns OpenAICompatibleProvider."""
+    db = MagicMock()
+    with patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={
+            "provider_type": "openai_compatible",
+            "provider_api_key": "sk-test",
+            "provider_base_url": "https://api.openai.com/v1",
+            "embedding_source": "provider",
+        },
+    ):
+        runtime = load_runtime_config(db)
+
+    provider = build_embedding_provider(runtime)
+    assert isinstance(provider, OpenAICompatibleProvider)
+
+
+def test_build_vision_provider_hybrid_uses_local_ollama() -> None:
+    """In hybrid mode, build_vision_provider always returns OllamaProvider (qwen2.5vl:7b is local)."""
+    db = MagicMock()
+    with patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={
+            "provider_type": "openai_compatible",
+            "provider_api_key": "sk-test",
+            "embedding_source": "ollama",
+        },
+    ):
+        runtime = load_runtime_config(db)
+
+    provider = build_vision_provider(runtime)
+    assert isinstance(provider, OllamaProvider)
+
+
+def test_build_runtime_components_hybrid_splits_providers() -> None:
+    """In hybrid mode, chat_client is OpenAICompatibleProvider; embedding_client passed to HybridRetriever is OllamaProvider."""
+    from app.services.runtime_config import build_runtime_components
+
+    db = MagicMock()
+    captured: dict = {}
+
+    def _capture_retriever(**kwargs):  # type: ignore[no-untyped-def]
+        captured["embedding_client"] = kwargs.get("embedding_client")
+        return MagicMock()
+
+    with patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={
+            "provider_type": "openai_compatible",
+            "provider_base_url": "https://api.deepseek.com/v1",
+            "provider_api_key": "sk-test",
+            "embedding_source": "ollama",
+        },
+    ), patch("app.services.runtime_config.build_graph") as mock_build_graph, patch(
+        "app.services.runtime_config.HybridRetriever",
+        side_effect=lambda **kw: _capture_retriever(**kw),
+    ), patch(
+        "app.services.runtime_config.Reranker"
+    ):
+        runtime, _retriever, _reranker, _graph = build_runtime_components(db)
+
+    assert isinstance(captured["embedding_client"], OllamaProvider), (
+        "embedding_client must be OllamaProvider in hybrid mode"
+    )
+    # chat_client passed to build_graph must be OpenAICompatibleProvider
+    call_kwargs = mock_build_graph.call_args.kwargs
+    assert isinstance(call_kwargs["chat_client"], OpenAICompatibleProvider), (
+        "chat_client must be OpenAICompatibleProvider in hybrid mode"
+    )

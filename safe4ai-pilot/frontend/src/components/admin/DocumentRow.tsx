@@ -67,7 +67,12 @@ export default function DocumentRow({ doc, selected, onSelect, onReindex, onDele
         {doc.status === "embedding" ? (
           <div className="flex items-center gap-1.5">
             <Loader2 size={11} className="animate-spin text-accent shrink-0" />
-            <span className="font-mono text-[11px] text-accent">embedding</span>
+            <span className="font-mono text-[11px] text-accent">indexing…</span>
+          </div>
+        ) : doc.status === "queued" ? (
+          <div className="flex items-center gap-1.5">
+            <Loader2 size={11} className="animate-spin text-text-3 shrink-0" />
+            <span className="font-mono text-[11px] text-text-3">queued…</span>
           </div>
         ) : (
           <Chip tone={statusTone[doc.status] ?? "neutral"} variant="default">

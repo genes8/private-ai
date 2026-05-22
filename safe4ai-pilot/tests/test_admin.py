@@ -247,7 +247,7 @@ class TestDocumentDelete:
             resp = client.delete("/admin/documents/doc-1")
 
         assert resp.status_code == 204
-        db.begin.assert_called()
+        db.commit.assert_called()
         mock_retriever.remove_from_bm25.assert_called_once_with("doc-1")
         mock_qdrant = MockQdrant.return_value
         mock_qdrant.delete.assert_called_once()
@@ -448,6 +448,37 @@ class TestSettings:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_patch_openai_generation_model_updates_provider_chat_model(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        provider_type = MagicMock()
+        provider_type.key = "provider_type"
+        provider_type.value = "openai_compatible"
+        provider_api_key = MagicMock()
+        provider_api_key.key = "provider_api_key"
+        provider_api_key.value = "sk-test"
+        db.query.return_value.all.return_value = [provider_type, provider_api_key]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.admin_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"generationModel": "deepseek-flash"})
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        assert updates["generation_model"] == "deepseek-flash"
+        assert updates["provider_chat_model"] == "deepseek-flash"
+        from app.main import app
+        app.dependency_overrides.clear()
+
     def test_patch_settings_rejects_unknown_ollama_model(self) -> None:
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
@@ -542,6 +573,210 @@ class TestSettings:
         assert body["availableModels"]["customProvider"] == ["deepseek-chat", "qwen-plus"]
         assert "deepseek-chat" in body["availableModels"]["provider"]
         assert "qwen-plus" in body["availableModels"]["provider"]
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_serialize_settings_includes_provider_mode_and_embedding_source(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        provider_type = MagicMock()
+        provider_type.key = "provider_type"
+        provider_type.value = "openai_compatible"
+        embedding_source = MagicMock()
+        embedding_source.key = "embedding_source"
+        embedding_source.value = "ollama"
+        db.query.return_value.all.return_value = [provider_type, embedding_source]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            return_value=set(),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ), patch.dict(
+            "app.api.admin_routes._settings_live_cache", {"expires_at": 0.0}
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.get("/settings")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["provider"]["embeddingSource"] == "ollama"
+        assert body["provider"]["providerMode"] == "hybrid"
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_provider_mode_local_resets_base_url(self) -> None:
+        """PATCH providerMode=local must reset provider_base_url to local Ollama URL."""
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.admin_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "local"})
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        assert updates["provider_type"] == "ollama"
+        assert updates["embedding_source"] == "ollama"
+        from app.config import settings as app_settings
+        assert updates["provider_base_url"] == app_settings.ollama_url.rstrip("/")
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_provider_mode_local_sets_correct_fields(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.admin_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "local"})
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        assert updates["provider_type"] == "ollama"
+        assert updates["embedding_source"] == "ollama"
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_provider_mode_hybrid_sets_correct_fields(self) -> None:
+        """PATCH providerMode=hybrid sets provider_type=openai_compatible and embedding_source=ollama."""
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        provider_api_key = MagicMock()
+        provider_api_key.key = "provider_api_key"
+        provider_api_key.value = "sk-test"
+        embedding_model_cfg = MagicMock()
+        embedding_model_cfg.key = "embedding_model"
+        embedding_model_cfg.value = "nomic-embed-text"
+        db.query.return_value.all.return_value = [provider_api_key, embedding_model_cfg]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.admin_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            return_value={"nomic-embed-text"},
+        ), patch(
+            # validate_provider_url calls socket.getaddrinfo — bypass DNS in tests
+            "app.api.admin_routes.validate_provider_url",
+            side_effect=lambda url: url.rstrip("/"),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "hybrid"})
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        assert updates["provider_type"] == "openai_compatible"
+        assert updates["embedding_source"] == "ollama"
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_provider_mode_hybrid_fails_when_ollama_unreachable(self) -> None:
+        """PATCH providerMode=hybrid must return 422 when Ollama is not reachable."""
+        from fastapi import HTTPException
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        provider_api_key = MagicMock()
+        provider_api_key.key = "provider_api_key"
+        provider_api_key.value = "sk-test"
+        db.query.return_value.all.return_value = [provider_api_key]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            side_effect=HTTPException(status_code=503, detail="Ollama unreachable"),
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "hybrid"})
+
+        assert resp.status_code == 422
+        assert "Ollama" in resp.json()["detail"]
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_provider_mode_hybrid_auto_resets_cloud_embedding_model(self) -> None:
+        """When switching to hybrid, a cloud-only embedding model should auto-reset to the default."""
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        provider_api_key = MagicMock()
+        provider_api_key.key = "provider_api_key"
+        provider_api_key.value = "sk-test"
+        # Previous cloud config had a cloud-only embedding model
+        embedding_model_cfg = MagicMock()
+        embedding_model_cfg.key = "embedding_model"
+        embedding_model_cfg.value = "text-embedding-3-small"
+        db.query.return_value.all.return_value = [provider_api_key, embedding_model_cfg]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.admin_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.admin_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.api.admin_routes._fetch_ollama_model_names",
+            # text-embedding-3-small is NOT in Ollama, but nomic-embed-text is
+            return_value={"nomic-embed-text"},
+        ), patch(
+            # validate_provider_url calls socket.getaddrinfo — bypass DNS in tests
+            "app.api.admin_routes.validate_provider_url",
+            side_effect=lambda url: url.rstrip("/"),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "hybrid"})
+
+        # Should succeed (auto-reset) instead of 422
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        from app.config import settings as app_settings
+        assert updates.get("embedding_model") == app_settings.embedding_model
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_provider_mode_invalid_returns_422(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "datacenter"})
+
+        assert resp.status_code == 422
+        assert "providerMode" in resp.json()["detail"]
         from app.main import app
         app.dependency_overrides.clear()
 

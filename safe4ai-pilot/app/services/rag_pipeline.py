@@ -33,9 +33,18 @@ _CHUNK_SIZE = 800
 _CHUNK_OVERLAP = 150
 _EMBED_BATCH = 100
 _OCR_THRESHOLD = 50  # chars below which we try vision OCR
+_GARBLED_SINGLE_CHAR_RATIO = 0.20  # fraction of single-char words above which text is considered garbled
 _LOW_CONFIDENCE_RATIO = 0.5
 _MIN_RERANK_SCORE = 0.45
 _NO_ANSWER = "I don't have enough information in the provided documents to answer this question."
+
+
+def _is_garbled(text: str) -> bool:
+    words = text.split()
+    if len(words) < 10:
+        return False
+    single_char = sum(1 for w in words if len(w) == 1)
+    return single_char / len(words) > _GARBLED_SINGLE_CHAR_RATIO
 
 
 class RagPipeline:
@@ -50,12 +59,14 @@ class RagPipeline:
         collection: str,
         db_session: Session,
         *,
-        provider_client: ChatClient | EmbeddingClient | VisionClient | None = None,
+        chat_client: ChatClient | None = None,
+        embedding_client: EmbeddingClient | None = None,
+        vision_client: VisionClient | None = None,
         chunk_size: int = _CHUNK_SIZE,
         chunk_overlap: int = _CHUNK_OVERLAP,
         rerank_top_n: int = 6,
         min_rerank_score: float = _MIN_RERANK_SCORE,
-        vision_model: str = "qwen2.5vl:7b",
+        vision_model: str | None = None,
     ) -> None:
         self._retriever = retriever
         self._reranker = reranker
@@ -65,7 +76,9 @@ class RagPipeline:
         self._qdrant = QdrantClient(url=qdrant_url)
         self._collection = collection
         self._db = db_session
-        self._provider_client = provider_client
+        self._chat_client = chat_client
+        self._embedding_client = embedding_client
+        self._vision_client = vision_client
         self._rerank_top_n = rerank_top_n
         self._min_rerank_score = min_rerank_score
         self._vision_model = vision_model
@@ -165,13 +178,9 @@ class RagPipeline:
 
         # Update document status
         total_pages = len(pages)
-        needs_review = (
-            total_pages > 0 and low_confidence_count / total_pages > _LOW_CONFIDENCE_RATIO
-        )
-        self._set_status(
-            doc_id,
-            IngestionStatus.skipped if needs_review else IngestionStatus.indexed,
-        )
+        # Even with low OCR confidence, chunks are already in Qdrant — mark as indexed.
+        # Low-confidence pages are detectable via the ocr_quality payload field in Qdrant.
+        self._set_status(doc_id, IngestionStatus.indexed)
         self._db.commit()
 
         # Update BM25 index
@@ -216,11 +225,11 @@ class RagPipeline:
     # ------------------------------------------------------------------
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        if self._provider_client is not None and hasattr(self._provider_client, "embed_documents"):
+        if self._embedding_client is not None and hasattr(self._embedding_client, "embed_documents"):
             results: list[list[float]] = []
             for i in range(0, len(texts), _EMBED_BATCH):
                 batch = texts[i : i + _EMBED_BATCH]
-                batch_results = await self._provider_client.embed_documents(batch)  # type: ignore[union-attr]
+                batch_results = await self._embedding_client.embed_documents(batch)  # type: ignore[union-attr]
                 results.extend(batch_results)
             return results
 
@@ -273,9 +282,9 @@ class RagPipeline:
             'Return JSON {"confidence": "...", "reason": "..."}.'
         )
 
-        if self._provider_client is not None and hasattr(self._provider_client, "describe_image"):
-            text = await self._provider_client.describe_image(extract_prompt, b64)  # type: ignore[union-attr]
-            quality_raw = await self._provider_client.describe_image(quality_prompt, b64)  # type: ignore[union-attr]
+        if self._vision_client is not None and hasattr(self._vision_client, "describe_image"):
+            text = await self._vision_client.describe_image(extract_prompt, b64)  # type: ignore[union-attr]
+            quality_raw = await self._vision_client.describe_image(quality_prompt, b64)  # type: ignore[union-attr]
             try:
                 quality_data: dict[str, Any] = json.loads(quality_raw)
                 confidence: str = quality_data.get("confidence", "low")
@@ -283,6 +292,8 @@ class RagPipeline:
                 confidence = "low"
             return text, confidence
 
+        if not self._vision_model:
+            raise ValueError("vision_model must be set when vision_client is not provided")
         async with httpx.AsyncClient() as client:
             extract_resp = await client.post(
                 f"{self._ollama_url}/api/generate",
@@ -318,8 +329,8 @@ class RagPipeline:
         return text, confidence
 
     async def _generate(self, prompt: str) -> str:
-        if self._provider_client is not None and hasattr(self._provider_client, "chat"):
-            result = await self._provider_client.chat(  # type: ignore[union-attr]
+        if self._chat_client is not None and hasattr(self._chat_client, "chat"):
+            result = await self._chat_client.chat(  # type: ignore[union-attr]
                 "Answer using retrieved context.", prompt
             )
             return result.content
@@ -345,7 +356,7 @@ class RagPipeline:
 
         for page_num, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
-            if len(text.strip()) >= _OCR_THRESHOLD:
+            if len(text.strip()) >= _OCR_THRESHOLD and not _is_garbled(text):
                 pages.append((text, page_num, "native"))
             else:
                 # Try vision OCR via pdf2image

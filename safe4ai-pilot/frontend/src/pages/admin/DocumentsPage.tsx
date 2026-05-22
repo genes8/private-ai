@@ -1,4 +1,4 @@
-import { Upload } from "lucide-react";
+import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import Button from "../../components/Button";
 import Chip from "../../components/Chip";
@@ -22,6 +22,8 @@ export default function DocumentsPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const selectedDoc = docs.find((d) => d.id === selected) ?? null;
+  const isReindexing = selectedDoc !== null &&
+    (selectedDoc.status === "queued" || selectedDoc.status === "embedding");
 
   async function handleFiles(files: FileList | null) {
     if (!files) return;
@@ -176,9 +178,21 @@ export default function DocumentsPage() {
 
             <div className="px-[18px] pb-4">
               <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-1.5">status</p>
-              <Chip tone={statusTone[selectedDoc.status] ?? "neutral"} variant="default">
-                {selectedDoc.status}
-              </Chip>
+              {selectedDoc.status === "embedding" ? (
+                <div className="flex items-center gap-1.5">
+                  <Loader2 size={11} className="animate-spin text-accent shrink-0" />
+                  <span className="font-mono text-[11px] text-accent">indexing…</span>
+                </div>
+              ) : selectedDoc.status === "queued" ? (
+                <div className="flex items-center gap-1.5">
+                  <Loader2 size={11} className="animate-spin text-text-3 shrink-0" />
+                  <span className="font-mono text-[11px] text-text-3">queued…</span>
+                </div>
+              ) : (
+                <Chip tone={statusTone[selectedDoc.status] ?? "neutral"} variant="default">
+                  {selectedDoc.status}
+                </Chip>
+              )}
             </div>
 
             <div className="flex-1" />
@@ -186,9 +200,11 @@ export default function DocumentsPage() {
             <div className="border-t border-line px-[14px] py-2.5 flex gap-1.5">
               <button
                 onClick={() => reindex(selectedDoc.id)}
-                className="flex-1 h-[26px] px-[9px] text-[12px] font-medium text-text-2 border border-line bg-surface rounded-[5px] hover:bg-surface-2 transition-colors"
+                disabled={isReindexing}
+                className="flex-1 h-[26px] px-[9px] text-[12px] font-medium text-text-2 border border-line bg-surface rounded-[5px] hover:bg-surface-2 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Reindex
+                {isReindexing && <Loader2 size={11} className="animate-spin shrink-0" />}
+                {isReindexing ? "Working…" : "Reindex"}
               </button>
               <button
                 onClick={() => setConfirmDelete(selectedDoc.id)}

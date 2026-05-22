@@ -11,7 +11,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.db.models import Document, IngestionJob, IngestionJobStatus, IngestionStatus
 from app.services.rag_pipeline import RagPipeline
-from app.services.runtime_config import build_provider, load_runtime_config
+from app.services.runtime_config import build_embedding_provider, build_provider, build_vision_provider, load_runtime_config
 
 logger = structlog.get_logger(__name__)
 
@@ -46,24 +46,28 @@ async def run_ingestion(
         doc.ingestion_started_at = datetime.now(UTC)
         db.commit()
 
-        provider = build_provider(runtime)
+        chat_provider = build_provider(runtime)
+        embedding_provider = build_embedding_provider(runtime)
+        vision_provider = build_vision_provider(runtime)
         retriever = retriever or HybridRetriever(
             qdrant_url=settings.qdrant_url,
             collection=_QDRANT_COLLECTION,
             embedding_model=runtime.embedding_model,
-            embedding_client=provider,
+            embedding_client=embedding_provider,
         )
         reranker = Reranker(model_name=runtime.reranker_model, enabled=runtime.reranker_enabled)
         pipeline = RagPipeline(
             retriever=retriever,
             reranker=reranker,
-            ollama_url=runtime.provider_base_url,
+            ollama_url=settings.ollama_url,
             ollama_model=runtime.chat_model,
             embedding_model=runtime.embedding_model,
             qdrant_url=settings.qdrant_url,
             collection=_QDRANT_COLLECTION,
             db_session=db,
-            provider_client=provider,
+            chat_client=chat_provider,
+            embedding_client=embedding_provider,
+            vision_client=vision_provider,
             chunk_size=runtime.chunk_size,
             chunk_overlap=runtime.chunk_overlap,
             rerank_top_n=runtime.retrieval_k,
