@@ -39,7 +39,6 @@ class OutputFilter:
         # 1. PII hallucination check
         answer_pii = _find_pii_matches(answer)
         if answer_pii:
-            # Build the combined source text once
             source_text = " ".join(c.content for c in source_chunks)
             for pii_value in answer_pii:
                 if pii_value not in source_text:

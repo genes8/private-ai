@@ -444,10 +444,10 @@ async def chat_stream(
 
         _model_name = runtime.chat_model if runtime is not None else settings.ollama_model
 
-        async def _finalize() -> None:
+        async def _finalize_run(target_db: Session) -> None:
             try:
                 finalize_chat_run(
-                    db=db,
+                    db=target_db,
                     final=final,
                     user_id=str(current_user.id),
                     query=body.question,
@@ -467,30 +467,13 @@ async def chat_stream(
         if sse_done_mode == "async":
             from app.db import SessionLocal
 
-            async def _finalize_async() -> None:
+            async def _finalize_in_new_session() -> None:
                 with SessionLocal() as async_db:
-                    try:
-                        finalize_chat_run(
-                            db=async_db,
-                            final=final,
-                            user_id=str(current_user.id),
-                            query=body.question,
-                            latency_ms=latency_ms,
-                            k_retrieved=len(final.retrieved_chunks),
-                            usage=usage,
-                            cost_per_1k_tokens=settings.cost_per_1k_tokens,
-                            model_name=_model_name,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "chat_stream_postprocessing_failed",
-                            error=str(exc),
-                            trace_id=final.trace_id,
-                        )
+                    await _finalize_run(async_db)
 
-            asyncio.create_task(_finalize_async())
+            asyncio.create_task(_finalize_in_new_session())
         else:
-            await _finalize()
+            await _finalize_run(db)
 
         yield _sse("done", {
             "traceId": final.trace_id,

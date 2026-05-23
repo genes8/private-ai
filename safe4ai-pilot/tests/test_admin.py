@@ -89,7 +89,7 @@ def _make_test_client(db_mock: Any, admin: User) -> TestClient:
     client = TestClient(app, raise_server_exceptions=True)
     token = encode_token(str(admin.id), str(admin.role))
     client.cookies.set("access_token", token)
-    csrf_token = "test-csrf-token"
+    csrf_token = "test-csrf-token"  # noqa: S105
     client.cookies.set("csrf_token", csrf_token)
     client.headers["X-CSRF-Token"] = csrf_token
     return client
@@ -176,9 +176,10 @@ class TestDocumentList:
     def test_list_documents_returns_200(self) -> None:
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
-        db.query.return_value.outerjoin.return_value.outerjoin.return_value.order_by.return_value.all.return_value = [
-            (_make_document(), 3, "admin@test.com")
-        ]
+        (
+            db.query.return_value.outerjoin.return_value.outerjoin.return_value
+            .order_by.return_value.all
+        ).return_value = [(_make_document(), 3, "admin@test.com")]
 
         with patch("pathlib.Path.mkdir"):
             client = _make_test_client(db, admin)
@@ -299,7 +300,10 @@ class TestDocumentReindex:
 
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=True), \
-             patch("app.api.admin_routes.asyncio.create_task", side_effect=_close_and_return_task), \
+             patch(
+                 "app.api.admin_routes.asyncio.create_task",
+                 side_effect=_close_and_return_task,
+             ), \
              patch("app.api.admin_routes.QdrantClient") as MockQdrant:
             client = _make_test_client(db, admin)
             resp = client.post("/admin/documents/doc-1/reindex")
@@ -363,7 +367,10 @@ class TestDocumentReindex:
 
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=True), \
-             patch("app.api.admin_routes._delete_qdrant_points", side_effect=RuntimeError("qdrant down")), \
+             patch(
+                 "app.api.admin_routes._delete_qdrant_points",
+                 side_effect=RuntimeError("qdrant down"),
+             ), \
              patch("app.api.admin_routes._schedule_ingestion_task") as mock_schedule:
             client = _make_test_client(db, admin)
             resp = client.post("/admin/documents/doc-1/reindex")
@@ -429,10 +436,10 @@ class TestSettings:
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes.build_runtime_components",
+            "app.api.settings_routes.build_runtime_components",
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
         ), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
+            "app.services.settings_service.fetch_ollama_model_names",
             return_value={"qwen3:latest"},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
@@ -461,9 +468,9 @@ class TestSettings:
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes.upsert_app_config"
+            "app.api.settings_routes.upsert_app_config"
         ) as mock_upsert, patch(
-            "app.api.admin_routes.build_runtime_components",
+            "app.api.settings_routes.build_runtime_components",
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
@@ -484,7 +491,7 @@ class TestSettings:
         db = _mock_db_with_admin(admin)
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
+            "app.services.settings_service.fetch_ollama_model_names",
             return_value={"known:model"},
         ):
             client = _make_test_client(db, admin)
@@ -502,13 +509,13 @@ class TestSettings:
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
+            "app.services.settings_service.fetch_ollama_model_names",
             return_value={"qwen3.5:9b", "nomic-embed-text", "qwen2.5vl:7b"},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
         ), patch.dict(
-            "app.api.admin_routes._settings_live_cache", {"expires_at": 0.0}
+            "app.api.settings_routes._settings_live_cache", {"expires_at": 0.0}
         ):
             client = _make_test_client(db, admin)
             resp = client.get("/settings")
@@ -531,10 +538,10 @@ class TestSettings:
         db.query.return_value.all.return_value = []
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
+            "app.services.settings_service.fetch_ollama_model_names",
             return_value={"qwen3:latest"},
         ), patch(
-            "app.api.admin_routes.build_runtime_components",
+            "app.api.settings_routes.build_runtime_components",
             side_effect=RuntimeError("bad provider config"),
         ):
             client = _make_test_client(db, admin)
@@ -552,26 +559,26 @@ class TestSettings:
         db = _mock_db_with_admin(admin)
         custom_models = MagicMock()
         custom_models.key = "custom_provider_models"
-        custom_models.value = ["deepseek-chat", "qwen-plus"]
+        custom_models.value = ["deepseek-v4-flash", "qwen-plus"]
         db.query.return_value.all.return_value = [custom_models]
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
+            "app.services.settings_service.fetch_ollama_model_names",
             return_value=set(),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
         ), patch.dict(
-            "app.api.admin_routes._settings_live_cache", {"expires_at": 0.0}
+            "app.api.settings_routes._settings_live_cache", {"expires_at": 0.0}
         ):
             client = _make_test_client(db, admin)
             resp = client.get("/settings")
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["availableModels"]["customProvider"] == ["deepseek-chat", "qwen-plus"]
-        assert "deepseek-chat" in body["availableModels"]["provider"]
+        assert body["availableModels"]["customProvider"] == ["deepseek-v4-flash", "qwen-plus"]
+        assert "deepseek-v4-flash" in body["availableModels"]["provider"]
         assert "qwen-plus" in body["availableModels"]["provider"]
         from app.main import app
         app.dependency_overrides.clear()
@@ -589,13 +596,13 @@ class TestSettings:
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
+            "app.services.settings_service.fetch_ollama_model_names",
             return_value=set(),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
         ), patch.dict(
-            "app.api.admin_routes._settings_live_cache", {"expires_at": 0.0}
+            "app.api.settings_routes._settings_live_cache", {"expires_at": 0.0}
         ):
             client = _make_test_client(db, admin)
             resp = client.get("/settings")
@@ -609,16 +616,21 @@ class TestSettings:
 
     def test_patch_settings_provider_mode_local_resets_base_url(self) -> None:
         """PATCH providerMode=local must reset provider_base_url to local Ollama URL."""
+        from app.config import settings as app_settings
+
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
         db.query.return_value.all.return_value = []
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes.upsert_app_config"
+            "app.api.settings_routes.upsert_app_config"
         ) as mock_upsert, patch(
-            "app.api.admin_routes.build_runtime_components",
+            "app.api.settings_routes.build_runtime_components",
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.services.settings_service.fetch_ollama_model_names",
+            return_value={app_settings.ollama_model, app_settings.embedding_model, "qwen2.5vl:7b"},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -636,16 +648,21 @@ class TestSettings:
         app.dependency_overrides.clear()
 
     def test_patch_settings_provider_mode_local_sets_correct_fields(self) -> None:
+        from app.config import settings as app_settings
+
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
         db.query.return_value.all.return_value = []
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes.upsert_app_config"
+            "app.api.settings_routes.upsert_app_config"
         ) as mock_upsert, patch(
-            "app.api.admin_routes.build_runtime_components",
+            "app.api.settings_routes.build_runtime_components",
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.services.settings_service.fetch_ollama_model_names",
+            return_value={app_settings.ollama_model, app_settings.embedding_model, "qwen2.5vl:7b"},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -661,7 +678,7 @@ class TestSettings:
         app.dependency_overrides.clear()
 
     def test_patch_settings_provider_mode_hybrid_sets_correct_fields(self) -> None:
-        """PATCH providerMode=hybrid sets provider_type=openai_compatible and embedding_source=ollama."""
+        """PATCH providerMode=hybrid: provider_type=openai_compatible, embedding_source=ollama."""
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
         provider_api_key = MagicMock()
@@ -674,16 +691,16 @@ class TestSettings:
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes.upsert_app_config"
+            "app.api.settings_routes.upsert_app_config"
         ) as mock_upsert, patch(
-            "app.api.admin_routes.build_runtime_components",
+            "app.api.settings_routes.build_runtime_components",
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
         ), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
-            return_value={"nomic-embed-text"},
+            "app.services.settings_service.fetch_ollama_model_names",
+            return_value={"nomic-embed-text", "qwen2.5vl:7b"},
         ), patch(
             # validate_provider_url calls socket.getaddrinfo — bypass DNS in tests
-            "app.api.admin_routes.validate_provider_url",
+            "app.services.settings_service.validate_provider_url",
             side_effect=lambda url: url.rstrip("/"),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
@@ -712,7 +729,7 @@ class TestSettings:
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
+            "app.services.settings_service.fetch_ollama_model_names",
             side_effect=HTTPException(status_code=503, detail="Ollama unreachable"),
         ):
             client = _make_test_client(db, admin)
@@ -724,7 +741,7 @@ class TestSettings:
         app.dependency_overrides.clear()
 
     def test_patch_settings_provider_mode_hybrid_auto_resets_cloud_embedding_model(self) -> None:
-        """When switching to hybrid, a cloud-only embedding model should auto-reset to the default."""
+        """Switching to hybrid auto-resets cloud-only embedding model to default."""
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
         provider_api_key = MagicMock()
@@ -738,17 +755,17 @@ class TestSettings:
         db.query.return_value.count.return_value = 0
 
         with patch("pathlib.Path.mkdir"), patch(
-            "app.api.admin_routes.upsert_app_config"
+            "app.api.settings_routes.upsert_app_config"
         ) as mock_upsert, patch(
-            "app.api.admin_routes.build_runtime_components",
+            "app.api.settings_routes.build_runtime_components",
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
         ), patch(
-            "app.api.admin_routes._fetch_ollama_model_names",
-            # text-embedding-3-small is NOT in Ollama, but nomic-embed-text is
-            return_value={"nomic-embed-text"},
+            "app.services.settings_service.fetch_ollama_model_names",
+            # text-embedding-3-small is NOT in Ollama, but nomic-embed-text and vision default are
+            return_value={"nomic-embed-text", "qwen2.5vl:7b"},
         ), patch(
             # validate_provider_url calls socket.getaddrinfo — bypass DNS in tests
-            "app.api.admin_routes.validate_provider_url",
+            "app.services.settings_service.validate_provider_url",
             side_effect=lambda url: url.rstrip("/"),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
@@ -777,6 +794,121 @@ class TestSettings:
 
         assert resp.status_code == 422
         assert "providerMode" in resp.json()["detail"]
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_local_resets_stale_cloud_chat_model(self) -> None:
+        """cloud → local: a cloud chat model in generation_model is reset to the Ollama default."""
+        from app.config import settings as app_settings
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        # DB has cloud generation_model from a previous cloud session
+        gen_model_cfg = MagicMock()
+        gen_model_cfg.key = "generation_model"
+        gen_model_cfg.value = "deepseek-v4-flash"
+        db.query.return_value.all.return_value = [gen_model_cfg]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.settings_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.settings_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.services.settings_service.fetch_ollama_model_names",
+            # deepseek-v4-flash is NOT in Ollama; only the Ollama defaults are
+            return_value={app_settings.ollama_model, app_settings.embedding_model, "qwen2.5vl:7b"},
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "local"})
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        # generation_model must be reset to a valid Ollama model, not left as the cloud ID
+        assert updates["generation_model"] == app_settings.ollama_model
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_local_resets_stale_cloud_embedding_and_vision_models(self) -> None:
+        """cloud → local: cloud embedding and vision models are reset to Ollama defaults."""
+        from app.config import settings as app_settings
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        emb_cfg = MagicMock()
+        emb_cfg.key = "embedding_model"
+        emb_cfg.value = "text-embedding-3-small"
+        vis_cfg = MagicMock()
+        vis_cfg.key = "vision_model"
+        vis_cfg.value = "qwen-vl-plus"
+        db.query.return_value.all.return_value = [emb_cfg, vis_cfg]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.settings_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.settings_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.services.settings_service.fetch_ollama_model_names",
+            return_value={app_settings.ollama_model, app_settings.embedding_model, "qwen2.5vl:7b"},
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "local"})
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        assert updates["embedding_model"] == app_settings.embedding_model
+        assert updates["vision_model"] == "qwen2.5vl:7b"
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_hybrid_resets_stale_cloud_vision_model(self) -> None:
+        """cloud → hybrid: a cloud vision model in vision_model is reset to the Ollama default."""
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        provider_api_key = MagicMock()
+        provider_api_key.key = "provider_api_key"
+        provider_api_key.value = "sk-test"
+        emb_cfg = MagicMock()
+        emb_cfg.key = "embedding_model"
+        emb_cfg.value = "nomic-embed-text"
+        vis_cfg = MagicMock()
+        vis_cfg.key = "vision_model"
+        vis_cfg.value = "qwen-vl-plus"  # stale cloud vision model
+        db.query.return_value.all.return_value = [provider_api_key, emb_cfg, vis_cfg]
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.settings_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.settings_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.services.settings_service.fetch_ollama_model_names",
+            # Both embedding AND vision defaults must be present so the sanitization can reset
+            return_value={"nomic-embed-text", "qwen2.5vl:7b"},
+        ), patch(
+            "app.services.settings_service.validate_provider_url",
+            side_effect=lambda url: url.rstrip("/"),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"providerMode": "hybrid"})
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        # vision_model must be reset to the Ollama default, not left as the cloud vision ID
+        assert updates["vision_model"] == "qwen2.5vl:7b"
         from app.main import app
         app.dependency_overrides.clear()
 
@@ -849,7 +981,10 @@ class TestUserManagement:
             )
 
         assert resp.status_code == 422
-        assert "Password must include uppercase, lowercase, digit, and special character" in resp.json()["detail"]
+        assert (
+            "Password must include uppercase, lowercase, digit, and special character"
+            in resp.json()["detail"]
+        )
         from app.main import app
         app.dependency_overrides.clear()
 
@@ -935,7 +1070,11 @@ class TestUserManagement:
             client = _make_test_client(db, admin)
             resp = client.post(
                 "/admin/users",
-                json={"email": "bad email@example.com", "password": "strongpassword123", "role": "pilot_user"},
+                json={
+                    "email": "bad email@example.com",
+                    "password": "strongpassword123",
+                    "role": "pilot_user",
+                },
             )
 
         assert resp.status_code == 422
@@ -959,7 +1098,10 @@ class TestUserManagement:
         document_query.filter.return_value.update.return_value = 1
 
         session_query_for_ids = MagicMock()
-        session_query_for_ids.filter.return_value.all.return_value = [MagicMock(id="sess-1"), MagicMock(id="sess-2")]
+        session_query_for_ids.filter.return_value.all.return_value = [
+            MagicMock(id="sess-1"),
+            MagicMock(id="sess-2"),
+        ]
 
         agent_run_query = MagicMock()
         agent_run_query.filter.return_value.delete.return_value = 2
@@ -977,10 +1119,21 @@ class TestUserManagement:
         audit_query.filter.return_value.update.return_value = 0
 
         def _query(model: Any) -> Any:
-            from app.db.models import AgentRun, AuditLog, Document, HumanReviewQueue, QueryFeedback, Session as DbSession
+            from app.db.models import (  # noqa: I001
+                AgentRun,
+                AuditLog,
+                Document,
+                HumanReviewQueue,
+                QueryFeedback,
+                Session as DbSession,
+            )
             mapping = {
                 Document: document_query,
-                DbSession: session_query_for_ids if not hasattr(_query, "_session_seen") else session_delete_query,
+                DbSession: (
+                    session_query_for_ids
+                    if not hasattr(_query, "_session_seen")
+                    else session_delete_query
+                ),
                 AgentRun: agent_run_query,
                 QueryFeedback: feedback_query,
                 HumanReviewQueue: review_query,
@@ -1165,7 +1318,9 @@ class TestIngestionRecovery:
         doc = _make_document()
         doc.ingestion_started_at = datetime.now(UTC) - timedelta(minutes=30)
         db = MagicMock()
-        db.query.return_value.join.return_value.filter.return_value.all.side_effect = [[stuck_job], []]
+        (
+            db.query.return_value.join.return_value.filter.return_value.all
+        ).side_effect = [[stuck_job], []]
         db.get.return_value = doc
 
         count = recover_stuck_jobs(db)
@@ -1292,8 +1447,6 @@ class TestPhase3CRuntimeHardening:
             state, mock_graph, db=mock_db, conversation_manager=mock_conv_mgr
         )
 
-        # trace_id must be a non-empty UUID
-        assert result.trace_id == "" or True  # graph returns final_state; check the invoked state
         # Verify ainvoke was called with a state that has trace_id set
         invoked_state = mock_graph.ainvoke.call_args[0][0]
         assert invoked_state.trace_id != "", "trace_id must be generated before graph.ainvoke"

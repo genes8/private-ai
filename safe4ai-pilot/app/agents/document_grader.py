@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from app.agents.entity_booster import boost_entity_chunks
 from app.models import GradedChunk, RankedChunk
 from app.prompts.registry import get_prompt
 
@@ -38,6 +39,7 @@ async def grade_chunks(
         return []
 
     if rerank_threshold is not None:
+        chunks = boost_entity_chunks(query, chunks, rerank_threshold)
         return grade_chunks_by_score(chunks, rerank_threshold)
 
     template = get_prompt("document_grader", "v1")
@@ -47,7 +49,9 @@ async def grade_chunks(
         async with semaphore:
             prompt = template.template.format(query=query, chunk=chunk.content)
             try:
-                result = await chat_client.chat("You are a relevance grader. Reply with JSON.", prompt)
+                result = await chat_client.chat(
+                    "You are a relevance grader. Reply with JSON.", prompt
+                )
                 raw = result.content.strip()
                 data: dict[str, Any] = json.loads(raw)
                 return GradedChunk(

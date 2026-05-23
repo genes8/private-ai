@@ -304,10 +304,13 @@ async def test_embed_batch_uses_embedding_client_not_chat_client() -> None:
             embedding_client=embedding_client,
         )
 
+    # Set up the negative assertion BEFORE the call so we can verify it was never touched.
+    chat_client.embed_documents = MagicMock()
+
     result = await pipeline._embed_batch(["hello"])
 
     embedding_client.embed_documents.assert_awaited_once_with(["hello"])
-    chat_client.embed_documents = MagicMock()  # should not exist / not be called
+    chat_client.embed_documents.assert_not_called()
     chat_client.chat.assert_not_called()
     assert result == [FAKE_EMBEDDING]
 
@@ -354,8 +357,8 @@ async def test_ocr_page_uses_vision_client_not_chat_client() -> None:
     chat_client = MagicMock()
     chat_client.chat = AsyncMock()
 
-    import tempfile
     import os
+    import tempfile
 
     with patch("app.services.rag_pipeline.QdrantClient"):
         pipeline = RagPipeline(

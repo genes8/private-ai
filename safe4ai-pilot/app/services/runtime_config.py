@@ -11,10 +11,10 @@ from app.components.reranker import Reranker
 from app.config import settings
 from app.services.app_config_store import load_app_config
 from app.services.provider_clients import (
-    EmbeddingClient,
     OllamaProvider,
     OpenAICompatibleProvider,
 )
+from app.services.provider_settings import resolve_provider_config
 
 _DEFAULT_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 _DEFAULT_VISION_MODEL = "qwen2.5vl:7b"
@@ -97,12 +97,17 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
     """Load persisted settings, falling back to environment defaults."""
     cfg = load_app_config(db)
 
-    provider_type = str(cfg.get("provider_type", "ollama"))
-    if provider_type not in {"ollama", "openai_compatible"}:
-        provider_type = "ollama"
+    _res = resolve_provider_config(cfg)
+    provider_type = _res.provider_type
+    embedding_source = _res.embedding_source
 
     generation_model = str(cfg.get("generation_model", settings.ollama_model))
     provider_chat_model = str(cfg.get("provider_chat_model", generation_model))
+    # For local Ollama, chat_model is always generation_model — avoids a stale provider_chat_model
+    # left over from a previous cloud session overriding the local model selection.
+    effective_chat_model = generation_model if provider_type == "ollama" else provider_chat_model
+    embedding_model_base = str(cfg.get("embedding_model", settings.embedding_model))
+    vision_model_base = str(cfg.get("vision_model", _DEFAULT_VISION_MODEL))
     provider_embedding_model = str(cfg.get("provider_embedding_model", settings.embedding_model))
     provider_vision_model = str(cfg.get("provider_vision_model", _DEFAULT_VISION_MODEL))
     provider_base_url = str(
@@ -116,12 +121,15 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
     if sse_done_mode not in {"strict", "async"}:
         sse_done_mode = "strict"
 
-    # Default embedding_source to "provider" when provider_type is openai_compatible and
-    # no explicit embedding_source is stored — preserves backward compat for existing cloud setups.
-    _embedding_source_default = "provider" if provider_type == "openai_compatible" else "ollama"
-    embedding_source = str(cfg.get("embedding_source", _embedding_source_default))
-    if embedding_source not in {"ollama", "provider"}:
-        embedding_source = _embedding_source_default
+    # For local/hybrid modes embeddings run on Ollama — use the Ollama model names, not the cloud
+    # provider models that may have been left in provider_embedding_model / provider_vision_model
+    # from a previous cloud session.
+    effective_embedding_model = (
+        embedding_model_base if embedding_source == "ollama" else provider_embedding_model
+    )
+    effective_vision_model = (
+        vision_model_base if embedding_source == "ollama" else provider_vision_model
+    )
 
     return RuntimeConfig(
         provider_type=provider_type,
@@ -130,9 +138,9 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
         embedding_source=embedding_source,
         generation_model=generation_model,
         generation_fallback_model=str(cfg.get("generation_fallback_model", generation_model)),
-        chat_model=provider_chat_model,
-        embedding_model=provider_embedding_model,
-        vision_model=provider_vision_model,
+        chat_model=effective_chat_model,
+        embedding_model=effective_embedding_model,
+        vision_model=effective_vision_model,
         reranker_enabled=_coerce_bool(cfg.get("reranker_enabled"), True),
         reranker_model=str(cfg.get("reranker_model", _DEFAULT_RERANKER_MODEL)),
         retrieval_k=_coerce_int(cfg.get("retrieval_k"), 6),
@@ -164,36 +172,34 @@ def build_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleP
     )
 
 
-def build_embedding_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleProvider:
-    """Return the provider for embed_query / embed_documents calls.
-
-    In hybrid mode embeddings always use local Ollama — NOT runtime.provider_base_url
-    which is the cloud provider URL.
-    """
-    if runtime.embedding_source == "provider":
-        return build_provider(runtime)
+def _build_local_ollama_provider(runtime: RuntimeConfig) -> OllamaProvider:
+    """OllamaProvider pointed at the local Ollama URL (never the cloud provider URL)."""
     return OllamaProvider(
         base_url=settings.ollama_url,
         chat_model=runtime.chat_model,
         embedding_model=runtime.embedding_model,
         vision_model=runtime.vision_model,
     )
+
+
+def build_embedding_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleProvider:
+    """Return the provider for embed_query / embed_documents calls.
+
+    In hybrid mode embeddings always use local Ollama — NOT runtime.provider_base_url.
+    """
+    if runtime.embedding_source == "provider":
+        return build_provider(runtime)
+    return _build_local_ollama_provider(runtime)
 
 
 def build_vision_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleProvider:
     """Return the provider for describe_image / OCR calls.
 
-    In hybrid mode vision always uses local Ollama — vision_model (qwen2.5vl:7b) is an
-    Ollama model and typically not available on cloud chat providers like DeepSeek.
+    In hybrid and local modes vision uses local Ollama (vision_model is an Ollama-only model).
     """
     if runtime.embedding_source == "provider":
         return build_provider(runtime)
-    return OllamaProvider(
-        base_url=settings.ollama_url,
-        chat_model=runtime.chat_model,
-        embedding_model=runtime.embedding_model,
-        vision_model=runtime.vision_model,
-    )
+    return _build_local_ollama_provider(runtime)
 
 
 def build_runtime_components(db: Session) -> tuple[RuntimeConfig, HybridRetriever, Reranker, Any]:

@@ -30,7 +30,7 @@ def test_runtime_config_loads_openai_compatible_provider() -> None:
             "provider_type": "openai_compatible",
             "provider_base_url": "https://api.deepseek.com/v1",
             "provider_api_key": "sk-test",
-            "provider_chat_model": "deepseek-chat",
+            "provider_chat_model": "deepseek-v4-flash",
             "provider_embedding_model": "text-embedding-3-small",
             "provider_vision_model": "qwen-vl-plus",
             "sse_done_mode": "async",
@@ -41,7 +41,7 @@ def test_runtime_config_loads_openai_compatible_provider() -> None:
     assert runtime.provider_type == "openai_compatible"
     assert runtime.provider_base_url == "https://api.deepseek.com/v1"
     assert runtime.provider_api_key == "sk-test"
-    assert runtime.chat_model == "deepseek-chat"
+    assert runtime.chat_model == "deepseek-v4-flash"
     assert runtime.embedding_model == "text-embedding-3-small"
     assert runtime.vision_model == "qwen-vl-plus"
     assert runtime.sse_done_mode == "async"
@@ -95,7 +95,10 @@ def test_build_runtime_components_uses_openai_provider_clients() -> None:
 
 def test_provider_mode_local_when_ollama() -> None:
     db = MagicMock()
-    with patch("app.services.runtime_config.load_app_config", return_value={"provider_type": "ollama"}):
+    with patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={"provider_type": "ollama"},
+    ):
         runtime = load_runtime_config(db)
     assert runtime.provider_mode == "local"
 
@@ -130,7 +133,7 @@ def test_provider_mode_cloud_when_openai_and_provider_embeddings() -> None:
 
 
 def test_openai_compatible_without_embedding_source_defaults_to_provider() -> None:
-    """Existing openai_compatible configs without embedding_source stored default to cloud (backward compat)."""
+    """openai_compatible without embedding_source in DB defaults to cloud (backward compat)."""
     db = MagicMock()
     with patch(
         "app.services.runtime_config.load_app_config",
@@ -165,7 +168,7 @@ def test_build_embedding_provider_hybrid_returns_ollama() -> None:
 
 
 def test_build_embedding_provider_cloud_returns_openai_compatible() -> None:
-    """In cloud mode (embedding_source=provider), build_embedding_provider returns OpenAICompatibleProvider."""
+    """Cloud mode (embedding_source=provider): build_embedding_provider returns OpenAICompatible."""
     db = MagicMock()
     with patch(
         "app.services.runtime_config.load_app_config",
@@ -183,7 +186,7 @@ def test_build_embedding_provider_cloud_returns_openai_compatible() -> None:
 
 
 def test_build_vision_provider_hybrid_uses_local_ollama() -> None:
-    """In hybrid mode, build_vision_provider always returns OllamaProvider (qwen2.5vl:7b is local)."""
+    """Hybrid mode: build_vision_provider always returns OllamaProvider (qwen2.5vl:7b is local)."""
     db = MagicMock()
     with patch(
         "app.services.runtime_config.load_app_config",
@@ -200,7 +203,7 @@ def test_build_vision_provider_hybrid_uses_local_ollama() -> None:
 
 
 def test_build_runtime_components_hybrid_splits_providers() -> None:
-    """In hybrid mode, chat_client is OpenAICompatibleProvider; embedding_client passed to HybridRetriever is OllamaProvider."""
+    """Hybrid: chat uses OpenAICompatible; HybridRetriever uses OllamaProvider for embeddings."""
     from app.services.runtime_config import build_runtime_components
 
     db = MagicMock()

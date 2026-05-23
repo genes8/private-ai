@@ -84,7 +84,7 @@ def test_runtime_config_loads_openai_compatible_provider() -> None:
             "provider_type": "openai_compatible",
             "provider_base_url": "https://api.deepseek.com/v1",
             "provider_api_key": "sk-test",
-            "provider_chat_model": "deepseek-chat",
+            "provider_chat_model": "deepseek-v4-flash",
             "provider_embedding_model": "text-embedding-3-small",
             "provider_vision_model": "qwen-vl-plus",
             "sse_done_mode": "async",
@@ -95,7 +95,7 @@ def test_runtime_config_loads_openai_compatible_provider() -> None:
     assert runtime.provider_type == "openai_compatible"
     assert runtime.provider_base_url == "https://api.deepseek.com/v1"
     assert runtime.provider_api_key == "sk-test"
-    assert runtime.chat_model == "deepseek-chat"
+    assert runtime.chat_model == "deepseek-v4-flash"
     assert runtime.embedding_model == "text-embedding-3-small"
     assert runtime.vision_model == "qwen-vl-plus"
     assert runtime.sse_done_mode == "async"
@@ -239,7 +239,7 @@ async def test_openai_compatible_chat_extracts_actual_usage() -> None:
     provider = OpenAICompatibleProvider(
         base_url="https://api.example.com/v1",
         api_key="sk-test",
-        chat_model="deepseek-chat",
+        chat_model="deepseek-v4-flash",
         embedding_model="text-embedding-3-small",
         vision_model="qwen-vl",
         client=client,

@@ -596,7 +596,8 @@ class TestF09_DefaultCredentials:
     """Startup must block when default secrets are used with enforce_https=True."""
 
     def test_default_secret_key_blocks_in_production(self) -> None:
-        from app.main import _warn_default_credentials, settings
+        from app.startup_migrations import _warn_default_credentials
+        from app.config import settings
 
         original_key = settings.secret_key
         original_https = settings.enforce_https
@@ -611,7 +612,8 @@ class TestF09_DefaultCredentials:
             settings.enforce_https = original_https
 
     def test_default_secret_key_warns_in_dev(self) -> None:
-        from app.main import _warn_default_credentials, settings
+        from app.startup_migrations import _warn_default_credentials
+        from app.config import settings
 
         original_key = settings.secret_key
         original_https = settings.enforce_https
@@ -626,7 +628,8 @@ class TestF09_DefaultCredentials:
             settings.enforce_https = original_https
 
     def test_default_pg_password_blocks_in_production(self) -> None:
-        from app.main import _warn_default_credentials, settings
+        from app.startup_migrations import _warn_default_credentials
+        from app.config import settings
 
         original_url = settings.postgres_url
         original_key = settings.secret_key
