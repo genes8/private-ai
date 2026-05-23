@@ -1,258 +1,317 @@
-# Bug Hunting & E2E API Verification — safe4ai-pilot/ (2026-05-23)
+# Bug Hunting Report — safe4ai-pilot/ (2026-05-23, Round 2)
 
-Full static analysis of every frontend API call mapped against every backend endpoint. Focus: identify mock/disconnected data, verify all admin panel tabs, and find calls that display data not actually connected to the backend.
+Deep code audit focusing on logic errors, data integrity risks, security concerns, and UI/UX issues. All 30+ source files read and analyzed: chat routes, auth pipeline, RAG pipeline, admin routes, settings routes, ingestion service, security modules, frontend hooks, and all admin pages.
 
 ## Verification Status — 2026-05-23
 
-**Overall status: not clean.** Frontend build passes, but the backend test suite currently fails.
-
 | Check | Result | Evidence |
 |-------|--------|----------|
-| Frontend production build | ✅ Pass | `npm run build` in `safe4ai-pilot/frontend` completed successfully |
-| Backend tests | ❌ Fail | `./.venv/bin/pytest -q` in `safe4ai-pilot` → `326 passed, 6 skipped, 5 failed` |
+| Backend tests | ✅ Pass | `./.venv/bin/pytest -q` → `339 passed, 6 skipped, 1 warning` |
+| Frontend build | ✅ Pass | `npm run build` in `safe4ai-pilot/frontend` completed successfully |
 
-Backend failures are all in `tests/test_startup_schema.py`. The tests patch `app.startup_migrations.load_runtime_config`, but `app/startup_migrations.py` currently imports `load_runtime_config` inside `_ensure_qdrant_collection()` instead of exposing it at module scope. Result: every Qdrant collection dimension test fails before it can exercise behavior.
-
-This is a separate regression from the API/mock-data findings below and must be fixed before claiming the codebase is fully verified.
-
-## Frontend-to-Backend API Map — Complete Verification
-
-| Frontend Call | Backend Endpoint | Connected? | Notes |
-|---------------|-----------------|------------|-------|
-| `GET /auth/csrf` | `auth/router.py:55` | ✅ Live | |
-| `POST /auth/login` | `auth/router.py:70` | ✅ Live | |
-| `POST /auth/logout` | `auth/router.py:151` | ✅ Live | |
-| `GET /me` | `admin_routes.py:841` | ✅ Live | |
-| `GET /health` | `main.py:385` | ✅ Live | Used by LoginPage health check |
-| `GET /admin/stats` | `admin_routes.py:719` | ✅ Live | |
-| `GET /admin/documents` | `admin_routes.py:250` | ✅ Live | Includes `uploaded_by_email` join |
-| `GET /admin/documents/{id}/status` | `admin_routes.py:287` | ✅ Live | |
-| `POST /admin/documents/upload` | `admin_routes.py:172` | ✅ Live | |
-| `DELETE /admin/documents/{id}` | `admin_routes.py:314` | ✅ Live | |
-| `POST /admin/documents/{id}/reindex` | `admin_routes.py:368` | ✅ Live | |
-| `GET /admin/corpus-stats` | `admin_routes.py:237` | ✅ Live | Used by ChatPage empty state |
-| `GET /admin/audit-logs` | `admin_routes.py:613` | ✅ Live | |
-| `GET /admin/audit-logs/export.csv` | `admin_routes.py:653` | ✅ Live | |
-| `GET /admin/feedback` | `observability_routes.py:41` | ✅ Live | Returns `user_email` via join |
-| `POST /feedback` | `observability_routes.py:27` | ✅ Live | |
-| `GET /admin/users` | `admin_routes.py:491` | ✅ Live | |
-| `POST /admin/users` | `admin_routes.py:517` | ✅ Live | |
-| `DELETE /admin/users/{id}` | `admin_routes.py:542` | ✅ Live | |
-| `GET /settings` | `settings_routes.py:311` | ✅ Live | |
-| `PATCH /settings` | `settings_routes.py:322` | ✅ Live | |
-| `POST /settings/provider/test` | `settings_routes.py:606` | ✅ Live | |
-| `POST /chat/stream` | `chat_routes.py:346` | ✅ Live | SSE streaming |
-| `GET /admin/stats/cost` | `observability_routes.py:53` | ⚠️ No frontend | |
-
-**Result: All 23 frontend API calls found in `frontend/src` are connected to real backend endpoints.** `GET /admin/stats/cost` is a backend endpoint with no frontend consumer, so it is not counted as a frontend API call. Zero frontend API calls found in the API adapters use mock/fake data as their data source.
+The remaining issues below are code-quality, architecture, data-integrity, and maintainability findings. They are not currently failing the automated test/build checks.
 
 ---
 
-## Backend Endpoints With No Frontend Consumer
+## 🔴 CRITICAL — Data Loss / Integrity Risks
 
-| Endpoint | File | Notes |
-|----------|------|-------|
-| `POST /chat` (non-streaming) | `chat_routes.py:269` | No frontend code calls this — all chat uses SSE streaming |
-| `GET /admin/stats/cost` | `observability_routes.py:53` | Detailed cost breakdown not shown in UI |
-| `GET /admin/review-queue` | `admin_routes.py:770` | Human review queue has no admin UI |
-| `POST /admin/review-queue/{id}/approve` | `admin_routes.py:800` | No admin UI for review actions |
-| `POST /admin/review-queue/{id}/reject` | `admin_routes.py:818` | No admin UI for review actions |
-
----
-
-## 🔴 CRITICAL — Static/Hardcoded Data Still Reaching Users
-
-### 1. "Indexing healthy" card in admin sidebar is completely fake — `frontend/src/pages/admin/AdminLayout.tsx:76-82`
-
-```tsx
-<div className="mx-2 mb-3 rounded-lg bg-paper-2 border border-line px-3 py-2.5">
-  <div className="flex items-center gap-2 mb-1">
-    <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
-    <span className="text-[11.5px] font-medium text-text-2">Indexing healthy</span>
-  </div>
-  <p className="text-[10.5px] text-text-mute">All documents indexed</p>
-</div>
-```
-
-**No API call. No query.** Always shows green dot + "Indexing healthy" + "All documents indexed". Should query for documents with `failed` or `embedding` status and show actual indexing health. If a document ingestion is failing, the admin sees a green "healthy" indicator — misleading.
-
-**Fix:** Add a query to check for documents with `ingestion_status IN ('failed', 'embedding', 'queued')` and render the card dynamically.
-
----
-
-### 2. Settings "Document sources" section renders hardcoded single source — `app/api/settings_routes.py:186-196`
+### 1. `content_filter` silently drops chunks containing legitimate PII — `app/security/content_filter.py:28-40`
 
 ```python
-"sources": [
-    {
-        "id": "src-1",
-        "kind": "watch",
-        "label": "data/raw",
-        "detail": "Local filesystem watch",
-        "docCount": doc_count,
-        "syncedAt": None,
-        "status": "ok",
-    },
-],
+def filter_chunks(self, chunks: list[RankedChunk]) -> list[RankedChunk]:
+    clean: list[RankedChunk] = []
+    for chunk in chunks:
+        if _contains_pii(chunk.content):
+            logger.warning("pii_chunk_excluded", chunk_id=chunk.chunk_id, doc_id=chunk.doc_id)
+        else:
+            clean.append(chunk)
+    return clean
 ```
 
-This is **always a single hardcoded source**. There's no database table for sources, no CRUD operations, no way to add/remove sources from the UI. The `docCount` is live (from TTL cache), but the source itself is static. The frontend `SourceCard` component (`SettingsPage.tsx:182-208`) renders it as if it's a dynamic data source with real status indicators.
+Called from `graph.py:122` in the `retrieve_node`, **AFTER** reranking but BEFORE grading and generation. This means if a document about employee benefits contains an SSN (e.g., "Your SSN 123-45-6789 is used for..."), that entire chunk is **silently removed from the retrieval results**. The LLM then cannot answer questions about that content — and the user gets "I don't have enough information" even though the relevant document IS indexed.
 
-The `SourceCard` component also has icons for `s3`, `gdrive`, and `watch` kinds — but only `watch` is ever returned, making the S3/Google Drive icon logic dead code.
+The same filter is also applied during **ingestion** (`rag_pipeline.py:140`), meaning PII-containing chunks are never even embedded into Qdrant. This double-filtering (ingestion + retrieval) means ANY document containing SSN/credit-card/passport patterns is completely invisible to the chat.
 
-**Fix options:**
-- A) Remove the Sources section entirely from Settings (it's decorative)
-- B) Create a proper `data_sources` DB table with CRUD endpoints and wire the frontend to it
-- C) Mark it clearly as "Local filesystem" info (not a configurable source) with a different UI treatment
+**Impact:** If a company uploads an HR policy document that happens to contain an SSN example ("Enter your SSN: XXX-XX-XXXX" or a real SSN in a form), that content is permanently invisible to queries.
+
+**Fix:** At minimum, remove the retrieval-time filter (keep ingestion-time only) since chunks are already filtered before indexing. Better: make PII filtering configurable per deployment, with a `redact_pii` mode that redacts rather than drops.
 
 ---
 
-### 3. Reranker model list is hardcoded — `app/api/settings_routes.py:170-173`
+### 2. Blocking `/chat` and streaming `/chat/stream` persist audit/cost data through divergent paths — `app/api/chat_routes.py:56-111`, `app/services/chat_finalizer.py:14-70`
+
+The blocking `/chat` endpoint uses three separate helpers:
 
 ```python
-"reranker": [
-    "cross-encoder/ms-marco-MiniLM-L-6-v2",
-    "bge-reranker-v2",
-],
+_save_assistant_reply(convo, final)
+_write_audit_log(...)
+_record_cost(...)
 ```
 
-Unlike Ollama models (fetched dynamically via `/api/tags`) and provider models (fetched dynamically via `/models`), the reranker model dropdown is two hardcoded strings. There's no check whether these models are actually available/installed on the server.
+The streaming `/chat/stream` endpoint uses the unified `finalize_chat_run()` helper instead.
 
-**Fix:** Either fetch available reranker models dynamically from the server, or mark the list as "available options" rather than "installed models".
+These paths currently write different data:
+
+- Blocking path writes `AuditLog.action_type="query"`.
+- Streaming finalizer writes `AuditLog.action_type="chat_query"`.
+- Blocking path has a smaller `response_metadata` payload.
+- Streaming finalizer records provider usage fields in `response_metadata`.
+- Blocking path records cost through `CostTracker.record_run`, but does not use the same `AgentRun` creation path as `finalize_chat_run`.
+
+**Impact:** Dashboards and cost/audit reports can disagree depending on whether a query used `/chat` or `/chat/stream`. This is especially risky because `/chat` is intentionally retained for eval scripts, integration tests, and direct API clients.
+
+**Fix:** Make blocking `/chat` use `finalize_chat_run()` with `_usage_or_estimate()`, then delete `_save_assistant_reply`, `_write_audit_log`, and `_record_cost` if no longer needed. Ensure error audit handling remains explicit and consistent.
 
 ---
 
-### 4. Chat suggested prompts are static — `frontend/src/pages/ChatPage.tsx:19-24`
+## 🟠 HIGH — Logic / Security Issues
 
-```tsx
-const SUGGESTED = [
-  { tag: "Policy",    question: "What is the annual leave entitlement?" },
-  { tag: "Finance",   question: "Who approves capital expenditure over €50,000?" },
-  { tag: "IT",        question: "What is the minimum password length?" },
-  { tag: "Compliance",question: "What are our data retention obligations?" },
-];
+### 3. `settings_routes.py` makes **blocking synchronous HTTP calls** inside `async` FastAPI endpoints — `app/api/settings_routes.py:46-58`
+
+```python
+def _fetch_provider_model_names(base_url: str, api_key: str) -> list[str]:
+    try:
+        with httpx.Client(timeout=5.0) as client:   # ← synchronous!
+            resp = client.get(f"{base_url.rstrip('/')}/models", ...)
 ```
 
-These are hardcoded static suggestions that never change regardless of what documents are indexed. The previous `source` fake filenames were removed (good), but the questions themselves are still static and may be irrelevant if no HR/finance/IT/compliance documents exist.
+And `_get_settings_live_metadata` calls `_svc.fetch_ollama_model_names()` which also uses a synchronous httpx.Client.
 
-**Note:** Severity downgraded from Critical — this is a UX concern, not a data integrity issue.
+These synchronous HTTP calls block the **entire asyncio event loop** while waiting for the external provider/Ollama response. Under load, this means ALL concurrent requests (including SSE chat streams) are frozen for up to 5 seconds while the Ollama `/api/tags` endpoint responds.
 
----
+`GET /settings` and `PATCH /settings` are async endpoints (`async def`), so FastAPI runs them on the event loop — but the synchronous httpx calls inside them block it.
 
-## 🟠 HIGH — Logic/UX Issues
-
-### 5. `SSE completion mode` field is misplaced in Provider section — `frontend/src/components/admin/ProviderSettingsSection.tsx:329-334`
-
-The `sseDoneMode` selector (`strict` / `async`) is rendered inside the Provider section, but this is a backend streaming behavior setting, not an inference provider setting. It appears under every provider mode (local, hybrid, cloud). It does save correctly to the backend, but it's conceptually confusing — users looking at "Inference provider" settings don't expect to find SSE streaming configuration there.
-
-**Fix:** Move `sseDoneMode` to a more appropriate section (e.g., "Retrieval" or a new "Advanced" section).
+**Fix:** Replace `httpx.Client` with `httpx.AsyncClient` and `await` the calls. Or run the sync calls in `asyncio.to_thread()`.
 
 ---
 
-### 6. Feedback detail "Trace" section shows "not recorded" — `frontend/src/pages/admin/FeedbackPage.tsx:153-158`
+### 4. SSRF validation has a TOCTOU race — `app/security/url_validator.py:41-53`
 
-```tsx
-<p className="text-[12px] text-text-3 font-mono">
-  Trace detail is not recorded. Use the trace ID below to correlate with server logs.
-</p>
+```python
+resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+for _family, _type, _proto, _canonname, sockaddr in resolved:
+    ip = ipaddress.ip_address(sockaddr[0])
+    for network in _BLOCKED_NETWORKS:
+        if ip in network:
+            raise HTTPException(...)
 ```
 
-The old fake trace grid was correctly replaced with an honest message. However, the backend `QueryFeedback` model stores `trace_id` and `session_id` — both could be used to look up the `AuditLog` entry which does have `latency_ms`, `model_used`, etc. The trace detail is not technically "not recorded" — it's in the audit_logs table, just not fetched/displayed.
+The DNS resolution happens at validation time, but the actual HTTP request to the provider URL happens later (in `_fetch_provider_model_names` or `test_provider_connection`). Between resolution and request, DNS could return a different IP (DNS rebinding attack). The validator resolves `evil.com` → public IP (passes check), then the actual request goes to `evil.com` → `127.0.0.1` (internal IP).
 
-**Fix:** Add a backend endpoint `GET /admin/feedback/{id}/trace` that looks up the audit log by trace_id and returns latency, model, cache status. Wire the FeedbackPage to display this data.
+**Impact:** An admin configuring a malicious provider URL could use DNS rebinding to reach internal services. This is a realistic attack vector when the admin role is compromised.
+
+**Fix:** After DNS validation, use `httpx` with a custom transport that resolves the hostname to the validated IP address, preventing re-resolution. Or use a connection-level IP allowlist.
 
 ---
 
-### 7. Settings nav `scrollIntoView` works but `setActive` can desync — `frontend/src/pages/admin/SettingsPage.tsx:456-459`
+### 5. Cost ceiling check uses **estimated** tokens, not actual — `app/api/chat_routes.py:331-333`
 
-```tsx
-onClick={(e) => {
-  e.preventDefault();
-  setActive(item.id);
-  document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-}}
+```python
+prompt_tokens = estimate_tokens(body.question)
+completion_tokens = estimate_tokens(final.draft_answer or "")
+_record_cost(db, session_id, prompt_tokens, completion_tokens, model_name=_chat_model_name)
 ```
 
-Clicking a nav item sets `active` state AND scrolls. But if the user manually scrolls, `active` doesn't update to reflect which section is visible. The left nav highlight stays on the last-clicked section regardless of scroll position.
+The blocking `/chat` endpoint uses `estimate_tokens()` (chars/4 heuristic) for cost tracking, even when `final.provider_usage` contains **actual token counts** from the provider. The `/chat/stream` endpoint correctly uses `_usage_or_estimate()` which prefers actual usage when available. But `/chat` always estimates.
 
-**Fix:** Add an `IntersectionObserver` to track which section is visible and update `active` accordingly.
+**Impact:** Cost tracking for the blocking endpoint is inaccurate. With `cost_per_1k_tokens > 0`, this means the daily/monthly ceiling enforcement is based on incorrect numbers. The ceiling check itself (lines 113-157) also uses `estimate_tokens` for the projected cost.
 
----
-
-### 8. AdminLayout fetches feedback on every page load — `frontend/src/pages/admin/AdminLayout.tsx:28-33`
-
-```tsx
-const { data: feedbackItems = [] } = useQuery({
-  queryKey: ["feedback"],
-  queryFn: listFeedback,
-  refetchInterval: 60_000,
-  staleTime: 30_000,
-});
+**Fix:** Use `provider_usage` from the final state when available, falling back to estimates:
+```python
+usage = _usage_or_estimate(body.question, final.draft_answer or "", final.provider_usage)
+_record_cost(db, session_id, usage.prompt_tokens, usage.completion_tokens, model_name=_chat_model_name)
 ```
 
-Every admin page wrapped in `AdminLayout` fetches the full feedback list just to show a negative feedback count badge on the sidebar. This is redundant when the user is on the Feedback page itself (which has its own query). Should share cache or use a lightweight count endpoint.
-
-**Severity:** Low — React Query deduplicates by queryKey, so it's not a real duplicate request, just unnecessary refetching.
-
 ---
 
-## 🟡 MEDIUM — Minor Issues
+### 6. `useChat` hook silently drops feedback when session ref is null — `frontend/src/hooks/useChat.ts:106-108`
 
-### 9. Backend Qdrant startup schema tests are failing — `tests/test_startup_schema.py:49`
-
-`./.venv/bin/pytest -q` currently fails 5 tests:
-
-- `test_text_embedding_3_small_creates_1536_dim_collection`
-- `test_text_embedding_3_large_creates_3072_dim_collection`
-- `test_nomic_embed_text_creates_768_dim_collection`
-- `test_unknown_model_falls_back_to_768`
-- `test_dimension_mismatch_raises_on_existing_collection`
-
-All fail with:
-
-```text
-AttributeError: <module 'app.startup_migrations' ...> does not have the attribute 'load_runtime_config'
+```typescript
+const rate = useCallback(async (msgId: string, rating: "up" | "down") => {
+    const msg = messagesRef.current.find((m) => m.id === msgId);
+    if (!msg?.traceId || !sessionRef.current) return;  // ← silent return
 ```
 
-The implementation imports `load_runtime_config` locally inside `_ensure_qdrant_collection()`, while tests patch it at module scope. Either expose `load_runtime_config` at module scope and reuse it, or update tests to patch the canonical import path used by the function. From a maintainability perspective, module-scope dependency imports are cleaner here because they make the startup migration dependency graph explicit and easier to test.
+If `sessionRef.current` is null (e.g., if the user refreshes the page mid-conversation and then tries to rate a previous message), the feedback is **silently dropped**. The UI shows the thumb as selected (optimistic update on line 110-112), but the feedback is never sent to the server. The user sees "rated" but the server has no record.
+
+**Fix:** Show an error state or toast when feedback cannot be submitted due to missing session/trace context, rather than silently dropping it.
 
 ---
 
-### 10. Backend `POST /chat` (non-streaming) has no frontend consumer — `app/api/chat_routes.py:269`
+## 🟡 MEDIUM — Robustness / Maintainability
 
-The non-streaming chat endpoint exists but is never called from the frontend. Could be removed or kept for API-only consumers.
+### 7. Qdrant point IDs are generated independently from DB chunk IDs — `app/services/rag_pipeline.py:149-176`
+
+```python
+points = [
+    qmodels.PointStruct(
+        id=str(uuid.uuid4()),        # ← Qdrant point ID
+        vector=embeddings[i],
+        payload={...},
+    )
+    for i in range(len(clean_chunks))
+]
+
+for i, point in enumerate(points):
+    chunk = DocumentChunk(
+        id=str(uuid.uuid4()),          # ← DB chunk ID (different!)
+        qdrant_point_id=str(point.id), # ← stored as reference
+    )
+```
+
+The Qdrant point ID and the DB chunk ID are different UUIDs. The `qdrant_point_id` column stores the cross-reference, but there's no enforcement that they stay in sync. If the DB transaction fails after `qdrant.upsert()` succeeds (line 165), the Qdrant collection contains orphaned points that no DB row references. These points are never cleaned up.
+
+The `delete_document` endpoint (admin_routes.py:357) deletes DB chunks by `document_id` and then calls `_delete_qdrant_points(doc_id)` which filters by the `doc_id` payload field — so orphans from failed transactions WOULD be cleaned up on document deletion. But if the document is never deleted, the orphaned points persist forever.
+
+**Fix:** Use the DB chunk ID as the Qdrant point ID (or vice versa) to eliminate the cross-reference. Or wrap the Qdrant upsert + DB insert in a compensating-transaction pattern.
 
 ---
 
-### 11. Review Queue has no admin UI — `app/api/admin_routes.py:770-833`
+### 8. `settings_live_cache` TTL is only 15 seconds but Ollama model fetch can take 5+ seconds — `app/api/settings_routes.py:35-43`
 
-Three endpoints exist for the human review queue (`list`, `approve`, `reject`) but there's no admin page or component that uses them. This is a complete backend feature with no frontend surface.
+```python
+_SETTINGS_LIVE_TTL_SECONDS = 15.0
+```
+
+With a 15-second cache TTL and Ollama model fetching taking up to 5 seconds (the `httpx.Client(timeout=5.0)` on line 48), the cache hit rate is low under frequent settings page loads. Every 15 seconds, the next `GET /settings` call blocks for up to 5 seconds waiting for Ollama. Combined with issue #3 (sync HTTP in async context), this creates periodic request stalls.
+
+**Fix:** Increase TTL to 60 seconds. Or better: fetch Ollama models asynchronously and cache the result, rather than blocking each settings request.
 
 ---
 
-### 12. `GET /admin/stats/cost` not used by frontend — `app/api/observability_routes.py:53`
+### 9. `graph.py` quality gate can send the same query to retrieve twice with identical parameters — `app/agents/graph.py:280-294`
 
-A dedicated cost stats endpoint exists but the frontend gets cost data from the general `/admin/stats` endpoint and the Settings API (`cost.todayUsd`). This endpoint is unused.
+```python
+if state.retrieval_attempts < _MAX_RETRIEVAL_ATTEMPTS:
+    allowed = ["respond", "retrieve", "fallback"]
+else:
+    allowed = ["respond", "fallback"]
+```
+
+When the quality gate decides to re-retrieve, the `retrieve_node` runs again with the same `rewritten_query` and same `top_k`. The only change is `retrieval_attempts` is incremented. There's no query modification, no expansion of `top_k`, no different retrieval strategy. The second retrieval will likely return the **same chunks** as the first, leading to the same grading result, the same quality gate decision — a wasted API call cycle.
+
+The `decompose_node` exists to handle this (splitting the query into sub-queries), but the quality gate routes directly to `retrieve`, not to `decompose`. The only way decompose is triggered is via `grade_node` → `route_after_grade` when there are < 2 relevant chunks.
+
+**Fix:** When re-retrieving after quality gate failure, either: (a) route to `decompose` instead of `retrieve`, or (b) increase `top_k` on subsequent attempts, or (c) rewrite the query before re-retrieval.
 
 ---
 
-## Previously Fixed Issues (from Round 7, verified still fixed)
+### 10. `InputGuard` injection patterns have many false positives — `app/security/input_guard.py:11-21`
+
+```python
+_INJECTION_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"ignore\s+(?:previous|all|prior)\s+instructions",
+        r"you\s+are\s+now",
+        r"act\s+as\s+(?:if\s+you\s+are|a|an)",
+        ...
+    ]
+]
+```
+
+A user asking "What are our instructions for annual leave?" would match `instructions` in the first pattern if preceded by "ignore all" in a different context. More importantly, `"you are now"` matches legitimate business queries like "Can you tell me if you are now requiring..." or "Are you now accepting applications?". The `"act as a"` pattern matches "act as a witness" or "act as an agent" — common legal language.
+
+**Impact:** Legitimate user queries about company policies can be blocked by the input guard, returning "Potential prompt injection detected" with no way to bypass.
+
+**Fix:** Tighten the patterns to require sentence-start or imperative context. Add a confidence scoring system rather than binary match. Or move injection detection to a weaker "warning" tier that still processes the query.
+
+---
+
+### 11. Conversation summary loses all history older than the threshold — `app/services/conversation.py:110-117`
+
+```python
+summary_message = Message(
+    role="assistant",
+    content=f"[Conversation summary] {summary}",
+    created_at=datetime.now(UTC),
+)
+recent_tail = state.messages[-(_SUMMARIZE_THRESHOLD - 1):] if _SUMMARIZE_THRESHOLD > 1 else []
+updated_state = state.model_copy(update={"messages": [summary_message, *recent_tail]})
+```
+
+When a conversation exceeds 10 messages, the entire history is replaced with a single summary + the last 9 messages. The summary is generated by the LLM and is lossy. If the LLM fails to generate a summary (caught on line 107-108), the function returns silently — the conversation is NOT summarized and continues to grow unbounded, potentially hitting the 1MB `state_json` limit (line 63).
+
+**Impact:** Long conversations either lose critical context (via lossy summary) or grow unbounded until they hit the 1MB limit and fail to save.
+
+**Fix:** If the LLM summarization fails, implement a fallback strategy (e.g., keep only the last N messages without summarization). Also consider summarizing incrementally rather than replacing the entire history at once.
+
+---
+
+## Previously Fixed Issues (from Round 7 and Round 1, verified still fixed)
 
 | # | Issue | Verification |
 |---|-------|-------------|
-| Old #1 | `syncedAt: "2h ago"` in sources | ✅ Now returns `None` |
-| Old #2 | Dead Sync/Remove buttons on SourceCard | ✅ Buttons removed |
-| Old #3 | Dead "Add source" buttons | ✅ Section removed |
-| Old #4 | Fake trace grid in Feedback | ✅ Replaced with honest message |
-| Old #5 | Fake "Suspected cause" in Feedback | ✅ Section removed |
-| Old #6 | Activity page hardcoded retention | ✅ Reads from settings API |
-| Old #7 | Fake `source` filenames in SUGGESTED | ✅ `source` field removed |
+| R1 #1 | "Indexing healthy" card was fake | ✅ Now dynamic — queries `corpus-stats` API |
+| R1 #2 | Settings sources section hardcoded | ✅ Marked read-only with honest label |
+| R1 #3 | Reranker list hardcoded | ✅ Hint updated to "Supported options" |
+| R1 #4 | Chat suggestions static | ✅ Labeled "Example questions — edit before sending" |
+| R1 #5 | SSE mode misplaced in Provider | ✅ Moved to Retrieval section |
+| R1 #6 | Feedback trace "not recorded" | ✅ `GET /admin/feedback/{id}/trace` endpoint added |
+| R1 #7 | Settings nav scroll desync | ✅ IntersectionObserver syncs active nav |
+| R1 #8 | AdminLayout full feedback fetch | ✅ Lightweight `/admin/feedback/count` endpoint |
+| Old #1 | `syncedAt: "2h ago"` in sources | ✅ Returns `None` |
+| Old #2 | Dead Sync/Remove buttons | ✅ Removed |
+| Old #4 | Fake trace grid | ✅ Replaced with honest message |
+| Old #7 | Fake `source` filenames | ✅ `source` field removed |
 | Old #8 | Login page fake health check | ✅ Calls `/health` API |
-| Old #9 | Ollama validation blocks openai_compatible | ✅ Validation skipped correctly |
-| Old #10 | Single model dropdown for all types | ✅ Separate dropdowns per model type |
-| Old #11 | No provider model list | ✅ Fetches from `/models` endpoint |
-| Old #12 | No "Test connection" button | ✅ Button added, calls API |
 | Old #33 | `addedBy` always "—" | ✅ Backend returns `uploaded_by_email` |
+
+---
+
+## Thermo-Nuclear Code Quality Review — Verified 2026-05-23
+
+Scope: full code-quality audit of the current source tree on `main @ 80310e3`. This is stricter than the bug list above and focuses on structural maintainability, abstraction quality, and spaghetti growth.
+
+### BLOCKERS — Must Fix Before Shipping
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| B1 | ✅ Confirmed | Blocking `/chat` and streaming `/chat/stream` use divergent audit/cost persistence paths. | `chat_routes.py` still uses `_write_audit_log`, `_record_cost`, and `_save_assistant_reply`; `chat_finalizer.py` writes different `action_type`/metadata and creates `AgentRun` through a different path. |
+| B2 | ✅ Confirmed | `CustomModelManager` is defined inside `ProviderSettingsSection` render body. | `frontend/src/components/admin/ProviderSettingsSection.tsx:65-119` defines a component inside the parent function, creating a new component identity on every render. |
+| B3 | ✅ Confirmed | `collect_field_updates` is a long validation if-chain. | `app/services/settings_service.py:258-413` contains repeated `if body.X is not None` validation/update branches and repeated numeric range checks. |
+
+### HIGH — Serious Quality Debt
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| H1 | ⚠️ Partially confirmed | Service layer raises `HTTPException`. | Confirmed in `settings_service.py` and `provider_settings.py`; not confirmed in `startup_migrations.py`, which uses `RuntimeError`/logged warnings instead. |
+| H2 | ✅ Confirmed | `SettingsPage.set()` is a stringly typed dispatcher. | `frontend/src/pages/admin/SettingsPage.tsx:212-267` maps `keyof AppSettings` to flat patch fields with manual casts, while provider controls call `queueSave()` directly. |
+| H3 | ✅ Confirmed | `applyDiff` mixes explicit optimistic patching with derived provider consequences. | `frontend/src/pages/admin/SettingsPage.tsx:116-165` uses nested null-coalescing chains and mode-specific provider synchronization. |
+| H4 | ✅ Confirmed | Hybrid/cloud provider UI has substantial duplication. | `ProviderSettingsSection.tsx` repeats API URL, API key, chat model, and custom model UI across hybrid/cloud blocks. |
+
+### MEDIUM — Architectural Smells
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| M1 | ✅ Confirmed | `_QDRANT_COLLECTION = "documents"` is duplicated. | Present in `admin_routes.py`, `startup_migrations.py`, `ingestion_service.py`, and `scripts/verify_deletion.py`. |
+| M2 | ✅ Confirmed | Deleted-user constants and ensure logic are duplicated. | Constants exist in `admin_routes.py` and `startup_migrations.py`; one implementation uses ORM, the other raw SQL. |
+| M3 | ✅ Confirmed | `settings_routes.py` still owns too much business logic. | `_fetch_provider_model_names`, `_get_settings_live_metadata`, and `_serialize_settings` live in the route module. |
+| M4 | ✅ Confirmed | Provider `/models` probing is duplicated. | `_fetch_provider_model_names()` and `test_provider_connection()` each implement direct `/models` calls. |
+| M5 | ⚠️ Partially confirmed | LLM grading code is dead in the main graph path. | `graph.py` always passes `rerank_threshold`, so the production graph takes score-based grading; direct tests still call `grade_chunks()` without threshold, so the code is not globally unreachable. |
+| M6 | ⚠️ Partially confirmed | Startup migrations swallow many failures. | Several `_ensure_*` helpers log and continue, but `_ensure_qdrant_collection()` re-raises `RuntimeError` for vector-size mismatch and default-credential checks can fail in enforce mode. |
+| M7 | ✅ Confirmed | Dead `if True:` branch in CSRF middleware. | `app/main.py:99` contains a leftover `if True:` wrapper. |
+| M8 | ✅ Confirmed | Vector-size extraction is copy-pasted. | Same vector config extraction pattern appears in `settings_service.py` and `startup_migrations.py`. |
+| M9 | ✅ Confirmed | Vision model magic string is duplicated. | `"qwen2.5vl:7b"` appears in `settings_routes.py`, `settings_service.py`, and `runtime_config.py`. |
+| M10 | ✅ Confirmed | Entity booster compiles regex inside loops. | `entity_booster.py` calls `re.search(r"\b" + re.escape(tok) + r"\b", ...)` per token/chunk. |
+
+### Stale Or Incorrect Review Items
+
+| Review claim | Current status |
+|--------------|----------------|
+| `AdminLayout` fetches all feedback just to count negatives | ❌ Stale. `AdminLayout` now uses `queryKey: ["feedback-count"]` and `GET /admin/feedback/count`. |
+| Feedback query key shared between `AdminLayout` and `FeedbackPage` | ❌ Stale. `AdminLayout` uses `["feedback-count"]`; `FeedbackPage` uses `["feedback"]`. |
+
+### Thermo Summary
+
+| Category | Count | Key Theme |
+|----------|-------|-----------|
+| Blockers | 3 | Divergent chat persistence, render-local component identity, large settings validation if-chain |
+| High | 4 | HTTP/service boundary coupling, split save paths, fragile optimistic state, duplicated provider UI |
+| Medium | 10 | Duplicated constants, route-layer business logic, partial dead code, silent startup warnings, magic strings |
+| Stale/Incorrect | 2 | Feedback-count issues already fixed |
+
+**Thermo verdict:** Not approved for shipping on structure. Tests and build pass, but B1/B2/B3 should be treated as presumptive blockers before calling the branch clean.
 
 ---
 
@@ -260,16 +319,9 @@ A dedicated cost stats endpoint exists but the frontend gets cost data from the 
 
 | Priority | Count | Key Themes |
 |----------|-------|------------|
-| 🔴 Critical | 3 | Admin sidebar "Indexing healthy" is fake; Settings sources still hardcoded; Reranker list hardcoded |
-| 🟠 High | 5 | SSE mode misplaced; Feedback trace could be fetched; Settings nav scroll desync; Feedback query on every admin page; Chat suggestions static |
-| 🟡 Medium | 4 | Failing startup schema tests; unused backend endpoints (non-streaming chat, review queue, cost stats) |
-| **Total** | **12** | Down from 39 in Round 7, but backend verification is not clean |
+| 🔴 Critical | 2 | PII filter silently removes legitimate chunks; fragile dual code paths for chat persistence |
+| 🟠 High | 4 | Blocking sync HTTP in async endpoints; SSRF TOCTOU race; inaccurate cost tracking; silent feedback drop |
+| 🟡 Medium | 5 | Qdrant/DB ID drift; cache TTL too short; retrieve-retry is identical; false-positive injection guard; conversation summary lossy/unbounded |
+| **Total** | **11** | Down from 12 in Round 1 — all Round 1 issues resolved; new deeper issues found |
 
-### What's Actually Working
-
-All 23 frontend API calls found in `frontend/src` are connected to real backend endpoints. Every admin panel tab (Overview, Documents, Activity, Feedback, Users, Settings) fetches live data from the backend. The main remaining issues are:
-
-1. **Static decorative elements** that look dynamic (indexing health card, sources section)
-2. **Hardcoded model lists** (reranker)
-3. **Unused backend features** (review queue, cost stats, non-streaming chat)
-4. **Backend regression test failure** in startup Qdrant collection dimension tests
+Additional thermo-nuclear review status: **3 structural blockers, 4 high-priority quality debts, 10 medium architectural smells.**

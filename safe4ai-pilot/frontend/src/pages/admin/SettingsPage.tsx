@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Brain,
@@ -53,27 +53,15 @@ const DEFAULT_PROVIDER: AppSettings["provider"] = {
 };
 
 function SourceCard({ s }: { s: AppSettings["sources"][number] }) {
-  const tone = {
-    ok:      { dot: "bg-success",  label: "ok"      },
-    syncing: { dot: "bg-accent animate-pulse", label: "syncing" },
-    error:   { dot: "bg-danger",   label: "error"   },
-  }[s.status];
-
   return (
     <div className="px-5 py-4 flex items-center gap-4">
       <div className="w-8 h-8 rounded-md bg-paper-2 flex items-center justify-center text-[10px] font-mono font-semibold text-text-2 uppercase">
-        {s.kind === "s3" ? "s3" : s.kind === "gdrive" ? "GD" : "fs"}
+        fs
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-medium text-ink truncate">{s.label}</span>
-          <span className="inline-flex items-center gap-1.5 h-[20px] px-2 rounded-full border border-line bg-surface-2 text-[11px] text-text-2">
-            <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-            {tone.label}
-          </span>
-        </div>
+        <span className="text-[13px] font-medium text-ink truncate">{s.label}</span>
         <div className="text-[11.5px] font-mono text-text-3 truncate">
-          {s.detail} · {s.docCount} docs{s.syncedAt ? ` · synced ${s.syncedAt}` : ""}
+          {s.detail} · {s.docCount} docs indexed
         </div>
       </div>
     </div>
@@ -109,6 +97,8 @@ export default function SettingsPage() {
   const qc = useQueryClient();
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const unsavedDiffRef = useRef<PatchableSettings>({});
+  const scrollingRef = useRef(false);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const { data: s, isLoading, isError, error } = useQuery({
     queryKey: ["settings"],
@@ -276,6 +266,29 @@ export default function SettingsPage() {
     }
   };
 
+  // Sync active nav item with scroll position via IntersectionObserver.
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (scrollingRef.current) return;
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible.length > 0) {
+          setActive(visible[0].target.id as SectionId);
+        }
+      },
+      { root, threshold: 0.15 },
+    );
+    NAV.forEach(({ id }) => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, []);
+
   if (isLoading) {
     return (
       <AdminLayout>
@@ -328,7 +341,10 @@ export default function SettingsPage() {
                   onClick={(e) => {
                     e.preventDefault();
                     setActive(item.id);
+                    scrollingRef.current = true;
                     document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    // Re-enable observer-based tracking after scroll animation completes.
+                    setTimeout(() => { scrollingRef.current = false; }, 800);
                   }}
                   className={`flex items-center gap-2.5 h-7 px-2 rounded text-[12.5px] font-medium transition-colors
                     ${on ? "bg-surface shadow-sm text-ink ring-1 ring-line" : "text-text-2 hover:bg-surface-2"}`}>
@@ -345,7 +361,7 @@ export default function SettingsPage() {
         </aside>
 
         {/* Content */}
-        <div className="overflow-auto">
+        <div className="overflow-auto" ref={contentRef}>
           <div className="max-w-3xl mx-auto px-8 py-8">
 
             <header className="mb-8">
@@ -360,7 +376,6 @@ export default function SettingsPage() {
             <ProviderSettingsSection
               provider={provider}
               availableModels={s.availableModels}
-              sseDoneMode={s.sseDoneMode}
               isSavingField={isSavingField}
               queueSave={queueSave}
               onSaveCustomModels={async (models) => {
@@ -394,7 +409,7 @@ export default function SettingsPage() {
               </Row>
               <Row
                 label="Reranker"
-                hint="bge-reranker-v2 adds ~140ms p50 but lifts top-1 score by ~12% on our corpus."
+                hint="Supported options — verify the model is installed on your server before enabling. bge-reranker-v2 adds ~140ms p50 but lifts top-1 score by ~12%."
                 saving={isSavingField("rerankerEnabled") || isSavingField("rerankerModel")}
               >
                 <div className="flex items-center gap-3">
@@ -427,11 +442,15 @@ export default function SettingsPage() {
                 <NumberInput value={s.retrieval.chunkOverlap} unit="tokens" min={0} max={512} step={16}
                   onChange={(v) => set("retrieval", { ...s.retrieval, chunkOverlap: v })} />
               </Row>
+              <Row label="SSE completion mode" hint="Strict waits for persistence before sending done; async returns done immediately for lower p99 latency." saving={isSavingField("sseDoneMode")}>
+                <Select value={s.sseDoneMode} options={["strict", "async"] as const}
+                  onChange={(v) => set("sseDoneMode", v)} className="w-48" />
+              </Row>
             </Section>
 
             {/* SOURCES */}
             <Section id="sources" title="Document sources"
-              subtitle="Indexed locations watched for changes. Drop a file in any of these and it shows up in chat within ~30s.">
+              subtitle="Read-only — the local filesystem watch path is configured at deployment time. Drop a file in the directory below and it shows up in chat within ~30s.">
               {s.sources.map(src => (
                 <SourceCard key={src.id} s={src} />
               ))}

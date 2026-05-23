@@ -244,7 +244,24 @@ def get_corpus_stats(
     """Lightweight document and chunk counts for the chat page empty state."""
     doc_count = db.query(func.count(Document.id)).scalar() or 0
     chunk_count = db.query(func.count(DocumentChunk.id)).scalar() or 0
-    return {"docCount": doc_count, "chunkCount": chunk_count}
+    failed_count = (
+        db.query(func.count(Document.id))
+        .filter(Document.ingestion_status == "failed")
+        .scalar()
+        or 0
+    )
+    in_progress_count = (
+        db.query(func.count(Document.id))
+        .filter(Document.ingestion_status.in_(["embedding", "queued"]))
+        .scalar()
+        or 0
+    )
+    return {
+        "docCount": doc_count,
+        "chunkCount": chunk_count,
+        "failedCount": failed_count,
+        "inProgressCount": in_progress_count,
+    }
 
 
 @router.get("/admin/documents")
@@ -763,7 +780,9 @@ def get_stats(
 
 
 # ---------------------------------------------------------------------------
-# Human review queue
+# Human review queue — no admin UI consumer.
+# Intentionally kept as a complete backend feature ready for a future
+# review-queue admin page. Callable directly via the API in the meantime.
 # ---------------------------------------------------------------------------
 
 

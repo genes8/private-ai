@@ -30,7 +30,7 @@ function timeOfDay() {
 
 export default function ChatPage() {
   const { me, isAdmin, signOut } = useAuth();
-  const { messages, steps, streaming, sendMessage, rate, stop } = useChat();
+  const { messages, steps, streaming, sendMessage, rate, stop, ratingError } = useChat();
   const { data: corpusStats } = useQuery({
     queryKey: ["corpus-stats"],
     queryFn: () => apiFetch<{ docCount: number; chunkCount: number }>("/admin/corpus-stats"),
@@ -125,23 +125,25 @@ export default function ChatPage() {
                     All answers grounded in your uploaded documents.
                   </p>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {SUGGESTED.map((s) => (
-                    <SuggestedPrompt
-                      key={s.question}
-                      tag={s.tag}
-                      icon={<BookOpen size={12} />}
-                      question={s.question}
-                      onSelect={() => {
-                        setComposer(s.question);
-                        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-                      }}
-                    />
-                  ))}
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-[0.06em] text-text-mute mb-2">
+                    Example questions — edit before sending
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {SUGGESTED.map((s) => (
+                      <SuggestedPrompt
+                        key={s.question}
+                        tag={s.tag}
+                        icon={<BookOpen size={12} />}
+                        question={s.question}
+                        onSelect={() => {
+                          setComposer(s.question);
+                          setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+                        }}
+                      />
+                    ))}
+                  </div>
                 </div>
-                <p className="text-[12px] text-text-3">
-                  Select a prompt to edit it, then send when ready.
-                </p>
               </div>
             )}
 
@@ -197,6 +199,11 @@ export default function ChatPage() {
                   <Square size={10} className="fill-current" />
                   Stop generating
                 </button>
+            </div>
+          )}
+          {ratingError && (
+            <div className="mx-auto mb-2 max-w-2xl px-3 py-2 rounded-md bg-red-50 border border-red-200 text-[12px] text-red-700">
+              {ratingError}
             </div>
           )}
           <div className="mx-auto max-w-2xl">

@@ -18,6 +18,7 @@ export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [steps, setSteps] = useState<Step[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [ratingError, setRatingError] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -105,7 +106,11 @@ export function useChat() {
 
   const rate = useCallback(async (msgId: string, rating: "up" | "down") => {
     const msg = messagesRef.current.find((m) => m.id === msgId);
-    if (!msg?.traceId || !sessionRef.current) return;
+    if (!msg?.traceId || !sessionRef.current) {
+      setRatingError("Feedback unavailable — session context lost. Please reload the page.");
+      return;
+    }
+    setRatingError(null);
     const previousRating = msg.rated;
     setMessages((prev) =>
       prev.map((m) => m.id === msgId ? { ...m, rated: rating } : m),
@@ -114,11 +119,12 @@ export function useChat() {
       await submitFeedback(sessionRef.current, msg.traceId, rating === "up" ? "positive" : "negative");
     } catch (error) {
       console.error("submitFeedback_failed", error);
+      setRatingError("Failed to submit feedback. Please try again.");
       setMessages((prev) =>
         prev.map((m) => m.id === msgId ? { ...m, rated: previousRating } : m),
       );
     }
   }, []);
 
-  return { messages, steps, streaming, sendMessage, rate, stop };
+  return { messages, steps, streaming, sendMessage, rate, stop, ratingError };
 }

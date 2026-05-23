@@ -6,6 +6,7 @@
 - [adaptive_router.py](file://safe4ai-pilot/app/agents/adaptive_router.py)
 - [query_decomposer.py](file://safe4ai-pilot/app/agents/query_decomposer.py)
 - [document_grader.py](file://safe4ai-pilot/app/agents/document_grader.py)
+- [entity_booster.py](file://safe4ai-pilot/app/agents/entity_booster.py)
 - [agent_runner.py](file://safe4ai-pilot/app/services/agent_runner.py)
 - [models.py](file://safe4ai-pilot/app/models.py)
 - [hybrid_retriever.py](file://safe4ai-pilot/app/components/hybrid_retriever.py)
@@ -22,7 +23,8 @@
 **Changes Made**
 - Enhanced adaptive routing system with LLM-based decision making and synchronous fallback rules
 - Added sophisticated query decomposition mechanism for handling complex questions
-- Implemented document grader with concurrent chunk evaluation capabilities
+- Implemented document grader with concurrent chunk evaluation capabilities and intelligent entity boosting
+- Integrated new entity boosting capabilities for intelligent chunk scoring based on URL and email entity recognition
 - Introduced comprehensive agent runner with observability and human review integration
 - Expanded state management with enhanced PrivateAIState model
 - Strengthened safety gates with improved input validation and output filtering
@@ -43,10 +45,12 @@
 ## Introduction
 This document explains the AI agent pipeline built with LangGraph State Machine for a Retrieval-Augmented Generation (RAG) workflow. The pipeline features a sophisticated graph-based architecture with adaptive routing, query decomposition, document grading, and intelligent state management. It orchestrates intelligent query processing through a state machine that manages complex decision-making processes, self-correction loops, and safety gates powered by external LLM services via Ollama. The system provides comprehensive observability, human review integration, and performance optimization through semantic caching.
 
+**Updated** Enhanced with intelligent entity boosting capabilities that improve fact-extraction query performance by recognizing URL and email entity patterns while maintaining strict context constraints.
+
 ## Project Structure
 The enhanced agent pipeline spans multiple modules with a sophisticated layered architecture:
 - **Agents**: StateGraph nodes with adaptive routing, query decomposition, and document grading
-- **Components**: Advanced retrieval and reranking systems
+- **Components**: Advanced retrieval and reranking systems with entity boosting integration
 - **Services**: Full RAG pipeline execution, semantic caching, and agent runner coordination
 - **Prompts**: Comprehensive template registry with specialized prompt designs
 - **Security**: Multi-layered input and output validation systems
@@ -59,7 +63,8 @@ subgraph "Enhanced Agents Layer"
 G["graph.py<br/>Sophisticated StateGraph"]
 AR["adaptive_router.py<br/>LLM-based routing + fallback"]
 DC["query_decomposer.py<br/>Complex query splitting"]
-DG["document_grader.py<br/>Concurrent chunk evaluation"]
+DG["document_grader.py<br/>Concurrent chunk evaluation + entity boosting"]
+EB["entity_booster.py<br/>Intelligent URL/email entity recognition"]
 AG["agent_runner.py<br/>Observability + human review"]
 end
 subgraph "Advanced Components"
@@ -83,6 +88,7 @@ end
 G --> AR
 G --> DC
 G --> DG
+G --> EB
 G --> AG
 G --> HR
 G --> RR
@@ -93,6 +99,7 @@ G --> CF
 G --> M
 AG --> DM
 SC --> DM
+DG --> EB
 ```
 
 **Diagram sources**
@@ -100,6 +107,7 @@ SC --> DM
 - [adaptive_router.py:11-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L11-L65)
 - [query_decomposer.py:10-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L10-L41)
 - [document_grader.py:15-58](file://safe4ai-pilot/app/agents/document_grader.py#L15-L58)
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
 - [agent_runner.py:14-55](file://safe4ai-pilot/app/services/agent_runner.py#L14-L55)
 - [hybrid_retriever.py:15-210](file://safe4ai-pilot/app/components/hybrid_retriever.py#L15-L210)
 - [reranker.py:14-50](file://safe4ai-pilot/app/components/reranker.py#L14-L50)
@@ -124,7 +132,9 @@ The enhanced pipeline introduces several sophisticated components:
 
 **Intelligent Query Decomposition**: Automatically breaks complex questions into 2-4 simpler sub-questions when relevance is low, then re-ranks and grades the combined results for optimal retrieval performance.
 
-**Advanced Document Grading**: Implements concurrent chunk evaluation using semaphores to limit parallel requests while maintaining high throughput. Each chunk receives individual relevance assessment with confidence scoring.
+**Advanced Document Grading**: Implements concurrent chunk evaluation using semaphores to limit parallel requests while maintaining high throughput. Each chunk receives individual relevance assessment with confidence scoring. **Updated** Now includes intelligent entity boosting that enhances URL and email entity recognition while maintaining strict context constraints.
+
+**Intelligent Entity Boosting**: **New Feature** Specialized component that recognizes URL and email entity patterns in chunks and boosts their scores when the query specifically requests those entities. Uses context-aware matching to prevent unrelated entity boosting while maintaining minimal score increases.
 
 **Enhanced Agent Runner**: Provides comprehensive observability through OpenTelemetry spans, human review integration, and session persistence. The runner manages all database side effects while keeping graph nodes pure.
 
@@ -137,6 +147,7 @@ The enhanced pipeline introduces several sophisticated components:
 - [adaptive_router.py:11-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L11-L65)
 - [query_decomposer.py:10-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L10-L41)
 - [document_grader.py:15-58](file://safe4ai-pilot/app/agents/document_grader.py#L15-L58)
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
 - [agent_runner.py:14-55](file://safe4ai-pilot/app/services/agent_runner.py#L14-L55)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 - [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
@@ -145,12 +156,14 @@ The enhanced pipeline introduces several sophisticated components:
 ## Architecture Overview
 The pipeline implements a sophisticated LangGraph StateGraph with deterministic and conditional edges, featuring self-correction loops and adaptive routing. The architecture emphasizes safety, performance, and extensibility through a well-defined state machine that manages complex decision-making processes.
 
+**Updated** Enhanced document grading now includes intelligent entity boosting that improves fact-extraction query performance while maintaining strict context constraints.
+
 ```mermaid
 graph TB
 INTAKE["intake_node<br/>Input validation + sanitization"] --> |guard pass| REWRITE["rewrite_node<br/>Query optimization"]
 INTAKE --> |guard fail| FALLBACK["fallback_node<br/>Safe response"]
 REWRITE --> RETRIEVE["retrieve_node<br/>Hybrid retrieval + RRF fusion"]
-RETRIEVE --> GRADE["grade_node<br/>Adaptive routing + LLM decision"]
+RETRIEVE --> GRADE["grade_node<br/>Adaptive routing + LLM decision + entity boosting"]
 GRADE --> |LLM: generate| GENERATE["generate_node<br/>Answer generation"]
 GRADE --> |LLM: decompose| DECOMPOSE["decompose_node<br/>Query decomposition"]
 DECOMPOSE --> GENERATE
@@ -270,7 +283,7 @@ Start(["Complex Query Detected"]) --> Analyze["Analyze query complexity"]
 Analyze --> Split["Split into 2-4 sub-queries"]
 Split --> Process["Process each sub-query"]
 Process --> Retrieve["Retrieve relevant chunks"]
-Retrieve --> Grade["Grade relevance"]
+Retrieve --> Grade["Grade relevance + entity boosting"]
 Grade --> Aggregate["Aggregate results"]
 Aggregate --> Evaluate{"Sufficient relevance?"}
 Evaluate --> |Yes| Generate["Proceed to generation"]
@@ -288,11 +301,14 @@ Flag --> End
 - [graph.py:148-184](file://safe4ai-pilot/app/agents/graph.py#L148-L184)
 
 ### Advanced Document Grading System
-The document grader implements concurrent chunk evaluation using semaphores to control parallel processing while maintaining high throughput. Each chunk receives individual relevance assessment with confidence scoring and detailed reasoning.
+The document grader implements concurrent chunk evaluation using semaphores to control parallel processing while maintaining high throughput. Each chunk receives individual relevance assessment with confidence scoring. **Updated** Now includes intelligent entity boosting that enhances URL and email entity recognition while maintaining strict context constraints.
 
 ```mermaid
 flowchart TD
-Input["Chunk List"] --> Semaphore["Acquire semaphore slot"]
+Input["Chunk List"] --> Boost{"Entity boost needed?"}
+Boost --> |Yes| EntityBoost["Apply entity boosting"]
+Boost --> |No| Semaphore["Acquire semaphore slot"]
+EntityBoost --> Semaphore
 Semaphore --> Grade["Grade individual chunk"]
 Grade --> Parse["Parse LLM response"]
 Parse --> Validate{"Valid response?"}
@@ -307,9 +323,39 @@ Next --> |No| Output["Return graded chunks"]
 
 **Diagram sources**
 - [document_grader.py:15-58](file://safe4ai-pilot/app/agents/document_grader.py#L15-L58)
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
 
 **Section sources**
 - [document_grader.py:15-58](file://safe4ai-pilot/app/agents/document_grader.py#L15-L58)
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
+
+### Intelligent Entity Boosting System
+**New Feature** The entity boosting system recognizes URL and email entity patterns in chunks and boosts their scores when the query specifically requests those entities. Uses sophisticated context-aware matching to prevent unrelated entity boosting while maintaining minimal score increases.
+
+```mermaid
+flowchart TD
+Query["User Query"] --> Detect{"URL/Email entity query?"}
+Detect --> |No| PassThrough["Pass chunks unchanged"]
+Detect --> |Yes| Extract["Extract entity context tokens"]
+Extract --> Match["Match context with chunk content"]
+Match --> URLCheck{"Contains URL?"}
+Match --> EmailCheck{"Contains Email?"}
+URLCheck --> |Yes & Context Match| BoostURL["Boost URL chunk score"]
+URLCheck --> |No| CheckNext["Check next chunk"]
+EmailCheck --> |Yes & Context Match| BoostEmail["Boost Email chunk score"]
+EmailCheck --> |No| CheckNext
+BoostURL --> Finalize["Return boosted chunks"]
+BoostEmail --> Finalize
+CheckNext --> Finalize
+PassThrough --> Finalize
+Finalize --> Output["Enhanced chunk list"]
+```
+
+**Diagram sources**
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
+
+**Section sources**
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
 
 ### Enhanced Agent Runner and Observability
 The agent runner provides comprehensive observability through OpenTelemetry spans, manages human review integration, and ensures proper session persistence. The runner acts as a coordinator for all pipeline operations while maintaining clean separation of concerns.
@@ -432,6 +478,7 @@ graph LR
 G["graph.py"] --> AR["adaptive_router.py"]
 G --> DC["query_decomposer.py"]
 G --> DG["document_grader.py"]
+G --> EB["entity_booster.py"]
 G --> HR["hybrid_retriever.py"]
 G --> RR["reranker.py"]
 G --> IG["input_guard.py"]
@@ -442,6 +489,7 @@ G --> M["models.py"]
 SC["semantic_cache.py"] --> DM["models_db.py"]
 AG["agent_runner.py"] --> G
 AG --> DM
+DG --> EB
 ```
 
 **Diagram sources**
@@ -469,10 +517,13 @@ The enhanced pipeline implements several performance optimization strategies:
 
 **Monitoring and Metrics**: Comprehensive OpenTelemetry integration provides detailed performance metrics and error tracking.
 
+**Entity Boosting Optimization**: **New Feature** Entity boosting uses efficient pattern matching with minimal computational overhead while significantly improving fact-extraction query performance.
+
 **Section sources**
 - [document_grader.py:12-12](file://safe4ai-pilot/app/agents/document_grader.py#L12-L12)
 - [graph.py:39-40](file://safe4ai-pilot/app/agents/graph.py#L39-L40)
 - [graph.py:272-276](file://safe4ai-pilot/app/agents/graph.py#L272-L276)
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
 
 ## Troubleshooting Guide
 Enhanced debugging and monitoring capabilities:
@@ -489,6 +540,8 @@ Enhanced debugging and monitoring capabilities:
 
 **Human Review Queue**: Investigate requires_human_review flags with focus on retrieval_score_max and groundedness indicators.
 
+**Entity Boosting Issues**: **New Feature** Monitor entity boost effectiveness through rerank_score improvements and context matching patterns.
+
 **Section sources**
 - [graph.py:28-36](file://safe4ai-pilot/app/agents/graph.py#L28-L36)
 - [graph.py:128-128](file://safe4ai-pilot/app/agents/graph.py#L128-L128)
@@ -496,7 +549,7 @@ Enhanced debugging and monitoring capabilities:
 - [agent_runner.py:38-52](file://safe4ai-pilot/app/services/agent_runner.py#L38-L52)
 
 ## Conclusion
-The enhanced LangGraph State Machine provides a robust, scalable, and secure RAG pipeline with sophisticated adaptive routing, intelligent query decomposition, advanced document grading, and comprehensive safety measures. The modular architecture enables easy extension and customization while maintaining high performance through semantic caching, concurrent processing, and intelligent resource management. The system's observability and human review integration ensure reliability and accountability in production environments.
+The enhanced LangGraph State Machine provides a robust, scalable, and secure RAG pipeline with sophisticated adaptive routing, intelligent query decomposition, advanced document grading, and comprehensive safety measures. **Updated** The new entity boosting capabilities significantly improve fact-extraction query performance by intelligently recognizing URL and email entity patterns while maintaining strict context constraints. The modular architecture enables easy extension and customization while maintaining high performance through semantic caching, concurrent processing, and intelligent resource management. The system's observability and human review integration ensure reliability and accountability in production environments.
 
 ## Appendices
 
@@ -511,10 +564,13 @@ Adding new components follows established patterns:
 
 **New Retrieval Components**: Integrate custom retrievers through HybridRetriever interface.
 
+**Entity Boosting Enhancements**: **New Feature** Extend entity_booster with additional entity recognition patterns while maintaining context constraints and minimal score increases.
+
 **Section sources**
 - [graph.py:43-353](file://safe4ai-pilot/app/agents/graph.py#L43-L353)
 - [templates.py:12-81](file://safe4ai-pilot/app/prompts/templates.py#L12-L81)
 - [registry.py:4-14](file://safe4ai-pilot/app/prompts/registry.py#L4-L14)
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
 
 ### Customizing Agent Behavior
 Adjust pipeline parameters and behaviors:
@@ -527,9 +583,12 @@ Adjust pipeline parameters and behaviors:
 
 **Safety Thresholds**: Configure input validation and output filtering sensitivity levels.
 
+**Entity Boosting Configuration**: **New Feature** Adjust entity boost thresholds and context matching parameters for domain-specific optimization.
+
 **Section sources**
 - [adaptive_router.py:11-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L11-L65)
 - [graph.py:264-295](file://safe4ai-pilot/app/agents/graph.py#L264-L295)
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)
 
 ### Monitoring and Observability
 Comprehensive monitoring implementation:
@@ -542,7 +601,10 @@ Comprehensive monitoring implementation:
 
 **Audit Trails**: Complete session history with all pipeline operations and decisions.
 
+**Entity Boosting Metrics**: **New Feature** Monitor entity boost effectiveness through rerank_score improvements and context matching success rates.
+
 **Section sources**
 - [graph.py:28-36](file://safe4ai-pilot/app/agents/graph.py#L28-L36)
 - [agent_runner.py:26-32](file://safe4ai-pilot/app/services/agent_runner.py#L26-L32)
 - [models_db.py:138-151](file://safe4ai-pilot/app/db/models.py#L138-L151)
+- [entity_booster.py:107-149](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L149)

@@ -105,7 +105,11 @@ class ConversationManager:
                 async with httpx.AsyncClient() as c:
                     summary = await _call(c)
         except Exception:
-            return  # leave messages unchanged on failure
+            # Summarization failed — truncate to the last N messages to prevent unbounded growth
+            keep = _SUMMARIZE_THRESHOLD - 1
+            truncated_state = state.model_copy(update={"messages": state.messages[-keep:]})
+            self.save_session(truncated_state)
+            return
 
         summary_message = Message(
             role="assistant",

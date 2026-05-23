@@ -179,6 +179,79 @@ class TestListFeedback:
         assert len(body) == 1
 
 
+class TestFeedbackCount:
+    def test_feedback_count_returns_negative_count(self, obs_client: TestClient) -> None:
+        from unittest.mock import call
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.scalar.return_value = 3
+
+        import app.api.observability_routes as obs_mod
+        from app.auth.middleware import get_current_user
+        from app.db import get_db
+        from app.db.models import User, UserRole
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient as TC
+
+        def override_db() -> MagicMock:
+            return mock_db
+
+        def override_user() -> User:
+            u = User()
+            setattr(u, "id", "user-1")
+            setattr(u, "role", UserRole("admin"))
+            setattr(u, "is_active", True)
+            return u
+
+        app2 = FastAPI()
+        app2.include_router(obs_mod.router)
+        app2.dependency_overrides[get_db] = override_db
+        app2.dependency_overrides[get_current_user] = override_user
+        client = TC(app2)
+
+        resp = client.get("/admin/feedback/count")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {"negative": 3}
+
+    def test_feedback_count_returns_zero_when_none(self, obs_client: TestClient) -> None:
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.scalar.return_value = None
+
+        import app.api.observability_routes as obs_mod
+        from app.auth.middleware import get_current_user
+        from app.db import get_db
+        from app.db.models import User, UserRole
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient as TC
+
+        def override_db() -> MagicMock:
+            return mock_db
+
+        def override_user() -> User:
+            u = User()
+            setattr(u, "id", "user-1")
+            setattr(u, "role", UserRole("admin"))
+            setattr(u, "is_active", True)
+            return u
+
+        app2 = FastAPI()
+        app2.include_router(obs_mod.router)
+        app2.dependency_overrides[get_db] = override_db
+        app2.dependency_overrides[get_current_user] = override_user
+        client = TC(app2)
+
+        resp = client.get("/admin/feedback/count")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"negative": 0}
+
+    def test_feedback_count_rejects_pilot_user(self, obs_client_pilot: TestClient) -> None:
+        resp = obs_client_pilot.get("/admin/feedback/count")
+        assert resp.status_code == 403
+
+
 class TestAdminAuthGuard:
     def test_feedback_list_rejects_pilot_user(self, obs_client_pilot: TestClient) -> None:
         resp = obs_client_pilot.get("/admin/feedback")
@@ -186,4 +259,133 @@ class TestAdminAuthGuard:
 
     def test_cost_stats_rejects_pilot_user(self, obs_client_pilot: TestClient) -> None:
         resp = obs_client_pilot.get("/admin/stats/cost")
+        assert resp.status_code == 403
+
+
+class TestFeedbackTrace:
+    def test_returns_audit_data_when_found(self, obs_client: TestClient) -> None:
+        from unittest.mock import MagicMock
+        from datetime import datetime, UTC
+
+        mock_feedback = MagicMock()
+        mock_feedback.id = "fb-1"
+        mock_feedback.trace_id = "trace-abc"
+
+        mock_audit = MagicMock()
+        mock_audit.trace_id = "trace-abc"
+        mock_audit.latency_ms = 420
+        mock_audit.model_used = "qwen3:9b"
+        mock_audit.action_type = "query"
+        mock_audit.timestamp = datetime(2026, 5, 1, 10, 0, 0, tzinfo=UTC)
+        mock_audit.response_metadata = {"cache_hit": True}
+
+        from app.api.observability_routes import router as obs_router
+        from app.auth.middleware import get_current_user
+        from app.db import get_db
+        from app.db.models import User, UserRole
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = mock_feedback
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = mock_audit
+
+        def override_db() -> MagicMock:
+            return mock_db
+
+        def override_user() -> User:
+            u = User()
+            setattr(u, "id", "admin-1")
+            setattr(u, "role", UserRole.admin)
+            setattr(u, "is_active", True)
+            return u
+
+        app = FastAPI()
+        app.include_router(obs_router)
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_current_user] = override_user
+        client = TestClient(app)
+
+        resp = client.get("/admin/feedback/fb-1/trace")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["found"] is True
+        assert body["traceId"] == "trace-abc"
+        assert body["latencyMs"] == 420
+        assert body["modelUsed"] == "qwen3:9b"
+        assert body["cacheHit"] is True
+
+    def test_returns_404_when_feedback_not_found(self) -> None:
+        from unittest.mock import MagicMock
+        from app.api.observability_routes import router as obs_router
+        from app.auth.middleware import get_current_user
+        from app.db import get_db
+        from app.db.models import User, UserRole
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = None
+
+        def override_db() -> MagicMock:
+            return mock_db
+
+        def override_user() -> User:
+            u = User()
+            setattr(u, "id", "admin-1")
+            setattr(u, "role", UserRole.admin)
+            setattr(u, "is_active", True)
+            return u
+
+        app = FastAPI()
+        app.include_router(obs_router)
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_current_user] = override_user
+        client = TestClient(app)
+
+        resp = client.get("/admin/feedback/nonexistent/trace")
+        assert resp.status_code == 404
+
+    def test_returns_found_false_when_no_audit_log(self, obs_client: TestClient) -> None:
+        from unittest.mock import MagicMock
+        from app.api.observability_routes import router as obs_router
+        from app.auth.middleware import get_current_user
+        from app.db import get_db
+        from app.db.models import User, UserRole
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        mock_feedback = MagicMock()
+        mock_feedback.trace_id = "trace-xyz"
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = mock_feedback
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        def override_db() -> MagicMock:
+            return mock_db
+
+        def override_user() -> User:
+            u = User()
+            setattr(u, "id", "admin-1")
+            setattr(u, "role", UserRole.admin)
+            setattr(u, "is_active", True)
+            return u
+
+        app = FastAPI()
+        app.include_router(obs_router)
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_current_user] = override_user
+        client = TestClient(app)
+
+        resp = client.get("/admin/feedback/fb-no-audit/trace")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["found"] is False
+        assert body["traceId"] == "trace-xyz"
+
+    def test_rejects_pilot_user(self, obs_client_pilot: TestClient) -> None:
+        resp = obs_client_pilot.get("/admin/feedback/any-id/trace")
         assert resp.status_code == 403

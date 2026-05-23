@@ -16,7 +16,6 @@ from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
 from app.models import Citation, GradedChunk, PrivateAIState, RankedChunk
 from app.prompts.registry import get_prompt
-from app.security.content_filter import ContentFilter
 from app.security.input_guard import InputGuard
 from app.security.output_filter import OutputFilter
 
@@ -54,7 +53,6 @@ def build_graph(
     """Build and compile the LangGraph StateGraph for the RAG pipeline."""
     guard = InputGuard()
     output_filter = OutputFilter()
-    content_filter = ContentFilter()
 
     # Resolve fallback Ollama coordinates for nodes that don't yet use chat_client
     _ollama_url = ollama_url or ""
@@ -116,10 +114,10 @@ def build_graph(
     async def retrieve_node(state: PrivateAIState) -> dict[str, Any]:
         with _node_span("retrieve", state) as span:
             query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            effective_top_k = retrieval_top_k + state.retrieval_attempts * 4
             try:
-                raw_chunks = await retriever.retrieve(query, top_k=retrieval_top_k)
-                ranked: list[RankedChunk] = reranker.rerank(query, raw_chunks, top_n=retrieval_top_k)
-                ranked = content_filter.filter_chunks(ranked)
+                raw_chunks = await retriever.retrieve(query, top_k=effective_top_k)
+                ranked: list[RankedChunk] = reranker.rerank(query, raw_chunks, top_n=effective_top_k)
                 max_score = max((c.rerank_score for c in ranked), default=0.0)
                 span.set_attribute("chunk_count", len(ranked))
                 return {

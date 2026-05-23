@@ -369,7 +369,8 @@ def collect_field_updates(
             )
         updates["provider_type"] = body.providerType
     if body.providerBaseUrl is not None:
-        updates["provider_base_url"] = validate_provider_url(body.providerBaseUrl)
+        clean_url, _resolved_ip = validate_provider_url(body.providerBaseUrl)
+        updates["provider_base_url"] = clean_url
     if body.providerApiKey is not None:
         updates["provider_api_key"] = body.providerApiKey
     if body.providerChatModel is not None:

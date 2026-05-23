@@ -96,13 +96,12 @@ async def protect_csrf(
             return response
 
         # F-10: Always verify CSRF double-submit token for unsafe methods
-        if True:
-            csrf_cookie = request.cookies.get("csrf_token")
-            csrf_header = request.headers.get("X-CSRF-Token")
-            if not csrf_cookie or not csrf_header or not compare_digest(csrf_header, csrf_cookie):
-                response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
-                response.headers.update(secure_headers.headers())
-                return response
+        csrf_cookie = request.cookies.get("csrf_token")
+        csrf_header = request.headers.get("X-CSRF-Token")
+        if not csrf_cookie or not csrf_header or not compare_digest(csrf_header, csrf_cookie):
+            response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+            response.headers.update(secure_headers.headers())
+            return response
     return await call_next(request)
 
 

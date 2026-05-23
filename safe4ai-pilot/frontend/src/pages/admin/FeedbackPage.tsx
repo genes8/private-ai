@@ -4,7 +4,7 @@ import { useState } from "react";
 import Avatar from "../../components/Avatar";
 import Chip from "../../components/Chip";
 import FeedbackListItem from "../../components/admin/FeedbackListItem";
-import { listFeedback } from "../../api/feedback";
+import { listFeedback, getFeedbackTrace } from "../../api/feedback";
 import AdminLayout from "./AdminLayout";
 
 function displayName(userEmail: string | undefined, userId: string): string {
@@ -28,6 +28,13 @@ export default function FeedbackPage() {
   const filtered = items.filter((i) => filter === "all" || i.rating === filter);
   const selected = filtered.find((i) => i.id === selectedId) ?? null;
   const selectedIdx = filtered.findIndex((i) => i.id === selectedId);
+
+  const { data: traceData } = useQuery({
+    queryKey: ["feedback-trace", selectedId],
+    queryFn: () => getFeedbackTrace(selectedId!),
+    enabled: !!selectedId,
+    staleTime: 60_000,
+  });
 
   function prev() {
     if (selectedIdx > 0) setSelectedId(filtered[selectedIdx - 1].id);
@@ -150,12 +157,31 @@ export default function FeedbackPage() {
                 </>
               )}
 
-              {/* Trace grid — detail not stored */}
+              {/* Trace detail from audit log */}
               <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-2">trace</p>
-              <div className="bg-surface border border-line rounded-[10px] p-3.5 mb-3.5">
-                <p className="text-[12px] text-text-3 font-mono">
-                  Trace detail is not recorded. Use the trace ID below to correlate with server logs.
-                </p>
+              <div className="bg-surface border border-line rounded-[10px] mb-3.5 overflow-hidden">
+                {traceData === undefined ? (
+                  <p className="p-3.5 text-[12px] text-text-3 font-mono">Loading trace…</p>
+                ) : !traceData.found ? (
+                  <p className="p-3.5 text-[12px] text-text-3 font-mono">
+                    No audit log entry found for this trace. Use the trace ID below to correlate with server logs.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-y-1.5 px-3.5 py-3 text-[12px]">
+                    <span className="text-text-mute">Latency</span>
+                    <span className="text-text font-mono">
+                      {traceData.latencyMs != null ? `${traceData.latencyMs} ms` : "—"}
+                    </span>
+                    <span className="text-text-mute">Model</span>
+                    <span className="text-text font-mono truncate">{traceData.modelUsed || "—"}</span>
+                    <span className="text-text-mute">Cache hit</span>
+                    <span className="text-text font-mono">{traceData.cacheHit ? "yes" : "no"}</span>
+                    <span className="text-text-mute">Logged at</span>
+                    <span className="text-text font-mono">
+                      {traceData.timestamp ? new Date(traceData.timestamp).toLocaleString() : "—"}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Meta */}

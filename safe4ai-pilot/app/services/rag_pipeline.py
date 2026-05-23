@@ -146,9 +146,10 @@ class RagPipeline:
         contents = [c["content"] for c in clean_chunks]
         embeddings = await self._embed_batch(contents)
 
+        chunk_ids = [str(uuid.uuid4()) for _ in clean_chunks]
         points = [
             qmodels.PointStruct(
-                id=str(uuid.uuid4()),
+                id=chunk_ids[i],
                 vector=embeddings[i],
                 payload={
                     "doc_id": doc_id,
@@ -164,15 +165,15 @@ class RagPipeline:
 
         self._qdrant.upsert(collection_name=self._collection, points=points)
 
-        # Persist DocumentChunk rows
+        # Persist DocumentChunk rows — same UUID used for both DB id and Qdrant point id
         for i, point in enumerate(points):
             chunk = DocumentChunk(
-                id=str(uuid.uuid4()),
+                id=chunk_ids[i],
                 document_id=doc_id,
                 chunk_index=clean_chunks[i]["chunk_index"],
                 chunk_version=document_version,
                 content_preview=clean_chunks[i]["content"][:200],
-                qdrant_point_id=str(point.id),
+                qdrant_point_id=chunk_ids[i],
             )
             self._db.add(chunk)
 
@@ -184,7 +185,6 @@ class RagPipeline:
         self._db.commit()
 
         # Update BM25 index
-        chunk_ids = [str(p.id) for p in points]
         payloads = [point.payload or {} for point in points]
         self._retriever.update_bm25_index(chunk_ids, contents, payloads)
 

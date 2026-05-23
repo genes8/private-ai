@@ -32,7 +32,7 @@ from observability.cost_tracker import CostTracker
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["settings"])
 
-_SETTINGS_LIVE_TTL_SECONDS = 15.0
+_SETTINGS_LIVE_TTL_SECONDS = 60.0
 _settings_live_cache: dict[str, Any] = {
     "expires_at": 0.0,
     "today_cost": 0.0,
@@ -307,11 +307,21 @@ def test_provider_connection(
             raise HTTPException(
                 status_code=422, detail="providerApiKey is required for openai_compatible"
             )
-        validate_provider_url(base_url)
+        clean_url, resolved_ip = validate_provider_url(base_url)
+        parsed = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(clean_url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        transport = httpx.HTTPTransport(local_address=None)
+
+        class _PinnedTransport(httpx.HTTPTransport):
+            def handle_request(self, request: httpx.Request) -> httpx.Response:
+                request.url = request.url.copy_with(host=resolved_ip)
+                request.headers["host"] = parsed.hostname or resolved_ip
+                return super().handle_request(request)
+
         try:
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(transport=_PinnedTransport(), timeout=10.0) as client:
                 resp = client.get(
-                    f"{base_url.rstrip('/')}/models",
+                    f"{clean_url}/models",
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
                 if resp.status_code >= 400:

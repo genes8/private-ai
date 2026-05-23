@@ -11,11 +11,11 @@ from app.models import GuardResult
 _INJECTION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p, re.IGNORECASE)
     for p in [
-        r"ignore\s+(?:previous|all|prior)\s+instructions",
-        r"you\s+are\s+now",
-        r"act\s+as\s+(?:if\s+you\s+are|a|an)",
-        r"disregard\s+(?:your|all|the)",
-        r"system\s+prompt",
+        r"(?:^|[.!?]\s+|\bplease\s+)ignore\s+(?:previous|all|prior)\s+instructions",
+        r"(?:^|[.!?]\s+)you\s+are\s+now\s+(?:a|an|acting|playing|going\s+to)",
+        r"(?:^|[.!?]\s+|\bplease\s+)act\s+as\s+(?:if\s+you\s+are|a|an)\b",
+        r"(?:^|[.!?]\s+|\bplease\s+)disregard\s+(?:your|all|the)\s+(?:previous|prior|above|instructions|guidelines|rules|training)",
+        r"(?:^|[.!?]\s+)(?:reveal|print|output|show)\s+(?:your\s+)?system\s+prompt",
         r"<\|.*?\|>",  # special tokens
     ]
 ]

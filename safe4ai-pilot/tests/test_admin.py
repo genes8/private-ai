@@ -701,7 +701,7 @@ class TestSettings:
         ), patch(
             # validate_provider_url calls socket.getaddrinfo — bypass DNS in tests
             "app.services.settings_service.validate_provider_url",
-            side_effect=lambda url: url.rstrip("/"),
+            side_effect=lambda url: (url.rstrip("/"), "93.184.216.34"),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -766,7 +766,7 @@ class TestSettings:
         ), patch(
             # validate_provider_url calls socket.getaddrinfo — bypass DNS in tests
             "app.services.settings_service.validate_provider_url",
-            side_effect=lambda url: url.rstrip("/"),
+            side_effect=lambda url: (url.rstrip("/"), "93.184.216.34"),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -897,7 +897,7 @@ class TestSettings:
             return_value={"nomic-embed-text", "qwen2.5vl:7b"},
         ), patch(
             "app.services.settings_service.validate_provider_url",
-            side_effect=lambda url: url.rstrip("/"),
+            side_effect=lambda url: (url.rstrip("/"), "93.184.216.34"),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -1627,5 +1627,33 @@ class TestMe:
         assert resp.status_code == 200
         body = resp.json()
         assert body["email"] == "admin@test.com"
+        from app.main import app
+        app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Corpus stats
+# ---------------------------------------------------------------------------
+
+
+class TestCorpusStats:
+    def test_corpus_stats_returns_health_fields(self) -> None:
+        """GET /admin/corpus-stats must include failedCount and inProgressCount."""
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        # scalar() returns None by default → falls back to 0 for all counts
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/corpus-stats")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "docCount" in body
+        assert "chunkCount" in body
+        assert "failedCount" in body
+        assert "inProgressCount" in body
+        assert body["failedCount"] == 0
+        assert body["inProgressCount"] == 0
         from app.main import app
         app.dependency_overrides.clear()

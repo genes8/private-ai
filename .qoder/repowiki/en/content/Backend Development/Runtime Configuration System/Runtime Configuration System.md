@@ -18,16 +18,17 @@
 - [adaptive_router.py](file://safe4ai-pilot/app/agents/adaptive_router.py)
 - [test_admin.py](file://safe4ai-pilot/tests/test_admin.py)
 - [settings.ts](file://safe4ai-pilot/frontend/src/api/settings.ts)
+- [provider_settings.py](file://safe4ai-pilot/app/services/provider_settings.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added new embedding_source field and provider_mode property replacing single-provider configuration with three-mode system (local/hybrid/cloud)
-- Enhanced provider system architecture with three distinct operational modes
-- Updated configuration loading pipeline to support three-mode provider selection
+- Enhanced three-mode provider system with new embedding_source field and provider_mode property
+- Updated configuration loading pipeline to support three-mode provider selection (local/hybrid/cloud)
 - Modified frontend interface to support three-mode provider configuration
 - Enhanced runtime component building with mode-aware provider selection
 - Updated scoring and routing system to work with three-mode architecture
+- Improved provider configuration validation and settings management capabilities
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -73,6 +74,7 @@ subgraph "Service Layer"
 RC[runtime_config.py]
 ACS[app_config_store.py]
 PC[provider_clients.py]
+EPS[provider_settings.py]
 EP[embedding_provider.py]
 end
 subgraph "Data Layer"

@@ -44,3 +44,16 @@ export const listFeedback = () =>
       }),
     ),
   );
+
+export interface FeedbackTrace {
+  found: boolean;
+  traceId: string;
+  latencyMs?: number | null;
+  modelUsed?: string | null;
+  timestamp?: string | null;
+  actionType?: string | null;
+  cacheHit?: boolean;
+}
+
+export const getFeedbackTrace = (feedbackId: string) =>
+  apiFetch<FeedbackTrace>(`/admin/feedback/${feedbackId}/trace`);

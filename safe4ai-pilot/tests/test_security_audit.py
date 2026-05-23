@@ -337,16 +337,18 @@ class TestF04_SSRF:
         # Mock DNS resolution to return a public IP
         fake_addrinfo = [(2, 1, 6, "", ("93.184.216.34", 0))]
         with patch("app.security.url_validator.socket.getaddrinfo", return_value=fake_addrinfo):
-            result = validate_provider_url("https://api.openai.com/v1")
-        assert result == "https://api.openai.com/v1"
+            clean_url, resolved_ip = validate_provider_url("https://api.openai.com/v1")
+        assert clean_url == "https://api.openai.com/v1"
+        assert resolved_ip == "93.184.216.34"
 
     def test_strips_trailing_slash(self) -> None:
         from app.security.url_validator import validate_provider_url
 
         fake_addrinfo = [(2, 1, 6, "", ("93.184.216.34", 0))]
         with patch("app.security.url_validator.socket.getaddrinfo", return_value=fake_addrinfo):
-            result = validate_provider_url("https://api.example.com/v1/")
-        assert result == "https://api.example.com/v1"
+            clean_url, resolved_ip = validate_provider_url("https://api.example.com/v1/")
+        assert clean_url == "https://api.example.com/v1"
+        assert resolved_ip == "93.184.216.34"
 
     def test_blocks_ipv6_loopback(self) -> None:
         from fastapi import HTTPException

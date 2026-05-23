@@ -21,14 +21,13 @@ from app.auth.middleware import get_current_user
 from app.auth.router import limiter
 from app.config import settings
 from app.db import get_db
-from app.db.models import AuditLog, User
+from app.db.models import User
 from app.models import Citation, Message, PrivateAIState
 from app.services.chat_finalizer import finalize_chat_run
 from app.services.conversation import ConversationManager
 from app.services.provider_clients import ProviderUsage
 from app.services.runtime_config import load_runtime_config
 from observability.cost_tracker import CostTracker
-
 logger = structlog.get_logger(__name__)
 
 
@@ -52,62 +51,6 @@ def _usage_or_estimate(question: str, answer: str, provider_usage: ProviderUsage
         source="estimated",
     )
 
-
-def _write_audit_log(
-    db: Session,
-    *,
-    user_id: str,
-    session_id: str,
-    query: str,
-    trace_id: str,
-    latency_ms: int,
-    k_retrieved: int,
-    status: str = "completed",
-    model_name: str = "",
-) -> None:
-    """Append an audit-log row. Swallows errors so logging never breaks the response."""
-    try:
-        entry = AuditLog(
-            id=str(uuid.uuid4()),
-            user_id=user_id,
-            session_id=session_id,
-            action_type="query",
-            query_text=query[:500],
-            response_metadata={
-                "trace_id": trace_id,
-                "k_retrieved": k_retrieved,
-                "status": status,
-            },
-            latency_ms=latency_ms,
-            model_used=model_name or settings.ollama_model,
-            trace_id=trace_id,
-        )
-        db.add(entry)
-        db.commit()
-    except Exception as exc:
-        logger.warning("audit_log_failed", error=str(exc))
-
-
-def _record_cost(
-    db: Session,
-    session_id: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    model_name: str = "",
-) -> None:
-    """Record agent-run cost. Swallows errors so costing never breaks the response."""
-    try:
-        tracker = CostTracker(settings.cost_per_1k_tokens)
-        tracker.record_run(
-            db,
-            session_id=session_id,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            model=model_name or settings.ollama_model,
-            status="completed",
-        )
-    except Exception as exc:
-        logger.warning("cost_tracking_failed", error=str(exc))
 
 
 def _check_cost_ceiling(db: Session, *, projected_question: str | None = None) -> None:
@@ -246,23 +189,10 @@ def _merge_stream_state(current: PrivateAIState, update: PrivateAIState | dict[s
     return PrivateAIState(**merged)
 
 
-def _save_assistant_reply(
-    convo: ConversationManager, final: PrivateAIState
-) -> None:
-    assistant_msg = Message(
-        role="assistant", content=final.draft_answer, created_at=datetime.now(UTC)
-    )
-    updated = final.model_copy(
-        update={"messages": list(final.messages) + [assistant_msg]}
-    )
-    try:
-        convo.save_session(updated)
-    except Exception as exc:
-        logger.warning("save_session_failed", error=str(exc))
-
-
 # ---------------------------------------------------------------------------
-# POST /chat — blocking (used by offline_eval.py and tests)
+# POST /chat — blocking, no frontend consumer.
+# Intentionally kept for offline_eval.py, integration tests, and direct
+# API clients that need a single-shot synchronous response.
 # ---------------------------------------------------------------------------
 
 
@@ -295,40 +225,29 @@ async def chat(
         final = PrivateAIState(**raw_final) if isinstance(raw_final, dict) else raw_final
     except Exception as exc:
         logger.error("graph_invocation_failed", error=str(exc))
-        latency_ms = int((time.monotonic() - started_at) * 1000)
-        _write_audit_log(
-            db,
-            user_id=str(current_user.id),
-            session_id=session_id,
-            query=body.question,
-            trace_id=trace_id,
-            latency_ms=latency_ms,
-            k_retrieved=0,
-            status="error",
-        )
         raise HTTPException(status_code=500, detail="Pipeline error") from exc
 
     latency_ms = int((time.monotonic() - started_at) * 1000)
-    _save_assistant_reply(convo, final)
     try:
         runtime_cfg = load_runtime_config(db)
         _chat_model_name = runtime_cfg.chat_model
     except Exception:
         _chat_model_name = settings.ollama_model
-    _write_audit_log(
-        db,
-        user_id=str(current_user.id),
-        session_id=session_id,
-        query=body.question,
-        trace_id=final.trace_id,
-        latency_ms=latency_ms,
-        k_retrieved=len(final.retrieved_chunks),
-        status="completed",
-        model_name=_chat_model_name,
-    )
-    prompt_tokens = estimate_tokens(body.question)
-    completion_tokens = estimate_tokens(final.draft_answer or "")
-    _record_cost(db, session_id, prompt_tokens, completion_tokens, model_name=_chat_model_name)
+    usage = _usage_or_estimate(body.question, final.draft_answer or "", final.provider_usage)
+    try:
+        finalize_chat_run(
+            db=db,
+            final=final,
+            user_id=str(current_user.id),
+            query=body.question,
+            latency_ms=latency_ms,
+            k_retrieved=len(final.retrieved_chunks),
+            usage=usage,
+            cost_per_1k_tokens=settings.cost_per_1k_tokens,
+            model_name=_chat_model_name,
+        )
+    except Exception as exc:
+        logger.warning("finalize_chat_run_failed", error=str(exc))
 
     return ChatResponse(
         answer=final.draft_answer,

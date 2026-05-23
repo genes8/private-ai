@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Server, CloudLightning, Cloud, Plus, X } from "lucide-react";
 import { testProviderConnection, type AppSettings, type PatchableSettings, type ProviderMode } from "../../api/settings";
-import { Section, Row, Select, TextInput, PasswordInput, ModelSelect } from "./SettingsAtoms";
+import { Section, Row, TextInput, PasswordInput, ModelSelect } from "./SettingsAtoms";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,11 +24,78 @@ const MODE_CARDS: ModeCard[] = [
 interface ProviderSettingsSectionProps {
   provider: AppSettings["provider"];
   availableModels: AppSettings["availableModels"];
-  sseDoneMode: AppSettings["sseDoneMode"];
   isSavingField: (field: string) => boolean;
   queueSave: (diff: PatchableSettings) => void;
   onSaveCustomModels: (models: string[]) => Promise<void>;
   onSaveError: (msg: string) => void;
+}
+
+// ── CustomModelManager ────────────────────────────────────────────────────────
+
+interface CustomModelManagerProps {
+  models: string[];
+  input: string;
+  saving: boolean;
+  onInputChange: (v: string) => void;
+  onSave: (models: string[]) => void;
+}
+
+function CustomModelManager({ models, input, saving, onInputChange, onSave }: CustomModelManagerProps) {
+  return (
+    <div className="px-5 py-4 border-t border-line">
+      <div className="text-[12px] font-medium text-ink mb-1">Custom model names</div>
+      <div className="text-[11.5px] text-text-2 mb-3 max-w-[55ch]">
+        Add model IDs that aren't in the dropdown above — e.g.{" "}
+        <span className="font-mono">deepseek-v4-flash</span>,{" "}
+        <span className="font-mono">qwen-plus</span>,{" "}
+        <span className="font-mono">glm-4</span>.
+      </div>
+      {models.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {models.map(m => (
+            <span key={m} className="inline-flex items-center gap-1 h-6 px-2 rounded-full bg-surface border border-line text-[11.5px] font-mono text-text">
+              {m}
+              <button
+                disabled={saving}
+                onClick={() => onSave(models.filter(x => x !== m))}
+                className="text-text-3 hover:text-danger disabled:opacity-40 ml-0.5"
+                aria-label={`Remove ${m}`}>
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={e => onInputChange(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter" && input.trim()) {
+              const name = input.trim();
+              onInputChange("");
+              if (!models.includes(name)) onSave([...models, name]);
+            }
+          }}
+          placeholder="e.g. deepseek-v4-flash"
+          className="w-52 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
+        <button
+          disabled={!input.trim() || saving}
+          onClick={() => {
+            const name = input.trim();
+            if (!name) return;
+            onInputChange("");
+            if (!models.includes(name)) onSave([...models, name]);
+          }}
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-40">
+          <Plus className="w-3.5 h-3.5" />
+          Add
+        </button>
+        {saving && <span className="text-[11px] font-mono text-accent animate-pulse">Saving…</span>}
+      </div>
+    </div>
+  );
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -36,7 +103,6 @@ interface ProviderSettingsSectionProps {
 export default function ProviderSettingsSection({
   provider,
   availableModels,
-  sseDoneMode,
   isSavingField,
   queueSave,
   onSaveCustomModels,
@@ -63,62 +129,6 @@ export default function ProviderSettingsSection({
       setSavingCustomModels(false);
     }
   };
-
-  const CustomModelManager = () => (
-    <div className="px-5 py-4 border-t border-line">
-      <div className="text-[12px] font-medium text-ink mb-1">Custom model names</div>
-      <div className="text-[11.5px] text-text-2 mb-3 max-w-[55ch]">
-        Add model IDs that aren't in the dropdown above — e.g.{" "}
-        <span className="font-mono">deepseek-v4-flash</span>,{" "}
-        <span className="font-mono">qwen-plus</span>,{" "}
-        <span className="font-mono">glm-4</span>.
-      </div>
-      {customProviderModels.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-3">
-          {customProviderModels.map(m => (
-            <span key={m} className="inline-flex items-center gap-1 h-6 px-2 rounded-full bg-surface border border-line text-[11.5px] font-mono text-text">
-              {m}
-              <button
-                disabled={savingCustomModels}
-                onClick={() => saveCustomModels(customProviderModels.filter(x => x !== m))}
-                className="text-text-3 hover:text-danger disabled:opacity-40 ml-0.5"
-                aria-label={`Remove ${m}`}>
-                <X className="w-3 h-3" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
-          value={customModelInput}
-          onChange={e => setCustomModelInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === "Enter" && customModelInput.trim()) {
-              const name = customModelInput.trim();
-              setCustomModelInput("");
-              if (!customProviderModels.includes(name)) saveCustomModels([...customProviderModels, name]);
-            }
-          }}
-          placeholder="e.g. deepseek-v4-flash"
-          className="w-52 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
-        <button
-          disabled={!customModelInput.trim() || savingCustomModels}
-          onClick={() => {
-            const name = customModelInput.trim();
-            if (!name) return;
-            setCustomModelInput("");
-            if (!customProviderModels.includes(name)) saveCustomModels([...customProviderModels, name]);
-          }}
-          className="inline-flex items-center gap-1.5 h-8 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-40">
-          <Plus className="w-3.5 h-3.5" />
-          Add
-        </button>
-        {savingCustomModels && <span className="text-[11px] font-mono text-accent animate-pulse">Saving…</span>}
-      </div>
-    </div>
-  );
 
   return (
     <Section id="provider" title="Inference provider"
@@ -200,7 +210,13 @@ export default function ProviderSettingsSection({
               DeepSeek does not provide an <span className="font-mono text-text">/embeddings</span> API — no documents leave your server.
             </p>
           </div>
-          <CustomModelManager />
+          <CustomModelManager
+            models={customProviderModels}
+            input={customModelInput}
+            saving={savingCustomModels}
+            onInputChange={setCustomModelInput}
+            onSave={saveCustomModels}
+          />
         </>
       )}
 
@@ -230,16 +246,15 @@ export default function ProviderSettingsSection({
             <ModelSelect value={provider.visionModel} options={providerModels}
               onChange={v => queueSave({ providerVisionModel: v })} placeholder="Select or add a model" />
           </Row>
-          <CustomModelManager />
+          <CustomModelManager
+            models={customProviderModels}
+            input={customModelInput}
+            saving={savingCustomModels}
+            onInputChange={setCustomModelInput}
+            onSave={saveCustomModels}
+          />
         </>
       )}
-
-      <Row label="SSE completion mode"
-        hint="Strict waits for persistence before sending done; async returns done immediately for lower p99 latency."
-        saving={isSavingField("sseDoneMode")}>
-        <Select value={sseDoneMode} options={["strict", "async"] as const}
-          onChange={v => queueSave({ sseDoneMode: v })} className="w-48" />
-      </Row>
 
       {/* Footer: local note or cloud connection test */}
       <div className="px-5 py-3.5 flex items-center gap-3">

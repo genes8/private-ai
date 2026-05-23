@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import Avatar from "../../components/Avatar";
 import Logo from "../../components/Logo";
 import { useAuth } from "../../hooks/useAuth";
-import { listFeedback } from "../../api/feedback";
+import { apiFetch } from "../../api/client";
 
 type AdminRoute = "overview" | "documents" | "audit" | "feedback" | "users" | "settings";
 
@@ -25,13 +25,20 @@ interface Props {
 export default function AdminLayout({ children }: Props) {
   const { me, signOut } = useAuth();
   const { pathname } = useLocation();
-  const { data: feedbackItems = [] } = useQuery({
-    queryKey: ["feedback"],
-    queryFn: listFeedback,
+  const { data: feedbackCount } = useQuery({
+    queryKey: ["feedback-count"],
+    queryFn: () => apiFetch<{ negative: number }>("/admin/feedback/count"),
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
-  const negativeFeedbackCount = feedbackItems.filter((i) => i.rating === "down").length;
+  const negativeFeedbackCount = feedbackCount?.negative ?? 0;
+
+  const { data: corpusHealth } = useQuery({
+    queryKey: ["corpus-stats"],
+    queryFn: () => apiFetch<{ docCount: number; chunkCount: number; failedCount: number; inProgressCount: number }>("/admin/corpus-stats"),
+    refetchInterval: 30_000,
+    staleTime: 20_000,
+  });
 
   const active = (NAV.find((n) => pathname.startsWith(n.to))?.id ?? "overview") as AdminRoute;
 
@@ -73,13 +80,32 @@ export default function AdminLayout({ children }: Props) {
         </div>
 
         {/* Index health card */}
-        <div className="mx-2 mb-3 rounded-lg bg-paper-2 border border-line px-3 py-2.5">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
-            <span className="text-[11.5px] font-medium text-text-2">Indexing healthy</span>
-          </div>
-          <p className="text-[10.5px] text-text-mute">All documents indexed</p>
-        </div>
+        {(() => {
+          const failed = corpusHealth?.failedCount ?? 0;
+          const inProgress = corpusHealth?.inProgressCount ?? 0;
+          const isError = failed > 0;
+          const isPending = !isError && inProgress > 0;
+          const dotClass = isError ? "bg-danger" : isPending ? "bg-accent animate-pulse" : "bg-success";
+          const label = isError
+            ? `${failed} doc${failed !== 1 ? "s" : ""} failed`
+            : isPending
+            ? `${inProgress} indexing…`
+            : "Indexing healthy";
+          const detail = isError
+            ? "Check Documents tab for details"
+            : isPending
+            ? "Processing in background"
+            : "All documents indexed";
+          return (
+            <div className="mx-2 mb-3 rounded-lg bg-paper-2 border border-line px-3 py-2.5">
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} />
+                <span className="text-[11.5px] font-medium text-text-2">{label}</span>
+              </div>
+              <p className="text-[10.5px] text-text-mute">{detail}</p>
+            </div>
+          );
+        })()}
 
         <div className="border-t border-line px-4 py-3 flex items-center gap-2.5">
           <Avatar name={me?.email ?? "U"} size={24} />

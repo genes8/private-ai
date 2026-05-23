@@ -25,12 +25,19 @@
 - [test_cost_tracker.py](file://safe4ai-pilot/tests/test_cost_tracker.py)
 - [test_provider_clients.py](file://safe4ai-pilot/tests/test_provider_clients.py)
 - [test_runtime_config.py](file://safe4ai-pilot/tests/test_runtime_config.py)
+- [test_entity_booster.py](file://safe4ai-pilot/tests/test_entity_booster.py)
+- [test_provider_settings.py](file://safe4ai-pilot/tests/test_provider_settings.py)
 - [provider_clients.py](file://safe4ai-pilot/app/services/provider_clients.py)
 - [runtime_config.py](file://safe4ai-pilot/app/services/runtime_config.py)
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [chat_routes.py](file://safe4ai-pilot/app/api/chat_routes.py)
 - [cost_tracker.py](file://safe4ai-pilot/observability/cost_tracker.py)
 - [admin_routes.py](file://safe4ai-pilot/app/api/admin_routes.py)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
+- [settings_service.py](file://safe4ai-pilot/app/services/settings_service.py)
+- [provider_settings.py](file://safe4ai-pilot/app/services/provider_settings.py)
+- [entity_booster.py](file://safe4ai-pilot/app/agents/entity_booster.py)
+- [startup_migrations.py](file://safe4ai-pilot/app/startup_migrations.py)
 - [useDocuments.ts](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts)
 - [client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
 - [ErrorBoundary.tsx](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx)
@@ -47,11 +54,10 @@
 
 ## Update Summary
 **Changes Made**
-- Added comprehensive test coverage for new score-based grading system using rerank scores instead of LLM-based decisions
-- Implemented synchronous routing functions with deterministic behavior for routing decisions
-- Added tests for OllamaProvider null message handling fix with response fallback
-- Updated agent workflow tests to validate deterministic behavior instead of LLM-based routing
-- Enhanced testing strategy to cover score-based chunk grading and threshold-based routing
+- Added comprehensive test coverage for new entity booster system that enhances URL and email entity recognition
+- Added extensive test coverage for provider settings management including mode expansion, validation, and sanitization
+- Added comprehensive test coverage for startup schema management system including Qdrant collection validation and dimension checking
+- Enhanced testing strategy to cover entity-based chunk boosting, provider configuration validation, and schema migration testing
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -68,7 +74,7 @@
 ## Introduction
 This document defines a comprehensive testing strategy for the Private AI system. It covers unit testing, integration testing, end-to-end testing, and performance evaluation. It explains the pytest framework setup, test organization, and mocking strategies for external dependencies. It documents the evaluation framework using a golden dataset and online monitoring for production performance. It also provides practical guidance for testing AI components, database operations, API endpoints, and frontend interactions, along with automation, coverage requirements, debugging techniques, best practices for AI systems, data privacy, regression testing, and continuous integration.
 
-**Updated** Enhanced with comprehensive testing infrastructure for the new score-based grading system, synchronous routing functions, and improved provider client testing including null message handling.
+**Updated** Enhanced with comprehensive testing infrastructure for the new entity booster system, provider settings management, and startup schema validation systems.
 
 ## Project Structure
 The testing system is organized under the tests directory and evaluation directory, with pytest configuration in pyproject.toml and CI in .github/workflows. Key areas:
@@ -77,7 +83,9 @@ The testing system is organized under the tests directory and evaluation directo
 - Real-service smoke tests: optional verification against live services
 - Evaluation: offline scoring against a golden dataset and online monitoring of production signals
 - Provider system tests: specialized testing for multi-provider architecture and runtime configuration
-- **New**: Agent workflow tests: deterministic routing based on score thresholds instead of LLM decisions
+- **New**: Entity booster tests: comprehensive testing of URL and email entity recognition and boosting
+- **New**: Provider settings tests: extensive validation of provider mode expansion, sanitization, and configuration resolution
+- **New**: Startup schema tests: validation of database schema migrations and Qdrant collection management
 
 ```mermaid
 graph TB
@@ -86,6 +94,9 @@ UT["Unit Tests<br/>pytest"]
 IT["Integration Tests<br/>Docker + testcontainers"]
 ST["Smoke Tests<br/>Real Services"]
 PT["Provider Tests<br/>HTTP Mocks + Providers"]
+ET["Entity Booster Tests<br/>URL/Email Recognition"]
+PST["Provider Settings Tests<br/>Mode Expansion + Validation"]
+SST["Startup Schema Tests<br/>Qdrant + DB Migrations"]
 AT["Agent Tests<br/>Score-based Routing + Deterministic Logic"]
 end
 subgraph "Evaluation"
@@ -100,6 +111,9 @@ UT --> W
 IT --> W
 ST --> W
 PT --> W
+ET --> W
+PST --> W
+SST --> W
 AT --> W
 OE --> GD
 OM --> UT
@@ -128,8 +142,11 @@ OM --> UT
 - **New**: Runtime configuration testing with provider type validation and fallback mechanisms
 - **New**: Score-based grading system testing with threshold validation
 - **New**: Synchronous routing function testing with deterministic behavior validation
+- **New**: Entity booster testing with comprehensive URL and email recognition validation
+- **New**: Provider settings testing with mode expansion, sanitization, and configuration validation
+- **New**: Startup schema testing with Qdrant collection validation and database migration testing
 
-**Updated** Enhanced with comprehensive provider system testing, score-based grading system testing, and synchronous routing function testing.
+**Updated** Enhanced with comprehensive testing infrastructure for entity booster system, provider settings management, and startup schema validation.
 
 Key capabilities:
 - Isolated unit tests with dependency overrides and mocks
@@ -142,6 +159,9 @@ Key capabilities:
 - **New**: Runtime configuration validation with provider type coercion and fallback handling
 - **New**: Score-based chunk grading with threshold validation and deterministic routing
 - **New**: Synchronous routing functions with explicit threshold-based decision making
+- **New**: Entity-based chunk boosting with context-constrained URL and email recognition
+- **New**: Provider configuration validation with mode expansion and model sanitization
+- **New**: Startup schema validation with Qdrant collection dimension checking and database migrations
 
 **Section sources**
 - [conftest.py:47-88](file://safe4ai-pilot/tests/conftest.py#L47-L88)
@@ -156,10 +176,13 @@ The testing architecture separates concerns across layers:
 - Evaluation layer: Offline evaluator and online monitor consuming production data
 - **New**: Provider layer: HTTP mocks for external AI providers with usage tracking and token estimation
 - **New**: Agent layer: Score-based chunk grading with threshold validation and synchronous routing
+- **New**: Entity booster layer: URL and email entity recognition with context-constrained boosting
+- **New**: Provider settings layer: Mode expansion, sanitization, and configuration validation
+- **New**: Startup schema layer: Database migrations and Qdrant collection management
 
 ```mermaid
 graph TB
-TC["TestClient<br/>FastAPI"] --> APP["App routes<br/>/auth, /chat, /health"]
+TC["TestClient<br/>FastAPI"] --> APP["App routes<br/>/auth, /chat, /health, /settings"]
 APP --> DB["SQLAlchemy Engine"]
 APP --> QD["QdrantClient"]
 APP --> OL["Ollama HTTP"]
@@ -179,6 +202,17 @@ subgraph "Agent Layer"
 SCORE["Score-based Grading<br/>rerank_score >= threshold"]
 SYNC["Synchronous Routing<br/>≥ 2 relevant chunks → generate"]
 END
+subgraph "Entity Booster Layer"
+EB["Entity Recognition<br/>URL/Email + Context Matching"]
+END
+subgraph "Provider Settings Layer"
+PS["Mode Expansion<br/>local/hybrid/cloud"]
+SAN["Model Sanitization<br/>Ollama Availability"]
+END
+subgraph "Startup Schema Layer"
+SS["Schema Migrations<br/>DB Columns + FKs"]
+QC["Qdrant Collection<br/>Dimension Validation"]
+END
 ```
 
 **Diagram sources**
@@ -189,6 +223,9 @@ END
 - [test_runtime_config.py:8-18](file://safe4ai-pilot/tests/test_runtime_config.py#L8-18)
 - [adaptive_router.py:12-23](file://safe4ai-pilot/app/agents/adaptive_router.py#L12-L23)
 - [document_grader.py:15-24](file://safe4ai-pilot/app/agents/document_grader.py#L15-L24)
+- [entity_booster.py:107-150](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L150)
+- [provider_settings.py:35-62](file://safe4ai-pilot/app/services/provider_settings.py#L35-L62)
+- [startup_migrations.py:27-36](file://safe4ai-pilot/app/startup_migrations.py#L27-L36)
 
 ## Detailed Component Analysis
 
@@ -198,7 +235,7 @@ END
 - Mock external HTTP services (e.g., Ollama, OpenAI-compatible) to avoid flakiness and speed up tests.
 - Validate request validation, error responses, and response shapes.
 
-**Updated** Enhanced with comprehensive provider system testing, score-based grading system testing, and synchronous routing function testing.
+**Updated** Enhanced with comprehensive testing infrastructure for entity booster system, provider settings management, and startup schema validation.
 
 Representative examples:
 - Authentication and authorization tests validate login, logout, role-based access, token encoding/decoding, and password strength validation.
@@ -213,6 +250,9 @@ Representative examples:
 - **New**: Runtime configuration tests validate provider type coercion, fallback mechanisms, and runtime component building.
 - **New**: Score-based grading tests validate threshold-based chunk relevance determination without LLM calls.
 - **New**: Synchronous routing tests validate deterministic routing decisions based on relevant chunk counts.
+- **New**: Entity booster tests validate URL and email entity recognition with context-constrained boosting.
+- **New**: Provider settings tests validate mode expansion, model sanitization, and configuration resolution.
+- **New**: Startup schema tests validate database migrations and Qdrant collection management.
 
 Best practices:
 - Keep tests deterministic; rely on fixtures and patches.
@@ -222,6 +262,9 @@ Best practices:
 - **New**: Use HTTPX MockTransport for external API testing without network dependencies.
 - **New**: Validate score-based grading with explicit threshold comparisons.
 - **New**: Test synchronous routing functions with predefined decision criteria.
+- **New**: Test entity recognition with comprehensive URL and email pattern validation.
+- **New**: Validate provider settings with mode expansion and model availability testing.
+- **New**: Test startup schema migrations with database and Qdrant collection validation.
 
 **Section sources**
 - [test_auth.py:67-290](file://safe4ai-pilot/tests/test_auth.py#L67-L290)
@@ -232,6 +275,9 @@ Best practices:
 - [test_cost_tracker.py:1-169](file://safe4ai-pilot/tests/test_cost_tracker.py#L1-169)
 - [test_provider_clients.py:12-80](file://safe4ai-pilot/tests/test_provider_clients.py#L12-L80)
 - [test_runtime_config.py:8-84](file://safe4ai-pilot/tests/test_runtime_config.py#L8-84)
+- [test_entity_booster.py:1-175](file://safe4ai-pilot/tests/test_entity_booster.py#L1-175)
+- [test_provider_settings.py:1-186](file://safe4ai-pilot/tests/test_provider_settings.py#L1-186)
+- [test_startup_schema.py:1-116](file://safe4ai-pilot/tests/test_startup_schema.py#L1-116)
 
 ### Integration Testing Strategy
 - Use Docker containers for Postgres (with pgvector extension) and Qdrant via testcontainers.
@@ -261,7 +307,7 @@ Representative examples:
 - For retrieval components, mock Qdrant and embedding calls; simulate BM25 indexing and fusion logic.
 - Validate that filters, collections, and payload handling behave as expected.
 
-**Updated** Enhanced with comprehensive provider system testing, score-based grading system testing, and synchronous routing function testing.
+**Updated** Enhanced with comprehensive testing infrastructure for entity booster system, provider settings management, and startup schema validation.
 
 Representative examples:
 - Hybrid retriever tests validate fused retrieval, doc-id filtering, BM25 updates, and collection routing.
@@ -271,6 +317,9 @@ Representative examples:
 - **New**: Runtime configuration tests validate provider type coercion and fallback to Ollama when invalid provider types are specified.
 - **New**: Score-based grading tests validate threshold-based chunk relevance determination using rerank scores.
 - **New**: Synchronous routing tests validate deterministic routing decisions based on relevant chunk counts and grounded state.
+- **New**: Entity booster tests validate URL and email entity recognition with context-constrained boosting logic.
+- **New**: Provider settings tests validate mode expansion and model sanitization for different provider configurations.
+- **New**: Startup schema tests validate database migrations and Qdrant collection dimension validation.
 
 **Section sources**
 - [test_hybrid_retriever.py:57-169](file://safe4ai-pilot/tests/test_hybrid_retriever.py#L57-L169)
@@ -285,11 +334,11 @@ Representative examples:
 - Validate column sets and enums align with design.
 - Ensure startup order initializes extensions before table creation.
 
-**Updated** Enhanced with comprehensive model validation and schema testing.
+**Updated** Enhanced with comprehensive model validation and schema testing including entity booster and provider settings components.
 
 Representative examples:
 - Model and schema tests validate tables, columns, and settings parsing.
-- Startup schema tests enforce initialization order.
+- Startup schema tests enforce initialization order and validate database migrations.
 - Conversation management tests validate session persistence and state handling.
 
 **Section sources**
@@ -302,12 +351,13 @@ Representative examples:
 - Apply dependency overrides to bypass DB/auth for pure endpoint tests.
 - Mock external services to keep tests stable.
 
-**Updated** Enhanced with comprehensive chat endpoint testing including cost tracking, session management, and error scenarios.
+**Updated** Enhanced with comprehensive chat endpoint testing including cost tracking, session management, and error scenarios, plus provider settings endpoint testing.
 
 Representative examples:
 - Chat endpoint tests validate answer delivery, citations, error handling, cost ceiling enforcement, and token estimation.
 - Auth endpoint tests validate login, logout, role gating, password strength validation, and CSRF protection.
 - Admin endpoints tests validate document management, user administration, system configuration, and reindex safety mechanisms.
+- **New**: Settings endpoint tests validate provider configuration updates, mode expansion, and runtime component rebuilding.
 
 **Section sources**
 - [test_chat.py:75-123](file://safe4ai-pilot/tests/test_chat.py#L75-L123)
@@ -396,6 +446,93 @@ Best practices:
 - [test_runtime_config.py:8-84](file://safe4ai-pilot/tests/test_runtime_config.py#L8-L84)
 - [provider_clients.py:52-106](file://safe4ai-pilot/app/services/provider_clients.py#L52-L106)
 - [runtime_config.py:89-129](file://safe4ai-pilot/app/services/runtime_config.py#L89-L129)
+
+### Entity Booster System Testing Strategy
+**New** Comprehensive testing strategy for the entity booster system that enhances URL and email entity recognition and boosts relevant chunks.
+
+The entity booster system consists of:
+- **boost_entity_chunks**: Function that applies minimal score boosts to URL/email-bearing chunks when queries request specific entities
+- **Context extraction**: Pattern-based extraction of meaningful tokens from queries to constrain boosting to relevant contexts
+- **URL/email pattern matching**: Regex-based detection of URLs and email addresses in chunk content
+- **Context-constrained boosting**: Validation that chunks only receive boosts when content matches the entity context derived from queries
+
+Representative examples:
+- **URL Boost Testing**: Validates URL-bearing chunks receive minimal score boosts when queries request specific entity URLs
+- **Email Boost Testing**: Validates email-bearing chunks receive minimal score boosts when queries request specific entity emails
+- **Context Matching Testing**: Ensures chunks only boost when content references the entity context derived from queries
+- **Unrelated Entity Protection**: Validates unrelated entity URLs/emails are not boosted even when query words are present
+- **Short Acronym Handling**: Tests 2-char acronym context tokens are preserved for proper entity recognition
+
+Best practices:
+- Test URL and email pattern recognition with various formats and contexts
+- Validate context extraction logic removes entity-type signal words appropriately
+- Ensure minimal score boosts that don't exceed threshold by more than allowed margin
+- Test edge cases around context boundaries and acronym handling
+- Validate that semantic queries do not trigger entity boosting
+
+**Section sources**
+- [entity_booster.py:107-150](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L150)
+- [test_entity_booster.py:1-175](file://safe4ai-pilot/tests/test_entity_booster.py#L1-175)
+
+### Provider Settings Management Testing Strategy
+**New** Comprehensive testing strategy for the provider settings management system that handles mode expansion, configuration validation, and model sanitization.
+
+The provider settings system consists of:
+- **resolve_provider_config**: Canonical provider state derivation from raw DB configuration
+- **expand_provider_mode**: Mode shorthand expansion into constituent raw config fields
+- **sanitize_ollama_role_models**: Model slot validation and fallback for Ollama-backed configurations
+- **validate_hybrid_embedding**: Embedding model availability validation for hybrid mode
+- **probe_cloud_embeddings**: Cloud provider embedding endpoint validation
+
+Representative examples:
+- **Mode Expansion Testing**: Validates local/hybrid/cloud mode expansion with proper field overrides
+- **Provider Resolution Testing**: Tests canonical provider state derivation with type coercion and fallback
+- **Model Sanitization Testing**: Validates Ollama model availability and fallback mechanisms
+- **Hybrid Mode Validation Testing**: Tests embedding model validation and fallback for hybrid configurations
+- **Cloud Provider Testing**: Validates cloud provider embedding endpoint probing and error handling
+
+Best practices:
+- Test all provider modes (local, hybrid, cloud) with proper field validation
+- Validate model availability checking and fallback mechanisms
+- Test error handling for unavailable models and providers
+- Ensure proper HTTP exception raising for invalid configurations
+- Validate dimension checking for embedding model compatibility
+
+**Section sources**
+- [provider_settings.py:35-62](file://safe4ai-pilot/app/services/provider_settings.py#L35-L62)
+- [settings_service.py:138-164](file://safe4ai-pilot/app/services/settings_service.py#L138-L164)
+- [test_provider_settings.py:1-186](file://safe4ai-pilot/tests/test_provider_settings.py#L1-186)
+
+### Startup Schema Management Testing Strategy
+**New** Comprehensive testing strategy for the startup schema management system that handles database migrations and Qdrant collection validation.
+
+The startup schema system consists of:
+- **run_startup_migrations**: Orchestrated execution of all boot-time schema fixes and sanity checks
+- **_ensure_documents_columns**: Database column addition and default value setting
+- **_ensure_user_columns**: User table column validation and default values
+- **_ensure_document_foreign_keys**: Foreign key constraint validation and default handling
+- **_ensure_agentrun_fk**: Agent run foreign key validation and cascade handling
+- **_ensure_qdrant_collection**: Qdrant collection creation with proper dimension validation
+- **_ensure_semantic_cache_dimension**: Semantic cache dimension compatibility checking
+- **_warn_default_credentials**: Default credential security warnings and blocking
+
+Representative examples:
+- **Database Migration Testing**: Validates column addition, foreign key constraints, and default value setting
+- **Qdrant Collection Testing**: Tests collection creation with proper vector dimensions and dimension validation
+- **Dimension Compatibility Testing**: Validates embedding model dimension compatibility and error handling
+- **Credential Security Testing**: Tests default credential warnings and production blocking
+- **Foreign Key Validation Testing**: Validates referential integrity and cascade behavior
+
+Best practices:
+- Test database schema migrations in proper order and dependency sequence
+- Validate Qdrant collection creation with correct vector dimensions
+- Test dimension mismatch detection and error handling
+- Ensure proper foreign key constraint validation and default handling
+- Validate security warnings and production blocking mechanisms
+
+**Section sources**
+- [startup_migrations.py:27-36](file://safe4ai-pilot/app/startup_migrations.py#L27-L36)
+- [test_startup_schema.py:1-116](file://safe4ai-pilot/tests/test_startup_schema.py#L1-116)
 
 ### Score-Based Grading System Testing Strategy
 **New** Comprehensive testing strategy for the score-based grading system that replaces LLM-based chunk relevance determination with threshold-based scoring.
@@ -499,6 +636,8 @@ Write --> End([Done])
 - Dependency overrides: Replace database/session dependencies with mocks in tests that need isolation.
 - **New**: HTTPX MockTransport: Provides canned responses for OpenAI-compatible API endpoints to avoid hitting real external services.
 - **New**: Score-based grading fixtures: Provide test data with explicit rerank scores for threshold validation.
+- **New**: Entity booster fixtures: Provide test data with URL/email patterns and context tokens for entity recognition validation.
+- **New**: Provider settings fixtures: Provide test configurations for different provider modes and model availability scenarios.
 
 ```mermaid
 classDiagram
@@ -515,11 +654,23 @@ class ScoreBasedFixture {
 +rerank_score : float
 +relevant : bool
 }
+class EntityBoosterFixture {
++query : str
++content : str
++context_tokens : set
+}
+class ProviderSettingsFixture {
++provider_mode : str
++available_models : set
++config : dict
+}
 TestClient --> MockOllamaTransport : "uses"
 TestClient --> MockOpenAICompatible : "uses"
 PostgresContainer <.. TestClient : "connection URL"
 QdrantContainer <.. TestClient : "base URL"
 ScoreBasedFixture <.. TestClient : "uses for grading tests"
+EntityBoosterFixture <.. TestClient : "uses for entity tests"
+ProviderSettingsFixture <.. TestClient : "uses for provider tests"
 ```
 
 **Diagram sources**
@@ -542,10 +693,13 @@ ScoreBasedFixture <.. TestClient : "uses for grading tests"
   - **New**: Use HTTPX MockTransport for external API testing to avoid network dependencies.
   - **New**: Test score-based grading with explicit threshold comparisons for deterministic behavior.
   - **New**: Validate synchronous routing functions with predefined decision criteria.
+  - **New**: Test entity recognition with comprehensive URL and email pattern validation.
+  - **New**: Validate provider settings with mode expansion and model availability testing.
+  - **New**: Test startup schema migrations with database and Qdrant collection validation.
 - Continuous integration:
   - GitHub Actions orchestrates linting, type checking, security scanning, tests, and coverage reporting.
 
-**Updated** Enhanced with comprehensive test organization and execution strategies for the expanded test suite including provider system testing, score-based grading testing, and synchronous routing testing.
+**Updated** Enhanced with comprehensive test organization and execution strategies for the expanded test suite including entity booster testing, provider settings testing, and startup schema testing.
 
 **Section sources**
 - [README.md:121-126](file://safe4ai-pilot/README.md#L121-L126)
@@ -583,8 +737,11 @@ CI --> COV
 - **New**: Runtime configuration tests should validate provider type coercion and fallback mechanisms without network dependencies.
 - **New**: Score-based grading tests should avoid external API calls and use in-memory threshold comparisons.
 - **New**: Synchronous routing tests should validate deterministic behavior without LLM inference overhead.
+- **New**: Entity booster tests should use regex pattern matching and in-memory context extraction for fast validation.
+- **New**: Provider settings tests should validate configuration resolution without external service calls.
+- **New**: Startup schema tests should validate database operations and Qdrant collection management efficiently.
 
-**Updated** Enhanced with performance considerations for the expanded test suite including provider system testing, score-based grading testing, and synchronous routing testing.
+**Updated** Enhanced with performance considerations for the expanded test suite including entity booster testing, provider settings testing, and startup schema testing.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -619,8 +776,14 @@ Common issues and resolutions:
   - Verify threshold comparison logic and rerank score handling.
 - **New**: Synchronous routing tests failing:
   - Check relevant chunk count calculations and grounded state validation.
+- **New**: Entity booster tests failing:
+  - Verify URL/email pattern matching and context extraction logic.
+- **New**: Provider settings tests failing:
+  - Check mode expansion and model sanitization validation.
+- **New**: Startup schema tests failing:
+  - Verify database migration order and Qdrant collection dimension validation.
 
-**Updated** Enhanced troubleshooting guidance for the expanded test suite including provider system testing, score-based grading testing, and synchronous routing testing.
+**Updated** Enhanced troubleshooting guidance for the expanded test suite including entity booster testing, provider settings testing, and startup schema testing.
 
 **Section sources**
 - [conftest.py:65-68](file://safe4ai-pilot/tests/conftest.py#L65-L68)
@@ -629,9 +792,9 @@ Common issues and resolutions:
 - [test_real_services_smoke.py:12-17](file://safe4ai-pilot/tests/test_real_services_smoke.py#L12-L17)
 
 ## Conclusion
-The Private AI system employs a layered testing strategy: unit tests for isolated logic with robust mocking, integration tests for database and vector stores using containers, optional smoke tests for real services, and dedicated evaluation pipelines for offline scoring and online monitoring. The pytest configuration and CI pipeline automate quality gates, ensuring reliability and performance across the system. The expanded test suite now provides comprehensive coverage for security features, cost management system, reindex safety mechanisms, frontend component improvements, provider system architecture, score-based grading system, and synchronous routing functions.
+The Private AI system employs a layered testing strategy: unit tests for isolated logic with robust mocking, integration tests for database and vector stores using containers, optional smoke tests for real services, and dedicated evaluation pipelines for offline scoring and online monitoring. The pytest configuration and CI pipeline automate quality gates, ensuring reliability and performance across the system. The expanded test suite now provides comprehensive coverage for security features, cost management system, reindex safety mechanisms, frontend component improvements, provider system architecture, score-based grading system, synchronous routing functions, entity booster system, provider settings management, and startup schema validation.
 
-**Updated** Enhanced conclusion reflecting the comprehensive testing infrastructure additions including security features, cost management, reindex safety, frontend improvements, provider system testing, score-based grading system testing, and synchronous routing function testing.
+**Updated** Enhanced conclusion reflecting the comprehensive testing infrastructure additions including security features, cost management, reindex safety, frontend improvements, provider system testing, score-based grading system testing, synchronous routing function testing, entity booster system testing, provider settings testing, and startup schema testing.
 
 ## Appendices
 
@@ -642,8 +805,11 @@ The Private AI system employs a layered testing strategy: unit tests for isolate
 - Evaluation: offline and online quality assessment
 - **New**: Provider tests: HTTP mocking for external AI providers with usage tracking
 - **New**: Agent tests: score-based chunk grading and synchronous routing validation
+- **New**: Entity booster tests: URL and email entity recognition with context-constrained boosting
+- **New**: Provider settings tests: mode expansion, sanitization, and configuration validation
+- **New**: Startup schema tests: database migrations and Qdrant collection management
 
-**Updated** Enhanced test organization categories to reflect the expanded test suite including provider system testing, score-based grading testing, and synchronous routing testing.
+**Updated** Enhanced test organization categories to reflect the expanded test suite including entity booster testing, provider settings testing, and startup schema testing.
 
 **Section sources**
 - [pyproject.toml:94-97](file://safe4ai-pilot/pyproject.toml#L94-L97)
@@ -665,7 +831,7 @@ The Private AI system employs a layered testing strategy: unit tests for isolate
 - [pyproject.toml:99-101](file://safe4ai-pilot/pyproject.toml#L99-L101)
 
 ### D. Comprehensive Test Suite Coverage
-**Updated** New appendix documenting the expanded test suite coverage including provider system testing, score-based grading system testing, and synchronous routing function testing.
+**Updated** New appendix documenting the expanded test suite coverage including entity booster system testing, provider settings testing, and startup schema testing.
 
 The Private AI system now includes comprehensive test coverage across multiple functional areas:
 
@@ -705,6 +871,16 @@ The Private AI system now includes comprehensive test coverage across multiple f
 
 - **Null Message Handling Testing**: **New** Testing of OllamaProvider fallback behavior when API returns null message with valid response, ensuring robust error handling and graceful degradation.
 
+- **Entity Booster System Testing**: **New** Comprehensive testing of URL and email entity recognition with context-constrained boosting, pattern matching validation, and minimal score boost application.
+
+- **Provider Settings Management Testing**: **New** Comprehensive testing of provider mode expansion (local/hybrid/cloud), model sanitization for Ollama availability, configuration resolution, and cloud provider embedding validation.
+
+- **Startup Schema Management Testing**: **New** Comprehensive testing of database migrations (column additions, foreign key constraints, default values), Qdrant collection creation and dimension validation, and credential security warnings.
+
+- **Settings Endpoint Testing**: **New** Testing of provider configuration updates, mode expansion, runtime component rebuilding, and reindex requirement detection.
+
+- **Settings Service Testing**: **New** Testing of three-stage patch pipeline (normalize/probe/collect), model validation, dimension compatibility checking, and error handling for invalid configurations.
+
 **Section sources**
 - [test_auth.py:67-290](file://safe4ai-pilot/tests/test_auth.py#L67-L290)
 - [test_cost_tracker.py:1-169](file://safe4ai-pilot/tests/test_cost_tracker.py#L1-169)
@@ -734,4 +910,12 @@ The Private AI system now includes comprehensive test coverage across multiple f
 - [document_grader.py:15-24](file://safe4ai-pilot/app/agents/document_grader.py#L15-L24)
 - [models.py:26-33](file://safe4ai-pilot/app/models.py#L26-L33)
 - [graph.py:140-189](file://safe4ai-pilot/app/agents/graph.py#L140-L189)
+- [entity_booster.py:107-150](file://safe4ai-pilot/app/agents/entity_booster.py#L107-L150)
+- [provider_settings.py:35-225](file://safe4ai-pilot/app/services/provider_settings.py#L35-L225)
+- [startup_migrations.py:27-224](file://safe4ai-pilot/app/startup_migrations.py#L27-L224)
+- [settings_routes.py:216-344](file://safe4ai-pilot/app/api/settings_routes.py#L216-L344)
+- [settings_service.py:138-414](file://safe4ai-pilot/app/services/settings_service.py#L138-L414)
+- [test_entity_booster.py:1-175](file://safe4ai-pilot/tests/test_entity_booster.py#L1-175)
+- [test_provider_settings.py:1-186](file://safe4ai-pilot/tests/test_provider_settings.py#L1-186)
+- [test_startup_schema.py:1-116](file://safe4ai-pilot/tests/test_startup_schema.py#L1-116)
 </appendices>
