@@ -137,16 +137,15 @@ class RagPipeline:
             self._db.commit()
             return
 
-        clean_chunks = [c for c in all_chunks if not self._content_filter.is_pii(c["content"])]
-        if not clean_chunks:
-            self._set_status(doc_id, IngestionStatus.skipped)
-            self._db.commit()
-            return
+        for chunk in all_chunks:
+            if self._content_filter.is_pii(chunk["content"]):
+                chunk["content"] = self._content_filter.redact(chunk["content"])
+                logger.info("pii_redacted_in_chunk", doc_id=doc_id, page=chunk.get("page_number"))
 
-        contents = [c["content"] for c in clean_chunks]
+        contents = [c["content"] for c in all_chunks]
         embeddings = await self._embed_batch(contents)
 
-        chunk_ids = [str(uuid.uuid4()) for _ in clean_chunks]
+        chunk_ids = [str(uuid.uuid4()) for _ in all_chunks]
         points = [
             qmodels.PointStruct(
                 id=chunk_ids[i],
@@ -154,13 +153,13 @@ class RagPipeline:
                 payload={
                     "doc_id": doc_id,
                     "filename": filename,
-                    "page_number": clean_chunks[i]["page_number"],
-                    "chunk_index": clean_chunks[i]["chunk_index"],
-                    "content": clean_chunks[i]["content"],
-                    "ocr_quality": clean_chunks[i]["ocr_quality"],
+                    "page_number": all_chunks[i]["page_number"],
+                    "chunk_index": all_chunks[i]["chunk_index"],
+                    "content": all_chunks[i]["content"],
+                    "ocr_quality": all_chunks[i]["ocr_quality"],
                 },
             )
-            for i in range(len(clean_chunks))
+            for i in range(len(all_chunks))
         ]
 
         self._qdrant.upsert(collection_name=self._collection, points=points)
@@ -170,9 +169,9 @@ class RagPipeline:
             chunk = DocumentChunk(
                 id=chunk_ids[i],
                 document_id=doc_id,
-                chunk_index=clean_chunks[i]["chunk_index"],
+                chunk_index=all_chunks[i]["chunk_index"],
                 chunk_version=document_version,
-                content_preview=clean_chunks[i]["content"][:200],
+                content_preview=all_chunks[i]["content"][:200],
                 qdrant_point_id=chunk_ids[i],
             )
             self._db.add(chunk)

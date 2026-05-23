@@ -8,12 +8,25 @@ import unicodedata
 
 from app.models import GuardResult
 
+_ROLE_SUBSTITUTION_WORDS = (
+    r"(?:different|new|uncensored|unrestricted|jailbroken|unfiltered|evil|dangerous|alternative"
+    r"|ai\b|bot\b|assistant\b|chatbot\b|language\s+model)"
+)
+_MALICIOUS_ROLE_WORDS = (
+    r"(?:hacker|cracker|different|new|uncensored|unrestricted|jailbroken|unfiltered|evil|dangerous"
+    r"|alternative|ai\b|bot\b|assistant\b|chatbot\b|language\s+model)"
+)
+
 _INJECTION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p, re.IGNORECASE)
     for p in [
         r"(?:^|[.!?]\s+|\bplease\s+)ignore\s+(?:previous|all|prior)\s+instructions",
-        r"(?:^|[.!?]\s+)you\s+are\s+now\s+(?:a|an|acting|playing|going\s+to)",
-        r"(?:^|[.!?]\s+|\bplease\s+)act\s+as\s+(?:if\s+you\s+are|a|an)\b",
+        # "you are now acting/playing" or "you are now a [AI-role word]"
+        r"you\s+are\s+now\s+(?:acting|playing|going\s+to\s+(?:ignore|pretend|disregard|roleplay)"
+        r"|(?:a|an)\s+" + _ROLE_SUBSTITUTION_WORDS + r")",
+        # "act as if you" (always injection) or "act as a/an [optional-adjective] [bad-role]"
+        r"(?:^|[.!?]\s+|\bplease\s+)act\s+as\s+(?:if\s+you\b"
+        r"|(?:a|an)\s+(?:\w+\s+)?" + _MALICIOUS_ROLE_WORDS + r")",
         r"(?:^|[.!?]\s+|\bplease\s+)disregard\s+(?:your|all|the)\s+(?:previous|prior|above|instructions|guidelines|rules|training)",
         r"(?:^|[.!?]\s+)(?:reveal|print|output|show)\s+(?:your\s+)?system\s+prompt",
         r"<\|.*?\|>",  # special tokens

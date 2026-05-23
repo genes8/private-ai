@@ -11,7 +11,16 @@
 - [test_admin.py](file://safe4ai-pilot/tests/test_admin.py)
 - [db-layer.md](file://safe4ai-pilot/docs/db-layer.md)
 - [codebase-summary.md](file://safe4ai-pilot/docs/codebase-summary.md)
+- [AdminLayout.tsx](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Updated introduction to reflect that endpoints are backend-only features without admin UI consumer
+- Added explicit note about intentional backend-only implementation for future review-queue admin page
+- Updated architecture overview to clarify these are "complete backend features ready for future UI implementation"
+- Enhanced troubleshooting section to address backend-only operation
+- Removed references to admin UI consumer in component analysis
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -25,15 +34,19 @@
 9. [Conclusion](#conclusion)
 
 ## Introduction
-This document provides comprehensive API documentation for the human review queue management endpoints used in administrative content moderation and risk assessment workflows. It covers HTTP methods, URL patterns, request and response schemas, workflow states, and integration points with risk assessment and audit systems. It also includes practical examples, batch processing considerations, escalation procedures for high-risk content, and error handling guidance.
+This document provides comprehensive API documentation for the human review queue management endpoints used in administrative content moderation and risk assessment workflows. **Updated**: These endpoints are currently backend-only features without an admin UI consumer. They are intentionally kept as complete backend implementations ready for future integration with a review-queue admin page, while remaining fully functional for direct API consumption.
+
+The endpoints support HTTP methods, URL patterns, request and response schemas, workflow states, and integration points with risk assessment and audit systems. They include practical examples, batch processing considerations, escalation procedures for high-risk content, and error handling guidance for administrative governance.
 
 ## Project Structure
 The human review queue is implemented as part of the admin API routes and backed by SQLAlchemy models. Authentication and authorization are enforced via JWT cookies and role-based access control. Risk assessment and draft answer generation are integrated into the agent orchestration pipeline, which conditionally enqueues items for human review.
 
+**Updated**: The endpoints are complete backend features that can be called directly via API, though they are not currently exposed through the admin UI.
+
 ```mermaid
 graph TB
-subgraph "Admin API"
-RQ["Review Queue Routes<br/>GET /admin/review-queue<br/>POST /admin/review-queue/{id}/{approve|reject}"]
+subgraph "Admin API - Backend-Only"
+RQ["Review Queue Routes<br/>GET /admin/review-queue<br/>POST /admin/review-queue/{id}/{approve|reject}<br/><i>Backend-only - No Admin UI Consumer</i>"]
 end
 subgraph "Auth & RBAC"
 AUTH["JWT Cookie Auth<br/>/auth/login"]
@@ -60,7 +73,7 @@ HRQ --> AL
 ```
 
 **Diagram sources**
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:783-852](file://safe4ai-pilot/app/api/admin_routes.py#L783-L852)
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
 - [models.py:169-181](file://safe4ai-pilot/app/db/models.py#L169-L181)
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
@@ -69,7 +82,7 @@ HRQ --> AL
 - [graph.py:175-308](file://safe4ai-pilot/app/agents/graph.py#L175-L308)
 
 **Section sources**
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:783-852](file://safe4ai-pilot/app/api/admin_routes.py#L783-L852)
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
 - [models.py:169-181](file://safe4ai-pilot/app/db/models.py#L169-L181)
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
@@ -83,22 +96,26 @@ HRQ --> AL
 - Admin endpoints enforce role-based access and include rate limiting.
 - Agent pipeline conditionally enqueues items requiring human review based on quality gates and output filtering.
 
+**Updated**: These components form a complete backend implementation that is intentionally kept ready for future UI integration.
+
 Key implementation references:
 - ReviewStatus enum definition: [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
 - HumanReviewQueue model: [models.py:169-181](file://safe4ai-pilot/app/db/models.py#L169-L181)
-- Admin routes for review queue: [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- Admin routes for review queue: [admin_routes.py:789-852](file://safe4ai-pilot/app/api/admin_routes.py#L789-L852)
 - Agent runner enqueue logic: [agent_runner.py:36-54](file://safe4ai-pilot/app/services/agent_runner.py#L36-L54)
 - Graph quality gate and fallback leading to review: [graph.py:175-308](file://safe4ai-pilot/app/agents/graph.py#L175-L308)
 
 **Section sources**
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
 - [models.py:169-181](file://safe4ai-pilot/app/db/models.py#L169-L181)
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:789-852](file://safe4ai-pilot/app/api/admin_routes.py#L789-L852)
 - [agent_runner.py:36-54](file://safe4ai-pilot/app/services/agent_runner.py#L36-L54)
 - [graph.py:175-308](file://safe4ai-pilot/app/agents/graph.py#L175-L308)
 
 ## Architecture Overview
 The human review queue sits at the intersection of the agent pipeline and admin moderation. Items requiring review are inserted into the queue during agent execution when quality or safety gates fail. Administrators authenticate via JWT and use admin endpoints to list, approve, or reject items. All actions update the queue record with reviewer identity and timestamps, and are captured in audit logs.
+
+**Updated**: These endpoints are fully functional backend features that can be consumed directly via API calls, even though they are not currently exposed through the admin interface.
 
 ```mermaid
 sequenceDiagram
@@ -109,17 +126,17 @@ participant Admin as "Admin Client"
 participant API as "Admin Routes"
 Agent->>Runner : "Final state requires human review"
 Runner->>DB : "Insert HumanReviewQueue entry"
-Admin->>API : "GET /admin/review-queue?status=pending"
+Admin->>API : "GET /admin/review-queue?status=pending<br/>(Direct API Call)"
 API-->>Admin : "List of pending items"
-Admin->>API : "POST /admin/review-queue/{id}/approve"
+Admin->>API : "POST /admin/review-queue/{id}/approve<br/>(Direct API Call)"
 API->>DB : "Update status=approved, set reviewed_by and reviewed_at"
-Admin->>API : "POST /admin/review-queue/{id}/reject"
+Admin->>API : "POST /admin/review-queue/{id}/reject<br/>(Direct API Call)"
 API->>DB : "Update status=rejected, set reviewed_by and reviewed_at"
 ```
 
 **Diagram sources**
 - [agent_runner.py:36-54](file://safe4ai-pilot/app/services/agent_runner.py#L36-L54)
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:789-852](file://safe4ai-pilot/app/api/admin_routes.py#L789-L852)
 - [models.py:169-181](file://safe4ai-pilot/app/db/models.py#L169-L181)
 
 ## Detailed Component Analysis
@@ -143,11 +160,11 @@ Rejected --> [*]
 
 **Diagram sources**
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
-- [admin_routes.py:505-538](file://safe4ai-pilot/app/api/admin_routes.py#L505-L538)
+- [admin_routes.py:820-852](file://safe4ai-pilot/app/api/admin_routes.py#L820-L852)
 
 **Section sources**
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
-- [admin_routes.py:505-538](file://safe4ai-pilot/app/api/admin_routes.py#L505-L538)
+- [admin_routes.py:820-852](file://safe4ai-pilot/app/api/admin_routes.py#L820-L852)
 
 ### HumanReviewQueue Data Model
 Fields include identifiers, query text, optional draft answer and citations, risk reason, status, and reviewer metadata. The model integrates with the audit log system for governance.
@@ -209,12 +226,12 @@ CheckRole --> |Yes| Proceed["Proceed to handler"]
 **Diagram sources**
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
 - [router.py:39-105](file://safe4ai-pilot/app/auth/router.py#L39-L105)
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:789-852](file://safe4ai-pilot/app/api/admin_routes.py#L789-L852)
 
 **Section sources**
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
 - [router.py:39-105](file://safe4ai-pilot/app/auth/router.py#L39-L105)
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:789-852](file://safe4ai-pilot/app/api/admin_routes.py#L789-L852)
 
 ### API Endpoints
 
@@ -225,7 +242,7 @@ CheckRole --> |Yes| Proceed["Proceed to handler"]
   - status: ReviewStatus (default: pending)
 - Response: Array of review items with keys: id, session_id, user_id, query, draft_answer, risk_reason, status, reviewed_by, reviewed_at
 - Access: admin
-- Notes: Rate-limited
+- Notes: Rate-limited, backend-only feature
 
 Example request:
 - GET /admin/review-queue?status=pending
@@ -234,7 +251,7 @@ Example response:
 - 200 OK with array of items
 
 **Section sources**
-- [admin_routes.py:475-502](file://safe4ai-pilot/app/api/admin_routes.py#L475-L502)
+- [admin_routes.py:789-816](file://safe4ai-pilot/app/api/admin_routes.py#L789-L816)
 - [models.py:169-181](file://safe4ai-pilot/app/db/models.py#L169-L181)
 
 #### Approve a Review Item
@@ -256,7 +273,7 @@ Example response:
 - 200 OK with { status: "approved" }
 
 **Section sources**
-- [admin_routes.py:505-520](file://safe4ai-pilot/app/api/admin_routes.py#L505-L520)
+- [admin_routes.py:819-834](file://safe4ai-pilot/app/api/admin_routes.py#L819-L834)
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
 
 #### Reject a Review Item
@@ -278,7 +295,7 @@ Example response:
 - 200 OK with { status: "rejected" }
 
 **Section sources**
-- [admin_routes.py:523-538](file://safe4ai-pilot/app/api/admin_routes.py#L523-L538)
+- [admin_routes.py:837-852](file://safe4ai-pilot/app/api/admin_routes.py#L837-L852)
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
 
 ### Integration with Risk Assessment and Draft Answer Review
@@ -325,32 +342,33 @@ Note: The audit log model exists and is used elsewhere in the system; ensure rev
 #### Example 1: Retrieve pending review items
 - Endpoint: GET /admin/review-queue?status=pending
 - Purpose: Populate moderation dashboard with items awaiting review
+- Note: Can be called directly via API even without admin UI
 - Response: Array of items with query, draft_answer, risk_reason, status, reviewed_by, reviewed_at
 
 **Section sources**
-- [admin_routes.py:475-502](file://safe4ai-pilot/app/api/admin_routes.py#L475-L502)
+- [admin_routes.py:789-816](file://safe4ai-pilot/app/api/admin_routes.py#L789-L816)
 
 #### Example 2: Approve a review item
 - Endpoint: POST /admin/review-queue/{item_id}/approve
 - Steps:
   - Authenticate with admin JWT cookie
-  - Call approve endpoint
+  - Call approve endpoint via API
   - Validate response status equals "approved"
 - Post-action: Item marked approved with reviewer metadata
 
 **Section sources**
-- [admin_routes.py:505-520](file://safe4ai-pilot/app/api/admin_routes.py#L505-L520)
+- [admin_routes.py:819-834](file://safe4ai-pilot/app/api/admin_routes.py#L819-L834)
 
 #### Example 3: Reject a review item
 - Endpoint: POST /admin/review-queue/{item_id}/reject
 - Steps:
   - Authenticate with admin JWT cookie
-  - Call reject endpoint
+  - Call reject endpoint via API
   - Validate response status equals "rejected"
 - Post-action: Item marked rejected with reviewer metadata
 
 **Section sources**
-- [admin_routes.py:523-538](file://safe4ai-pilot/app/api/admin_routes.py#L523-L538)
+- [admin_routes.py:837-852](file://safe4ai-pilot/app/api/admin_routes.py#L837-L852)
 
 #### Example 4: Batch processing and escalation
 - Batch processing: Use GET /admin/review-queue with status=pending to fetch items, then iterate approvals/rejections via respective endpoints.
@@ -359,7 +377,7 @@ Note: The audit log model exists and is used elsewhere in the system; ensure rev
 Note: The current endpoints operate on single items. For true batch operations, extend endpoints to accept arrays of item IDs.
 
 **Section sources**
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:789-852](file://safe4ai-pilot/app/api/admin_routes.py#L789-L852)
 - [agent_runner.py:36-54](file://safe4ai-pilot/app/services/agent_runner.py#L36-L54)
 
 ### Error Handling
@@ -375,7 +393,7 @@ Validation logic:
 - Admin endpoints enforce role-based access and rate limits.
 
 **Section sources**
-- [admin_routes.py:505-538](file://safe4ai-pilot/app/api/admin_routes.py#L505-L538)
+- [admin_routes.py:820-852](file://safe4ai-pilot/app/api/admin_routes.py#L820-L852)
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
 - [router.py:39-105](file://safe4ai-pilot/app/auth/router.py#L39-L105)
 
@@ -385,6 +403,8 @@ The review queue depends on:
 - Agent pipeline for enqueueing items
 - Database models for persistence
 - Audit logging for governance
+
+**Updated**: These dependencies support a complete backend implementation that is intentionally kept ready for future UI integration.
 
 ```mermaid
 graph LR
@@ -398,7 +418,7 @@ Model --> Audit["AuditLog Model"]
 ```
 
 **Diagram sources**
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:789-852](file://safe4ai-pilot/app/api/admin_routes.py#L789-L852)
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
 - [models.py:169-181](file://safe4ai-pilot/app/db/models.py#L169-L181)
 - [middleware.py:74-82](file://safe4ai-pilot/app/auth/middleware.py#L74-L82)
@@ -406,7 +426,7 @@ Model --> Audit["AuditLog Model"]
 - [models.py:118-131](file://safe4ai-pilot/app/db/models.py#L118-L131)
 
 **Section sources**
-- [admin_routes.py:475-538](file://safe4ai-pilot/app/api/admin_routes.py#L475-L538)
+- [admin_routes.py:789-852](file://safe4ai-pilot/app/api/admin_routes.py#L789-L852)
 - [models.py:46-50](file://safe4ai-pilot/app/db/models.py#L46-L50)
 - [models.py:169-181](file://safe4ai-pilot/app/db/models.py#L169-L181)
 - [middleware.py:74-82](file://safe4ai-pilot/app/auth/middleware.py#L74-L82)
@@ -435,11 +455,17 @@ Model --> Audit["AuditLog Model"]
 - Symptom: Missing audit entries for review actions
   - Cause: Audit logging not implemented for these endpoints
   - Resolution: Add audit log entries upon approve/reject
+- Symptom: Review queue not visible in admin UI
+  - Cause: Backend-only implementation without admin UI consumer
+  - Resolution: Call endpoints directly via API or wait for future UI integration
+
+**Updated**: Added troubleshooting for backend-only operation and future UI integration.
 
 **Section sources**
-- [admin_routes.py:505-538](file://safe4ai-pilot/app/api/admin_routes.py#L505-L538)
+- [admin_routes.py:820-852](file://safe4ai-pilot/app/api/admin_routes.py#L820-L852)
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
 - [router.py:39-105](file://safe4ai-pilot/app/auth/router.py#L39-L105)
+- [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
 
 ## Conclusion
-The human review queue API provides a focused, auditable pathway for administrators to moderate content flagged by the agent pipeline. By enforcing strict authentication and authorization, validating workflow states, and integrating with risk assessment and audit systems, it supports robust governance of high-risk content. Extending batch operations and audit logging would further strengthen operational efficiency and compliance readiness.
+The human review queue API provides a focused, auditable pathway for administrators to moderate content flagged by the agent pipeline. **Updated**: While these endpoints are currently backend-only features without admin UI consumer, they represent a complete implementation that is intentionally kept ready for future integration with a review-queue admin page. By enforcing strict authentication and authorization, validating workflow states, and integrating with risk assessment and audit systems, they support robust governance of high-risk content. Extending batch operations and audit logging would further strengthen operational efficiency and compliance readiness, while the backend-only design ensures these features remain available for direct API consumption even without UI integration.

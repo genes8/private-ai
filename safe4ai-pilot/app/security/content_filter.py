@@ -21,6 +21,12 @@ def _contains_pii(text: str) -> bool:
     return any(p.search(text) for p in PII_PATTERNS)
 
 
+def _redact_pii(text: str) -> str:
+    for pattern in PII_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
+
+
 class ContentFilter:
     def __init__(self, blocked_terms: list[str] | None = None) -> None:
         self._blocked_terms = [t.lower() for t in (blocked_terms or [])]
@@ -56,6 +62,10 @@ class ContentFilter:
             else:
                 clean.append(chunk)
         return clean
+
+    def redact(self, text: str) -> str:
+        """Replace PII patterns with [REDACTED], preserving surrounding content."""
+        return _redact_pii(text)
 
     def is_pii(self, text: str) -> bool:
         """Return True if the text contains any recognised PII pattern."""

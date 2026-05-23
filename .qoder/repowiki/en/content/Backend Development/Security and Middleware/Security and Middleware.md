@@ -15,6 +15,8 @@
 - [chat_routes.py](file://safe4ai-pilot/app/api/chat_routes.py)
 - [admin_routes.py](file://safe4ai-pilot/app/api/admin_routes.py)
 - [observability_routes.py](file://safe4ai-pilot/app/api/observability_routes.py)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
+- [settings_service.py](file://safe4ai-pilot/app/services/settings_service.py)
 - [models.py (db)](file://safe4ai-pilot/app/db/models.py)
 - [app_config_store.py](file://safe4ai-pilot/app/services/app_config_store.py)
 - [client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
@@ -27,6 +29,7 @@
 ## Update Summary
 **Changes Made**
 - Enhanced CSRF protection now mandatory for all unsafe HTTP methods with comprehensive double-submit verification
+- **Major SSRF security hardening**: New validate_provider_url() function returns both cleaned URL and resolved IP for secure connections, implementing comprehensive IPv6 support, DNS rebinding prevention, and enhanced IP address validation
 - Added new SSRF protection system with URL validator for provider base URLs implementing comprehensive IP range blocking
 - Strengthened HTTP request parsing against ambiguous body framing attacks with explicit CL/TE conflict detection
 - Improved information disclosure controls with enhanced security headers and health endpoint sanitization
@@ -46,7 +49,7 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document provides comprehensive security documentation for the Private AI pilot application. It focuses on middleware implementation, authentication and session management, input validation, content filtering, output filtering, upload validation, security headers, CORS policies, rate limiting, and enhanced CSRF protection. The system now features comprehensive CSRF protection with mandatory double-submit verification for all unsafe HTTP methods, new SSRF protection system with URL validation for provider base URLs, strengthened HTTP request parsing against ambiguous body framing attacks, and improved information disclosure controls. Practical configuration examples, threat mitigation strategies, and compliance-relevant controls are included to help operators deploy and operate the system securely.
+This document provides comprehensive security documentation for the Private AI pilot application. It focuses on middleware implementation, authentication and session management, input validation, content filtering, output filtering, upload validation, security headers, CORS policies, rate limiting, and enhanced CSRF protection. The system now features comprehensive CSRF protection with mandatory double-submit verification for all unsafe HTTP methods, **major SSRF protection enhancements** with URL validation for provider base URLs that returns both cleaned URL and resolved IP for secure connections, strengthened HTTP request parsing against ambiguous body framing attacks, and improved information disclosure controls. Practical configuration examples, threat mitigation strategies, and compliance-relevant controls are included to help operators deploy and operate the system securely.
 
 ## Project Structure
 Security-related components are organized across middleware, authentication, API routes, and security utilities:
@@ -54,7 +57,7 @@ Security-related components are organized across middleware, authentication, API
 - Security guards implement input sanitization, content filtering for PII, and output validation.
 - Application-wide middleware sets security headers, enforces CORS, and limits request body size with enhanced chunked processing.
 - CSRF protection middleware implements comprehensive double-submit verification with secure token comparison for all unsafe methods.
-- SSRF protection system validates provider base URLs against private/reserved IP ranges.
+- **Enhanced SSRF protection system**: URL validator that blocks private/reserved IP ranges and validates provider base URLs against comprehensive network restrictions, now returning both cleaned URL and resolved IP for secure connections.
 - Enhanced HTTP request parsing prevents ambiguous body framing attacks with explicit CL/TE conflict detection.
 - Information disclosure controls sanitize health endpoint responses and error messages.
 - Rate limiting is applied at route level using a shared limiter.
@@ -71,6 +74,8 @@ AUTHRT["auth/router.py<br/>Login/Logout + Rate Limit<br/>+ CSRF Token Generation
 CHAT["api/chat_routes.py<br/>Chat + Rate Limit"]
 ADMIN["api/admin_routes.py<br/>Admin + Rate Limit<br/>+ Upload Processing"]
 OBS["api/observability_routes.py<br/>Feedback + Stats"]
+SETTINGS["api/settings_routes.py<br/>Settings + Provider Validation"]
+SERVICES["services/settings_service.py<br/>Settings Service + Provider URL Validation"]
 END["frontend/src/api/client.ts<br/>CSRF Header Injection"]
 end
 subgraph "Security Guards"
@@ -78,7 +83,7 @@ IG["security/input_guard.py<br/>Input Sanitization"]
 CF["security/content_filter.py<br/>PII Removal"]
 OF["security/output_filter.py<br/>Hallucination Check"]
 UV["security/upload_validator.py<br/>MIME + Size + Ext<br/>+ Configurable Limits"]
-URLV["security/url_validator.py<br/>SSRF Protection + URL Validation"]
+URLV["security/url_validator.py<br/>SSRF Protection + URL Validation<br/>+ IPv6 Support + DNS Rebinding Prevention"]
 end
 subgraph "Enhanced Security Middleware"
 CSRF["CSRF Protection Middleware<br/>Double-Submit + Origin Validation"]
@@ -94,6 +99,8 @@ AUTHRT --> AUTHMW
 CHAT --> AUTHMW
 ADMIN --> AUTHMW
 OBS --> AUTHMW
+SETTINGS --> URLV
+SERVICES --> URLV
 CHAT --> IG
 CHAT --> CF
 CHAT --> OF
@@ -119,11 +126,13 @@ END --> M
 - [chat_routes.py:115-148](file://safe4ai-pilot/app/api/chat_routes.py#L115-L148)
 - [admin_routes.py:67-120](file://safe4ai-pilot/app/api/admin_routes.py#L67-L120)
 - [observability_routes.py:26-45](file://safe4ai-pilot/app/api/observability_routes.py#L26-L45)
+- [settings_routes.py:19-310](file://safe4ai-pilot/app/api/settings_routes.py#L19-L310)
+- [settings_service.py:26-375](file://safe4ai-pilot/app/services/settings_service.py#L26-L375)
 - [input_guard.py:24-48](file://safe4ai-pilot/app/security/input_guard.py#L24-L48)
 - [content_filter.py:25-63](file://safe4ai-pilot/app/security/content_filter.py#L25-L63)
 - [output_filter.py:31-60](file://safe4ai-pilot/app/security/output_filter.py#L31-L60)
 - [upload_validator.py:24-72](file://safe4ai-pilot/app/security/upload_validator.py#L24-L72)
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
 - [client.ts:26-37](file://safe4ai-pilot/frontend/src/api/client.ts#L26-L37)
 - [models.py:38-95](file://safe4ai-pilot/app/models.py#L38-L95)
 - [models.py (db):52-72](file://safe4ai-pilot/app/db/models.py#L52-L72)
@@ -136,7 +145,7 @@ END --> M
 - Authentication middleware: JWT encoding/decoding, user extraction, role enforcement.
 - Authentication router: login/logout with brute-force protection, cookie policy, rate limiting, and CSRF token generation.
 - CSRF protection middleware: comprehensive double-submit verification with secure token comparison for all unsafe HTTP methods (POST, PUT, PATCH, DELETE), origin validation, and mandatory CSRF token requirement.
-- SSRF protection system: URL validator that blocks private/reserved IP ranges and validates provider base URLs against comprehensive network restrictions.
+- **Enhanced SSRF protection system**: URL validator that blocks private/reserved IP ranges and validates provider base URLs against comprehensive network restrictions, now returning both cleaned URL and resolved IP for secure connections with IPv6 support and DNS rebinding prevention.
 - Enhanced HTTP request parsing: explicit detection and rejection of ambiguous body framing attacks with CL/TE header conflicts.
 - Input guard: HTML tag stripping, printable character normalization, length cap, prompt injection detection.
 - Content filter: PII detection and removal from document chunks; optional blocked terms filtering.
@@ -146,13 +155,13 @@ END --> M
 - Application middleware: CORS, security headers, request body size limit with enhanced chunked processing using SpooledTemporaryFile.
 - Rate limiting: module-level limiter reused across routes.
 
-**Updated** Enhanced CSRF protection now mandates CSRF tokens for all unsafe methods regardless of authentication state, SSRF protection system provides comprehensive URL validation, HTTP request parsing prevents ambiguous body framing attacks, and information disclosure controls sanitize responses.
+**Updated** Enhanced CSRF protection now mandates CSRF tokens for all unsafe methods regardless of authentication state, **SSRF protection system now provides comprehensive URL validation with IPv6 support and DNS rebinding prevention**, HTTP request parsing prevents ambiguous body framing attacks, and information disclosure controls sanitize responses.
 
 **Section sources**
 - [middleware.py:25-82](file://safe4ai-pilot/app/auth/middleware.py#L25-L82)
 - [router.py:39-133](file://safe4ai-pilot/app/auth/router.py#L39-L133)
 - [main.py:142-167](file://safe4ai-pilot/app/main.py#L142-L167)
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
 - [main.py:121-167](file://safe4ai-pilot/app/main.py#L121-L167)
 - [input_guard.py:24-48](file://safe4ai-pilot/app/security/input_guard.py#L24-L48)
 - [content_filter.py:25-63](file://safe4ai-pilot/app/security/content_filter.py#L25-L63)
@@ -164,7 +173,7 @@ END --> M
 - [admin_routes.py:67-120](file://safe4ai-pilot/app/api/admin_routes.py#L67-L120)
 
 ## Architecture Overview
-The system enforces authentication via HTTP-only cookies and JWTs, applies CORS and security headers globally, and protects endpoints with rate limits and comprehensive CSRF protection. Enhanced request handling now supports chunked processing for large uploads using SpooledTemporaryFile to prevent memory exhaustion while maintaining streaming capabilities. The CSRF protection middleware implements mandatory double-submit verification with secure token comparison for all unsafe HTTP methods, requiring both access_token and csrf_token cookies. The new SSRF protection system validates provider base URLs against private/reserved IP ranges to prevent server-side request forgery attacks. Enhanced HTTP request parsing prevents ambiguous body framing attacks by explicitly detecting CL/TE header conflicts. Information disclosure controls sanitize health endpoint responses and error messages to prevent sensitive data leakage.
+The system enforces authentication via HTTP-only cookies and JWTs, applies CORS and security headers globally, and protects endpoints with rate limits and comprehensive CSRF protection. Enhanced request handling now supports chunked processing for large uploads using SpooledTemporaryFile to prevent memory exhaustion while maintaining streaming capabilities. The CSRF protection middleware implements mandatory double-submit verification with secure token comparison for all unsafe HTTP methods, requiring both access_token and csrf_token cookies. **The new SSRF protection system validates provider base URLs against private/reserved IP ranges to prevent server-side request forgery attacks, now returning both cleaned URL and resolved IP for secure connections with IPv6 support and DNS rebinding prevention.** Enhanced HTTP request parsing prevents ambiguous body framing attacks by explicitly detecting CL/TE header conflicts. Information disclosure controls sanitize health endpoint responses and error messages to prevent sensitive data leakage.
 
 ```mermaid
 sequenceDiagram
@@ -176,6 +185,8 @@ participant BODY as "Body Size + Chunked Processing"
 participant URLV as "URL Validator"
 participant AUTH as "Auth Router"
 participant MW as "Auth Middleware"
+participant SETTINGS as "Settings Routes"
+participant SERVICES as "Settings Service"
 participant DB as "Database"
 C->>CSRF : "POST /auth/login (with CSRF token)"
 CSRF->>CSRF : "Verify CSRF double-submit (compare_digest)"
@@ -186,7 +197,11 @@ BODY->>BODY : "Stream chunks to temporary file"
 BODY->>BODY : "Monitor size against max limit"
 BODY->>URLV : "Validate provider URL (if applicable)"
 URLV->>URLV : "Check scheme + hostname + IP ranges"
-URLV->>AUTH : "Route handler"
+URLV->>URLV : "Resolve hostname to IP addresses"
+URLV->>URLV : "Return (cleaned_url, resolved_ip)"
+URLV->>SETTINGS : "Route handler with resolved IP"
+SETTINGS->>SETTINGS : "Pin resolved IP in transport"
+SETTINGS->>AUTH : "Route handler"
 AUTH->>AUTH : "Validate password length"
 AUTH->>DB : "Lookup user"
 AUTH->>AUTH : "Brute-force lock check"
@@ -200,7 +215,9 @@ AUTH-->>C : "Set HTTP-only access_token + csrf_token cookies"
 - [main.py:142-167](file://safe4ai-pilot/app/main.py#L142-L167)
 - [router.py:39-133](file://safe4ai-pilot/app/auth/router.py#L39-L133)
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
+- [settings_routes.py:309-320](file://safe4ai-pilot/app/api/settings_routes.py#L309-L320)
+- [settings_service.py:371-373](file://safe4ai-pilot/app/services/settings_service.py#L371-L373)
 - [models.py (db):52-62](file://safe4ai-pilot/app/db/models.py#L52-L62)
 
 ## Detailed Component Analysis
@@ -265,13 +282,15 @@ ReturnToken --> DoneCSRF(["CSRF Token Ready"])
 - [router.py:55-67](file://safe4ai-pilot/app/auth/router.py#L55-L67)
 - [test_auth.py:279-286](file://safe4ai-pilot/tests/test_auth.py#L279-L286)
 
-### SSRF Protection System: Comprehensive URL Validation
-- New SSRF protection system validates provider base URLs against comprehensive IP range blocking.
+### Enhanced SSRF Protection System: Comprehensive URL Validation with IPv6 Support
+- **Major enhancement**: New validate_provider_url() function returns both cleaned URL and resolved IP for secure connections, implementing comprehensive IPv6 support, DNS rebinding prevention, and enhanced IP address validation.
 - Blocks private/reserved IP ranges including 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16, 0.0.0.0/8, ::1/128, fc00::/7, fe80::/10.
 - Validates URL schemes to allow only http and https.
-- Resolves hostnames and checks against blocked networks to prevent SSRF attacks.
+- Resolves hostnames to IP addresses and checks against blocked networks to prevent SSRF attacks.
+- **New feature**: Returns tuple of (cleaned_url, resolved_ip) where resolved_ip is pinned for transport to prevent DNS rebinding attacks.
+- **IPv6 support**: Handles both IPv4 and IPv6 address resolution with comprehensive network range checking.
 - Returns cleaned URL without trailing slash on successful validation.
-- **New** Provides comprehensive protection against server-side request forgery attacks.
+- **New** Provides comprehensive protection against server-side request forgery attacks with DNS rebinding prevention.
 
 ```mermaid
 flowchart TD
@@ -283,18 +302,19 @@ HostCheck --> |No| Raise422b["HTTPException 422: Missing hostname"]
 HostCheck --> |Yes| Resolve["socket.getaddrinfo(hostname)"]
 Resolve --> ResolveOK{"Resolution successful?"}
 ResolveOK --> |No| Raise422c["HTTPException 422: Cannot resolve hostname"]
-ResolveOK --> |Yes| CheckNetworks["Check each resolved IP against blocked networks"]
+ResolveOK --> |Yes| FirstIP["Capture first resolved IP"]
+FirstIP --> CheckNetworks["Check each resolved IP against blocked networks"]
 CheckNetworks --> IPBlocked{"IP in blocked network?"}
 IPBlocked --> |Yes| Raise422d["HTTPException 422: Private/reserved IP address"]
 IPBlocked --> |No| StripSlash["Remove trailing slash"]
-StripSlash --> ReturnClean["Return validated URL"]
+StripSlash --> ReturnTuple["Return (validated_url, resolved_ip)"]
 ```
 
 **Diagram sources**
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
 
 **Section sources**
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
 - [test_security_audit.py:269-363](file://safe4ai-pilot/tests/test_security_audit.py#L269-L363)
 
 ### Enhanced HTTP Request Parsing: Ambiguous Body Framing Attack Prevention
@@ -555,6 +575,7 @@ Reject400 --> Done
 - CORS configured with allowed origins from environment, credentials enabled for cookie support, and restricted methods/headers.
 - Body size middleware rejects requests exceeding configured maximum with enhanced chunked processing support.
 - CSRF protection middleware validates tokens for unsafe methods and performs origin checking.
+- **Enhanced SSRF protection**: URL validator prevents private/reserved IP ranges and validates provider base URLs with IPv6 support.
 - Enhanced security headers prevent information disclosure and sanitize responses.
 
 **Updated** Enhanced body size middleware now supports chunked requests with automatic memory management and size monitoring.
@@ -627,11 +648,11 @@ RT-->>U : "Response"
 - Observability routes depend on current user for feedback submission.
 - CSRF protection middleware depends on authentication cookies and secure comparison functions.
 - Provider API key encryption depends on Fernet cryptographic primitives and SECRET_KEY derivation.
-- URL validator depends on socket resolution and ipaddress validation for SSRF protection.
+- **Enhanced URL validator depends on socket resolution, ipaddress validation, and DNS rebinding prevention** for comprehensive SSRF protection.
 - Enhanced HTTP request parsing depends on secure headers and body size validation.
 - Configuration drives secrets, allowed origins, HTTPS enforcement, and upload size limits with enhanced memory management.
 
-**Updated** Enhanced dependency relationships now include CSRF protection middleware, provider API key encryption, URL validator for SSRF protection, and secure HTTP request parsing.
+**Updated** Enhanced dependency relationships now include CSRF protection middleware, provider API key encryption, **enhanced URL validator for comprehensive SSRF protection with IPv6 support**, and secure HTTP request parsing.
 
 ```mermaid
 graph TB
@@ -644,13 +665,16 @@ CHAT --> OF["security/output_filter.py"]
 ADMIN["api/admin_routes.py"] --> AUTHMW
 ADMIN --> UV["security/upload_validator.py"]
 OBS["api/observability_routes.py"] --> AUTHMW
+SETTINGS["api/settings_routes.py"] --> URLV["security/url_validator.py"]
+SERVICES["services/settings_service.py"] --> URLV
 MAIN["main.py"] --> AUTHRT
 MAIN --> CHAT
 MAIN --> ADMIN
 MAIN --> OBS
+MAIN --> SETTINGS
+MAIN --> SERVICES
 MAIN --> CFG["config.py"]
 MAIN --> CSRF
-MAIN --> URLV["security/url_validator.py"]
 MAIN --> BODY["Enhanced Body Size + Chunked Processing"]
 AUTHMW --> DBM["db/models.py"]
 AES["services/app_config_store.py"] --> CFG
@@ -664,11 +688,13 @@ URLV --> CFG
 - [chat_routes.py:115-148](file://safe4ai-pilot/app/api/chat_routes.py#L115-L148)
 - [admin_routes.py:67-120](file://safe4ai-pilot/app/api/admin_routes.py#L67-L120)
 - [observability_routes.py:26-45](file://safe4ai-pilot/app/api/observability_routes.py#L26-L45)
+- [settings_routes.py:19-310](file://safe4ai-pilot/app/api/settings_routes.py#L19-L310)
+- [settings_service.py:26-375](file://safe4ai-pilot/app/services/settings_service.py#L26-L375)
 - [input_guard.py:24-48](file://safe4ai-pilot/app/security/input_guard.py#L24-L48)
 - [content_filter.py:25-63](file://safe4ai-pilot/app/security/content_filter.py#L25-L63)
 - [output_filter.py:31-60](file://safe4ai-pilot/app/security/output_filter.py#L31-L60)
 - [upload_validator.py:24-72](file://safe4ai-pilot/app/security/upload_validator.py#L24-L72)
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
 - [main.py:63-167](file://safe4ai-pilot/app/main.py#L63-L167)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [models.py (db):52-72](file://safe4ai-pilot/app/db/models.py#L52-L72)
@@ -681,11 +707,13 @@ URLV --> CFG
 - [chat_routes.py:115-148](file://safe4ai-pilot/app/api/chat_routes.py#L115-L148)
 - [admin_routes.py:67-120](file://safe4ai-pilot/app/api/admin_routes.py#L67-L120)
 - [observability_routes.py:26-45](file://safe4ai-pilot/app/api/observability_routes.py#L26-L45)
+- [settings_routes.py:19-310](file://safe4ai-pilot/app/api/settings_routes.py#L19-L310)
+- [settings_service.py:26-375](file://safe4ai-pilot/app/services/settings_service.py#L26-L375)
 - [input_guard.py:24-48](file://safe4ai-pilot/app/security/input_guard.py#L24-L48)
 - [content_filter.py:25-63](file://safe4ai-pilot/app/security/content_filter.py#L25-L63)
 - [output_filter.py:31-60](file://safe4ai-pilot/app/security/output_filter.py#L31-L60)
 - [upload_validator.py:24-72](file://safe4ai-pilot/app/security/upload_validator.py#L24-L72)
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
 - [main.py:63-167](file://safe4ai-pilot/app/main.py#L63-L167)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [models.py (db):52-72](file://safe4ai-pilot/app/db/models.py#L52-L72)
@@ -701,8 +729,8 @@ URLV --> CFG
 - Output filter combines source chunks once to reduce repeated scans.
 - Fernet encryption adds minimal overhead for sensitive configuration values.
 - CSRF protection middleware performs lightweight token validation with constant-time comparison.
-- **Updated** SSRF protection adds minimal overhead with DNS resolution caching and efficient IP range checking.
-- **Updated** Enhanced HTTP request parsing prevents ambiguous body framing attacks with minimal performance impact.
+- **Enhanced SSRF protection adds minimal overhead with DNS resolution caching, efficient IP range checking, and IPv6 support**.
+- **Enhanced HTTP request parsing prevents ambiguous body framing attacks with minimal performance impact**.
 
 ## Troubleshooting Guide
 - Authentication failures:
@@ -719,11 +747,14 @@ URLV --> CFG
   - Confirm origin header validation for login endpoint.
   - For pre-login flows, ensure GET /auth/csrf is called to establish csrf_token cookie.
   - **Updated** CSRF protection now applies to all unsafe methods regardless of authentication state.
-- SSRF protection failures:
-  - Verify provider base URLs use http or https schemes only.
-  - Ensure hostnames resolve to public IP addresses outside blocked ranges.
-  - Check that URLs do not point to private networks (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, etc.).
-  - **New** URL validation blocks cloud metadata endpoints and loopback addresses.
+- **Enhanced SSRF protection failures**:
+  - **Verify provider base URLs use http or https schemes only**.
+  - **Ensure hostnames resolve to public IP addresses outside blocked ranges**.
+  - **Check that URLs do not point to private networks (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, etc.)**.
+  - **New**: URL validation blocks cloud metadata endpoints and loopback addresses.
+  - **New**: IPv6 addresses (::1, fc00::/7, fe80::/10) are properly blocked.
+  - **New**: DNS rebinding prevention ensures resolved IP is pinned for transport.
+  - **New**: validate_provider_url() returns both cleaned URL and resolved IP for secure connections.
 - HTTP request parsing errors:
   - Remove conflicting Content-Length and Transfer-Encoding headers.
   - Ensure chunked requests use proper Transfer-Encoding: chunked header.
@@ -743,13 +774,13 @@ URLV --> CFG
   - Verify SpooledTemporaryFile is properly managing memory vs disk storage.
   - Check that replay mechanism preserves request body for downstream handlers.
 
-**Updated** Added troubleshooting guidance for enhanced CSRF protection, SSRF protection, HTTP request parsing, and information disclosure controls.
+**Updated** Added troubleshooting guidance for enhanced CSRF protection, **enhanced SSRF protection with IPv6 support and DNS rebinding prevention**, HTTP request parsing, and information disclosure controls.
 
 **Section sources**
 - [config.py:22-31](file://safe4ai-pilot/app/config.py#L22-L31)
 - [router.py:53-82](file://safe4ai-pilot/app/auth/router.py#L53-L82)
 - [main.py:142-167](file://safe4ai-pilot/app/main.py#L142-L167)
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
 - [app_config_store.py:32-38](file://safe4ai-pilot/app/services/app_config_store.py#L32-L38)
 - [test_auth.py:119-141](file://safe4ai-pilot/tests/test_auth.py#L119-L141)
 - [upload_validator.py:39-68](file://safe4ai-pilot/app/security/upload_validator.py#L39-L68)
@@ -757,9 +788,9 @@ URLV --> CFG
 - [test_security_headers.py:113-179](file://safe4ai-pilot/tests/test_security_headers.py#L113-L179)
 
 ## Conclusion
-The system implements layered security through robust authentication, input/output safeguards, upload validation, global security headers, CORS, rate limiting, and comprehensive CSRF protection. The enhanced request handling now features chunked processing with SpooledTemporaryFile for large uploads, providing memory-efficient processing while preserving streaming capabilities. The new CSRF protection middleware implements mandatory double-submit verification with secure token comparison for all unsafe HTTP methods, requiring csrf_token cookies regardless of authentication state. The new SSRF protection system validates provider base URLs against comprehensive IP range blocking, preventing server-side request forgery attacks. Enhanced HTTP request parsing prevents ambiguous body framing attacks by explicitly detecting CL/TE header conflicts. Information disclosure controls sanitize health endpoint responses and error messages to prevent sensitive data leakage. Operators should configure secrets and origins carefully, monitor audit logs, adjust rate limits according to deployment needs, and tune upload size limits based on system capacity. These controls collectively mitigate common threats such as credential theft, prompt injection, hallucinated PII, excessive resource consumption, memory exhaustion during large file uploads, cross-site request forgery, unauthorized access to sensitive configuration data, server-side request forgery attacks, and information disclosure vulnerabilities.
+The system implements layered security through robust authentication, input/output safeguards, upload validation, global security headers, CORS, rate limiting, and comprehensive CSRF protection. The enhanced request handling now features chunked processing with SpooledTemporaryFile for large uploads, providing memory-efficient processing while preserving streaming capabilities. The new CSRF protection middleware implements mandatory double-submit verification with secure token comparison for all unsafe HTTP methods, requiring csrf_token cookies regardless of authentication state. **The new SSRF protection system validates provider base URLs against comprehensive IP range blocking, preventing server-side request forgery attacks with IPv6 support and DNS rebinding prevention, now returning both cleaned URL and resolved IP for secure connections.** Enhanced HTTP request parsing prevents ambiguous body framing attacks by explicitly detecting CL/TE header conflicts. Information disclosure controls sanitize health endpoint responses and error messages to prevent sensitive data leakage. Operators should configure secrets and origins carefully, monitor audit logs, adjust rate limits according to deployment needs, and tune upload size limits based on system capacity. These controls collectively mitigate common threats such as credential theft, prompt injection, hallucinated PII, excessive resource consumption, memory exhaustion during large file uploads, cross-site request forgery, unauthorized access to sensitive configuration data, **server-side request forgery attacks with enhanced IPv6 support**, and information disclosure vulnerabilities.
 
-**Updated** Enhanced conclusion reflects the new CSRF protection capabilities for all unsafe methods, comprehensive SSRF protection system, HTTP request parsing improvements, and information disclosure controls.
+**Updated** Enhanced conclusion reflects the new CSRF protection capabilities for all unsafe methods, **comprehensive SSRF protection system with IPv6 support and DNS rebinding prevention**, HTTP request parsing improvements, and information disclosure controls.
 
 ## Appendices
 
@@ -780,23 +811,25 @@ The system implements layered security through robust authentication, input/outp
   - Secure constant-time comparison prevents timing attacks.
   - Origin validation for login endpoint prevents cross-origin CSRF.
   - Pre-login CSRF tokens generated via GET /auth/csrf with 5-minute TTL.
-- **Updated** SSRF protection:
-  - Provider base URLs validated against private/reserved IP ranges.
-  - Only http and https schemes allowed.
-  - Hostname resolution verified before allowing connections.
-- **Updated** HTTP request parsing:
+- **Enhanced SSRF protection**:
+  - **Provider base URLs validated against private/reserved IP ranges including IPv6 addresses**.
+  - **Only http and https schemes allowed**.
+  - **Hostname resolution verified before allowing connections**.
+  - **validate_provider_url() returns (cleaned_url, resolved_ip) for secure connections**.
+  - **DNS rebinding prevention ensures resolved IP is pinned for transport**.
+- **Enhanced HTTP request parsing**:
   - Explicit rejection of ambiguous CL/TE header combinations.
   - Safe body replay prevents monkey-patching vulnerabilities.
   - Information disclosure controls sanitize responses.
 
-**Updated** Added configuration examples for enhanced CSRF protection, SSRF protection, HTTP request parsing, and information disclosure controls.
+**Updated** Added configuration examples for enhanced CSRF protection, **enhanced SSRF protection with IPv6 support and DNS rebinding prevention**, HTTP request parsing, and information disclosure controls.
 
 **Section sources**
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [router.py:96-133](file://safe4ai-pilot/app/auth/router.py#L96-L133)
 - [main.py:105-115](file://safe4ai-pilot/app/main.py#L105-L115)
 - [main.py:142-167](file://safe4ai-pilot/app/main.py#L142-L167)
-- [url_validator.py:26-55](file://safe4ai-pilot/app/security/url_validator.py#L26-L55)
+- [url_validator.py:26-75](file://safe4ai-pilot/app/security/url_validator.py#L26-L75)
 - [app_config_store.py:12-25](file://safe4ai-pilot/app/services/app_config_store.py#L12-L25)
 
 ### Compliance and Controls Checklist
@@ -806,12 +839,12 @@ The system implements layered security through robust authentication, input/outp
 - Upload security: Extension whitelist, declared and magic-byte MIME checks, size limit, UUID-based filenames.
 - Authentication: bcrypt password hashing, JWT HS256 with expiry, role-based access, brute-force protection.
 - CSRF protection: Double-submit verification for all unsafe methods, secure token comparison, origin validation, pre-login token generation.
-- **Updated** SSRF protection: URL validation against private/reserved IP ranges, scheme restriction, hostname resolution.
-- **Updated** HTTP request parsing: CL/TE conflict detection, safe body replay, information disclosure controls.
+- **Enhanced SSRF protection**: URL validation against private/reserved IP ranges including IPv6, scheme restriction, hostname resolution, DNS rebinding prevention.
+- **Enhanced HTTP request parsing**: CL/TE conflict detection, safe body replay, information disclosure controls.
 - Provider API key encryption: Fernet cryptographic primitives, at-rest data protection.
 - Enhanced request processing: Memory-efficient chunked uploads, automatic size monitoring, streaming preservation.
 
-**Updated** Added compliance controls for enhanced CSRF protection, SSRF protection, HTTP request parsing, and information disclosure controls.
+**Updated** Added compliance controls for enhanced CSRF protection, **enhanced SSRF protection with IPv6 support and DNS rebinding prevention**, HTTP request parsing, and information disclosure controls.
 
 **Section sources**
 - [safe4ai-implementation-plan.md:485-517](file://safe4ai-implementation-plan.md#L485-L517)

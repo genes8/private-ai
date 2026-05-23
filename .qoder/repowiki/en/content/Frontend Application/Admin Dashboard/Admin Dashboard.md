@@ -13,6 +13,7 @@
 - [AdminDocs.tsx](file://design/components/AdminDocs.tsx)
 - [AdminFeedback.tsx](file://design/components/AdminFeedback.tsx)
 - [AdminStats.tsx](file://design/components/AdminStats.tsx)
+- [AdminShell.tsx](file://design/components/AdminShell.tsx)
 - [Sparkline.tsx](file://safe4ai-pilot/frontend/src/components/admin/Sparkline.tsx)
 - [DocumentRow.tsx](file://safe4ai-pilot/frontend/src/components/admin/DocumentRow.tsx)
 - [FeedbackListItem.tsx](file://safe4ai-pilot/frontend/src/components/admin/FeedbackListItem.tsx)
@@ -33,11 +34,11 @@
 
 ## Update Summary
 **Changes Made**
-- Redesigned SettingsPage with comprehensive mode selector cards (Local/Hybrid/Cloud)
-- Implemented context-specific model dropdowns with intelligent model selection
-- Enhanced provider configuration management with real-time validation
-- Added custom model management for external providers
-- Improved user experience with visual mode selection and contextual guidance
+- Removed misleading 'Indexing healthy' card from admin sidebar as it was determined to be misleading
+- Updated admin layout to reflect current UI structure without hardcoded document sources section
+- Maintained backend informational source for corpus health monitoring
+- Enhanced navigation patterns with improved feedback badge display
+- Refined real-time data visualization through Sparkline charts
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -46,7 +47,7 @@
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
 6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance considerations)
+7. [Performance Considerations](#performance-considerations)
 8. [Troubleshooting Guide](#troubleshooting-guide)
 9. [Security Considerations](#security-considerations)
 10. [Practical Extensions](#practical-extensions)
@@ -55,7 +56,7 @@
 ## Introduction
 This document describes the enhanced admin dashboard system for the private·ai platform. The system now includes comprehensive administrative interfaces covering monitoring, document management, activity auditing, feedback administration, user management, and system configuration. The dashboard features six core pages: OverviewPage for system monitoring, DocumentsPage for document management, ActivityPage for audit trails, FeedbackPage for user feedback analysis, UsersPage for team administration, and SettingsPage for system configuration. The system leverages a consistent admin layout with navigation patterns, real-time data visualization through Sparkline charts, and robust API integration for all administrative functions.
 
-**Updated** Enhanced with redesigned SettingsPage featuring mode selector cards and context-specific model dropdowns, providing intuitive configuration management for Local, Hybrid, and Cloud provider modes.
+**Updated** Removed misleading 'Indexing healthy' card from admin sidebar and refined admin layout to reflect current UI structure while maintaining backend corpus health monitoring capabilities.
 
 ## Project Structure
 The admin dashboard has been significantly enhanced with new components and pages. The system now includes both frontend-based admin pages and design system components that provide comprehensive administrative capabilities.
@@ -76,6 +77,7 @@ DA["AdminAudit.tsx"]
 DD["AdminDocs.tsx"]
 DF["AdminFeedback.tsx"]
 DS["AdminStats.tsx"]
+AS["AdminShell.tsx"]
 end
 subgraph "Components"
 SL["Sparkline.tsx"]
@@ -115,6 +117,7 @@ OP --> ST
 - [AdminDocs.tsx:5-238](file://design/components/AdminDocs.tsx#L5-L238)
 - [AdminFeedback.tsx:5-215](file://design/components/AdminFeedback.tsx#L5-L215)
 - [AdminStats.tsx:5-258](file://design/components/AdminStats.tsx#L5-L258)
+- [AdminShell.tsx:12-20](file://design/components/AdminShell.tsx#L12-L20)
 
 **Section sources**
 - [AdminLayout.tsx:10-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L10-L19)
@@ -387,7 +390,7 @@ The enhanced SettingsPage includes comprehensive custom model management for ext
 
 **Custom Model Workflow**:
 - Input validation for model identifier format
-- Duplicate prevention in model list
+- duplicate prevention in model list
 - Individual model removal with confirmation
 - Batch persistence to server configuration
 
@@ -575,6 +578,43 @@ Insights --> IndexingAlerts["Indexing Alerts"]
 **Section sources**
 - [AdminStats.tsx:5-258](file://design/components/AdminStats.tsx#L5-L258)
 
+#### AdminShell - Legacy Design Component
+The AdminShell component serves as a legacy design component that provides a comprehensive admin shell structure with navigation and content areas.
+
+**Key Features**:
+- Fixed 212px wide navigation rail
+- Six main navigation items (Overview, Documents, Activity, Feedback, Users, Settings)
+- Static index health indicator with "Indexing healthy" status
+- User profile section with avatar and logout functionality
+- Responsive grid layout with sidebar and main content areas
+
+**Note**: This component appears to be part of the design system and may be superseded by the modern AdminLayout implementation.
+
+```mermaid
+flowchart TD
+AdminShell["AdminShell Component"] --> Rail["212px Navigation Rail"]
+Rail --> NavItems["Six Navigation Items"]
+NavItems --> Overview["Overview"]
+NavItems --> Documents["Documents"]
+NavItems --> Activity["Activity"]
+NavItems --> Feedback["Feedback"]
+NavItems --> Users["Users"]
+NavItems --> Settings["Settings"]
+AdminShell --> Main["Main Content Area"]
+Main --> Header["Header with Title/Subtitle"]
+Main --> Children["Child Components"]
+AdminShell --> Footer["Footer with User Profile"]
+Footer --> HealthCard["Static Index Health Card"]
+HealthCard --> HealthStatus["Indexing Healthy"]
+```
+
+**Diagram sources**
+- [AdminShell.tsx:12-20](file://design/components/AdminShell.tsx#L12-L20)
+- [AdminShell.tsx:66-78](file://design/components/AdminShell.tsx#L66-L78)
+
+**Section sources**
+- [AdminShell.tsx:1-119](file://design/components/AdminShell.tsx#L1-L119)
+
 ## Dependency Analysis
 The enhanced admin system maintains clean dependency relationships with additional components and APIs supporting the expanded functionality.
 
@@ -596,6 +636,7 @@ DA["AdminAudit.tsx"] --> AL
 DD["AdminDocs.tsx"] --> AL
 DF["AdminFeedback.tsx"] --> AL
 DS["AdminStats.tsx"] --> AL
+AS["AdminShell.tsx"] --> AL
 UDM["useDocuments.ts"] --> DOC
 UAS["useAuditStream.ts"] --> AT
 UA["useAuth.ts"] --> AL
@@ -760,12 +801,7 @@ The enhanced admin system provides numerous opportunities for customization and 
 - **New**: Implement provider failover and redundancy mechanisms
 - **New**: Extend custom model management with validation rules
 
-**Section sources**
-- [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
-- [SettingsPage.tsx:176-184](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L176-L184)
-- [admin_routes.py:1095-1137](file://safe4ai-pilot/app/api/admin_routes.py#L1095-L1137)
-
 ## Conclusion
 The enhanced admin dashboard provides comprehensive administrative capabilities through six specialized pages, each designed for specific management tasks. The system combines modern React patterns with robust backend integration, offering real-time monitoring, detailed analytics, and complete configuration management. With enhanced security measures, efficient data management, and extensible architecture, the admin system supports both current operational needs and future growth requirements. The modular design ensures maintainability while the comprehensive feature set addresses all aspects of system administration and monitoring.
 
-**Updated** The redesigned SettingsPage with mode selector cards and context-specific model dropdowns provides an intuitive and powerful configuration interface, making the admin system more user-friendly and capable than ever before. The visual mode selection, intelligent model management, and real-time validation features significantly improve the administrator experience while maintaining the system's robust security and reliability standards.
+**Updated** The removal of the misleading 'Indexing healthy' card from the admin sidebar improves the accuracy of system monitoring while maintaining backend corpus health monitoring capabilities. The enhanced admin layout with improved navigation patterns and real-time data visualization provides administrators with reliable and actionable insights into system performance and document indexing status.

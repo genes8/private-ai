@@ -14,6 +14,13 @@
 - [config.py](file://safe4ai-pilot/app/config.py)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Updated Frontend Implementation section to reflect CustomModelManager component refactoring
+- Updated Provider Modes and Configuration section to reflect SSE completion mode relocation to Retrieval section
+- Added documentation for intersection observer-based navigation synchronization
+- Enhanced user experience features documentation
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [System Architecture](#system-architecture)
@@ -32,6 +39,8 @@ Provider Settings Management is a critical component of the private-ai system th
 
 The system provides three distinct operational modes to balance performance, privacy, and cost considerations while maintaining robust validation and safety mechanisms to prevent misconfiguration that could impact system stability or data privacy.
 
+**Updated** Enhanced with improved user experience features including custom model management and automatic navigation synchronization.
+
 ## System Architecture
 
 The Provider Settings Management system follows a layered architecture with clear separation of concerns between frontend presentation, backend validation, and runtime integration.
@@ -41,6 +50,7 @@ graph TB
 subgraph "Frontend Layer"
 SP[SettingsPage.tsx]
 PSS[ProviderSettingsSection.tsx]
+CM[CustomModelManager]
 API[settings.ts]
 end
 subgraph "Backend Layer"
@@ -55,6 +65,7 @@ CFG[config.py]
 RT[Runtime Components]
 end
 SP --> PSS
+PSS --> CM
 PSS --> API
 API --> SR
 SR --> SS
@@ -67,8 +78,8 @@ PC --> RT
 ```
 
 **Diagram sources**
-- [settings_routes.py:1-344](file://safe4ai-pilot/app/api/settings_routes.py#L1-L344)
-- [settings_service.py:1-414](file://safe4ai-pilot/app/services/settings_service.py#L1-L414)
+- [settings_routes.py:1-354](file://safe4ai-pilot/app/api/settings_routes.py#L1-L354)
+- [settings_service.py:1-415](file://safe4ai-pilot/app/services/settings_service.py#L1-L415)
 - [provider_settings.py:1-225](file://safe4ai-pilot/app/services/provider_settings.py#L1-L225)
 
 ## Provider Modes and Configuration
@@ -115,7 +126,7 @@ ValidateCloud --> ApplyCloud[Apply Configuration]
 - [settings_service.py:138-164](file://safe4ai-pilot/app/services/settings_service.py#L138-L164)
 
 **Section sources**
-- [settings_routes.py:17-344](file://safe4ai-pilot/app/api/settings_routes.py#L17-L344)
+- [settings_routes.py:17-354](file://safe4ai-pilot/app/api/settings_routes.py#L17-L354)
 - [settings_service.py:38-66](file://safe4ai-pilot/app/services/settings_service.py#L38-L66)
 
 ## Backend Implementation
@@ -149,7 +160,7 @@ Route-->>Client : Updated settings
 
 **Diagram sources**
 - [settings_routes.py:227-286](file://safe4ai-pilot/app/api/settings_routes.py#L227-L286)
-- [settings_service.py:138-413](file://safe4ai-pilot/app/services/settings_service.py#L138-L413)
+- [settings_service.py:138-415](file://safe4ai-pilot/app/services/settings_service.py#L138-L415)
 
 ### Service Layer Logic
 
@@ -191,12 +202,12 @@ ProviderSettings --> ProviderPatch : creates
 
 **Section sources**
 - [settings_routes.py:227-286](file://safe4ai-pilot/app/api/settings_routes.py#L227-L286)
-- [settings_service.py:138-413](file://safe4ai-pilot/app/services/settings_service.py#L138-L413)
+- [settings_service.py:138-415](file://safe4ai-pilot/app/services/settings_service.py#L138-L415)
 - [provider_settings.py:35-225](file://safe4ai-pilot/app/services/provider_settings.py#L35-L225)
 
 ## Frontend Implementation
 
-The frontend provides an intuitive administrative interface for managing provider settings with real-time validation and feedback.
+The frontend provides an intuitive administrative interface for managing provider settings with real-time validation and feedback, enhanced with improved user experience features.
 
 ### Settings Page Architecture
 
@@ -205,22 +216,64 @@ graph LR
 SP[SettingsPage.tsx] --> PSS[ProviderSettingsSection.tsx]
 SP --> Models[Models Section]
 SP --> Retrieval[Retrieval Section]
+SP --> Sources[Sources Section]
 SP --> Security[Security Section]
 SP --> Cost[Cost Ceiling Section]
 PSS --> ModeCards[Mode Selection Cards]
 PSS --> ConfigInputs[Configuration Inputs]
 PSS --> TestButton[Test Connection Button]
+PSS --> CustomModelManager[CustomModelManager Component]
 ModeCards --> LocalMode[Local Mode UI]
 ModeCards --> HybridMode[Hybrid Mode UI]
 ModeCards --> CloudMode[Cloud Mode UI]
 ConfigInputs --> ModelSelect[Model Selection Dropdowns]
 ConfigInputs --> TextInput[Text Input Fields]
 ConfigInputs --> PasswordInput[Password Input Fields]
+CustomModelManager --> CustomModelInput[Custom Model Input]
+CustomModelManager --> CustomModelList[Custom Model List]
 ```
 
 **Diagram sources**
 - [SettingsPage.tsx:92-547](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L92-L547)
-- [ProviderSettingsSection.tsx:35-270](file://safe4ai-pilot/frontend/src/components/admin/ProviderSettingsSection.tsx#L35-L270)
+- [ProviderSettingsSection.tsx:33-294](file://safe4ai-pilot/frontend/src/components/admin/ProviderSettingsSection.tsx#L33-L294)
+
+### Enhanced User Experience Features
+
+**Updated** The frontend now includes several enhanced user experience features:
+
+#### Intersection Observer-Based Navigation Synchronization
+The SettingsPage implements an intersection observer that automatically synchronizes the active navigation section with the user's scroll position:
+
+```mermaid
+sequenceDiagram
+participant User as "User Scroll"
+participant Observer as "IntersectionObserver"
+participant Nav as "Navigation"
+participant Section as "Active Section"
+User->>Observer : Scroll event
+Observer->>Observer : Check element intersections
+Observer->>Nav : Update active section
+Nav->>Section : Highlight active section
+Section->>User : Visual feedback
+```
+
+**Diagram sources**
+- [SettingsPage.tsx:269-290](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L269-L290)
+
+#### Custom Model Manager Component Refactoring
+The CustomModelManager component has been refactored into a separate, reusable component within ProviderSettingsSection:
+
+- **Custom Model Input**: Allows adding custom model names not present in the dropdown
+- **Model List Management**: Provides visual chips for managing custom models
+- **Real-time Validation**: Prevents duplicate model entries
+- **Integration with Provider Settings**: Seamlessly integrated into provider configuration flows
+
+#### SSE Completion Mode Relocation
+The SSE completion mode setting has been moved from the Provider section to the Retrieval section for better logical grouping:
+
+- **Location**: Now appears in the Retrieval section alongside other retrieval parameters
+- **Functionality**: Controls streaming completion behavior (strict vs async)
+- **Performance Impact**: Strict mode waits for persistence before sending completion, async mode prioritizes lower latency
 
 ### Real-time Validation and Feedback
 
@@ -230,10 +283,11 @@ The frontend implements sophisticated validation and user experience features:
 - **Real-time validation**: Immediate feedback on configuration errors
 - **Connection testing**: Built-in cloud provider connectivity verification
 - **Model availability**: Dynamic model lists based on provider capabilities
+- **Custom model management**: Enhanced model configuration with custom model support
 
 **Section sources**
 - [SettingsPage.tsx:92-547](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L92-L547)
-- [ProviderSettingsSection.tsx:35-270](file://safe4ai-pilot/frontend/src/components/admin/ProviderSettingsSection.tsx#L35-L270)
+- [ProviderSettingsSection.tsx:33-294](file://safe4ai-pilot/frontend/src/components/admin/ProviderSettingsSection.tsx#L33-L294)
 - [settings.ts:8-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L8-L103)
 
 ## Runtime Integration
@@ -329,7 +383,7 @@ The system provides comprehensive error handling with clear diagnostic informati
 - **Audit Logging**: All configuration changes are logged for compliance tracking
 
 **Section sources**
-- [settings_routes.py:289-343](file://safe4ai-pilot/app/api/settings_routes.py#L289-L343)
+- [settings_routes.py:289-354](file://safe4ai-pilot/app/api/settings_routes.py#L289-L354)
 - [settings_service.py:171-251](file://safe4ai-pilot/app/services/settings_service.py#L171-L251)
 
 ## Best Practices and Guidelines
@@ -407,5 +461,5 @@ The system provides comprehensive error handling with clear diagnostic informati
 - **Resource Allocation**: Ensure adequate resources for selected provider mode
 
 **Section sources**
-- [settings_routes.py:289-343](file://safe4ai-pilot/app/api/settings_routes.py#L289-L343)
+- [settings_routes.py:289-354](file://safe4ai-pilot/app/api/settings_routes.py#L289-L354)
 - [settings_service.py:171-251](file://safe4ai-pilot/app/services/settings_service.py#L171-L251)
