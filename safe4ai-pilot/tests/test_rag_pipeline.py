@@ -135,7 +135,7 @@ async def test_ingest_pdf_native_text() -> None:
     pipeline._qdrant = MagicMock()
 
     with (
-        patch("app.services.rag_pipeline.PdfReader", return_value=mock_reader),
+        patch("app.services.document_parser.PdfReader", return_value=mock_reader),
         patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
         patch.object(pipeline, "_retriever") as mock_retriever,
     ):
@@ -176,9 +176,9 @@ async def test_ingest_triggers_needs_review() -> None:
     fake_image = MagicMock()
 
     with (
-        patch("app.services.rag_pipeline.PdfReader", return_value=mock_reader),
-        patch("app.services.rag_pipeline.convert_from_path", return_value=[fake_image]),
-        patch.object(pipeline, "_ocr_page", new=AsyncMock(return_value=("ocr text", "low"))),
+        patch("app.services.document_parser.PdfReader", return_value=mock_reader),
+        patch("app.services.document_parser.convert_from_path", return_value=[fake_image]),
+        patch("app.services.document_parser.ocr_page", new=AsyncMock(return_value=("ocr text", "low"))),
         patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
         patch.object(pipeline, "_retriever") as mock_retriever,
     ):
@@ -214,9 +214,9 @@ async def test_ingest_sets_ocr_quality_in_qdrant_payload() -> None:
     fake_image = MagicMock()
 
     with (
-        patch("app.services.rag_pipeline.PdfReader", return_value=mock_reader),
-        patch("app.services.rag_pipeline.convert_from_path", return_value=[fake_image]),
-        patch.object(pipeline, "_ocr_page", new=AsyncMock(return_value=("ocr text", "medium"))),
+        patch("app.services.document_parser.PdfReader", return_value=mock_reader),
+        patch("app.services.document_parser.convert_from_path", return_value=[fake_image]),
+        patch("app.services.document_parser.ocr_page", new=AsyncMock(return_value=("ocr text", "medium"))),
         patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
         patch.object(pipeline, "_retriever") as mock_retriever,
     ):
@@ -248,7 +248,7 @@ async def test_ingest_native_pdf_page_gets_native_quality() -> None:
     db.get.return_value = MagicMock()
 
     with (
-        patch("app.services.rag_pipeline.PdfReader", return_value=mock_reader),
+        patch("app.services.document_parser.PdfReader", return_value=mock_reader),
         patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
         patch.object(pipeline, "_retriever") as mock_retriever,
     ):
