@@ -9,6 +9,7 @@ import FeedbackPage from "./pages/admin/FeedbackPage";
 import OverviewPage from "./pages/admin/OverviewPage";
 import UsersPage from "./pages/admin/UsersPage";
 import SettingsPage from "./pages/admin/SettingsPage";
+import UserSettingsPage from "./pages/SettingsPage";
 
 function AuthLoading() {
   return (
@@ -101,6 +102,15 @@ export default function App() {
           <RequireAdmin>
             <ErrorBoundary><SettingsPage /></ErrorBoundary>
           </RequireAdmin>
+        }
+      />
+
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <ErrorBoundary><UserSettingsPage /></ErrorBoundary>
+          </RequireAuth>
         }
       />
 

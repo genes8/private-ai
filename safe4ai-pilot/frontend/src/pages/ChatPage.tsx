@@ -89,6 +89,9 @@ export default function ChatPage() {
                 Generating…
               </span>
             )}
+            <Link to="/settings">
+              <Button variant="ghost" size="sm" iconLeft={<Settings size={13} />}>Settings</Button>
+            </Link>
             {isAdmin && (
               <Link to="/admin">
                 <Button variant="ghost" size="sm" iconLeft={<Settings size={13} />}>Admin</Button>
