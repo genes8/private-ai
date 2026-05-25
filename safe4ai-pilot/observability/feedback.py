@@ -4,9 +4,10 @@ import uuid
 from typing import Any
 
 import structlog
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.db.models import FeedbackRating, QueryFeedback, User
+from app.db.models import AuditLog, FeedbackRating, QueryFeedback, User
 
 logger = structlog.get_logger(__name__)
 
@@ -75,3 +76,39 @@ class FeedbackStore:
             }
             for r in rows
         ]
+
+    def count_negative(self) -> int:
+        """Return the total count of negative feedback entries."""
+        return int(
+            self._db.query(func.count(QueryFeedback.id))
+            .filter(QueryFeedback.rating == FeedbackRating.negative)
+            .scalar()
+            or 0
+        )
+
+    def get_trace(self, feedback_id: str) -> dict[str, Any] | None:
+        """Return audit trace data for a feedback item, or None if not found."""
+        feedback = (
+            self._db.query(QueryFeedback)
+            .filter(QueryFeedback.id == feedback_id)
+            .first()
+        )
+        if feedback is None:
+            return None
+        audit = (
+            self._db.query(AuditLog)
+            .filter(AuditLog.trace_id == feedback.trace_id)
+            .order_by(AuditLog.timestamp.desc())
+            .first()
+        )
+        if audit is None:
+            return {"found": False, "traceId": feedback.trace_id}
+        return {
+            "found": True,
+            "traceId": audit.trace_id,
+            "latencyMs": audit.latency_ms,
+            "modelUsed": audit.model_used,
+            "timestamp": audit.timestamp.isoformat() if audit.timestamp else None,
+            "actionType": audit.action_type,
+            "cacheHit": (audit.response_metadata or {}).get("cache_hit", False),
+        }

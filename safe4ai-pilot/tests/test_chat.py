@@ -150,7 +150,7 @@ def test_chat_rejects_when_daily_cost_ceiling_reached(authed_client: TestClient)
         "app.services.app_config_store.load_app_config",
         return_value={"daily_ceiling_usd": 10, "monthly_ceiling_usd": 500},
     ), patch(
-        "app.api.chat_routes.CostTracker.get_stats",
+        "app.services.cost_service.CostTracker.get_stats",
         return_value={"total_cost_usd": 10.0, "runs_count": 1, "by_day": []},
     ):
         response = authed_client.post("/chat", json={"question": "What is the answer?"})
@@ -164,7 +164,7 @@ def test_chat_stream_rejects_when_monthly_cost_ceiling_reached(authed_client: Te
         "app.services.app_config_store.load_app_config",
         return_value={"daily_ceiling_usd": 50, "monthly_ceiling_usd": 100},
     ), patch(
-        "app.api.chat_routes.CostTracker.get_stats",
+        "app.services.cost_service.CostTracker.get_stats",
         side_effect=[
             {"total_cost_usd": 10.0, "runs_count": 1, "by_day": []},
             {"total_cost_usd": 100.0, "runs_count": 20, "by_day": []},
@@ -229,13 +229,13 @@ def test_chat_rejects_when_projected_request_cost_exceeds_daily_ceiling(
         "app.services.app_config_store.load_app_config",
         return_value={"daily_ceiling_usd": 1.0, "monthly_ceiling_usd": 500},
     ), patch(
-        "app.api.chat_routes.CostTracker.get_stats",
+        "app.services.cost_service.CostTracker.get_stats",
         side_effect=[
             {"total_cost_usd": 0.95, "runs_count": 1, "by_day": []},
             {"total_cost_usd": 10.0, "runs_count": 1, "by_day": []},
         ],
     ), patch(
-        "app.api.chat_routes.estimate_tokens",
+        "app.services.cost_service.estimate_tokens",
         side_effect=[40, 40],
     ), patch("app.api.chat_routes.settings.cost_per_1k_tokens", 1.0):
         response = authed_client.post("/chat", json={"question": "Will this fit?"})

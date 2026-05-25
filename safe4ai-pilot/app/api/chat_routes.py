@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -25,79 +24,9 @@ from app.db.models import User
 from app.models import Citation, Message, PrivateAIState
 from app.services.chat_finalizer import finalize_chat_run
 from app.services.conversation import ConversationManager
-from app.services.provider_clients import ProviderUsage
+from app.services.cost_service import CostCeilingExceeded, check_cost_ceiling, usage_or_estimate
 from app.services.runtime_config import load_runtime_config
-from observability.cost_tracker import CostTracker
 logger = structlog.get_logger(__name__)
-
-
-def estimate_tokens(text: str) -> int:
-    """Approximate token count with a chars-per-token heuristic."""
-    stripped = text.strip()
-    if not stripped:
-        return 0
-    return max(1, math.ceil(len(stripped) / 4))
-
-
-def _usage_or_estimate(question: str, answer: str, provider_usage: ProviderUsage | None) -> ProviderUsage:
-    if provider_usage is not None:
-        return provider_usage
-    prompt_tokens = estimate_tokens(question)
-    completion_tokens = estimate_tokens(answer)
-    return ProviderUsage(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
-        source="estimated",
-    )
-
-
-
-def _check_cost_ceiling(db: Session, *, projected_question: str | None = None) -> None:
-    """Raise 429 if the daily or monthly cost ceiling has been reached."""
-    try:
-        from app.services.app_config_store import load_app_config
-        db_overrides = load_app_config(db)
-        daily_ceiling = float(db_overrides.get("daily_ceiling_usd", 50))
-        monthly_ceiling = float(db_overrides.get("monthly_ceiling_usd", 500))
-        tracker = CostTracker(settings.cost_per_1k_tokens)
-        projected_cost = 0.0
-        if projected_question:
-            prompt_tokens = estimate_tokens(projected_question)
-            completion_tokens = max(estimate_tokens(projected_question), 256)
-            projected_cost = tracker.calculate(prompt_tokens, completion_tokens)
-        today_cost = tracker.get_stats(db, days=1)["total_cost_usd"]
-        if today_cost >= daily_ceiling:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Daily cost ceiling reached (${today_cost:.2f} / ${daily_ceiling:.2f})",
-            )
-        if projected_cost and (today_cost + projected_cost) > daily_ceiling:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    "Projected request would exceed daily cost ceiling "
-                    f"(${today_cost + projected_cost:.2f} / ${daily_ceiling:.2f})"
-                ),
-            )
-        month_cost = tracker.get_stats(db, days=30)["total_cost_usd"]
-        if month_cost >= monthly_ceiling:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Monthly cost ceiling reached (${month_cost:.2f} / ${monthly_ceiling:.2f})",
-            )
-        if projected_cost and (month_cost + projected_cost) > monthly_ceiling:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    "Projected request would exceed monthly cost ceiling "
-                    f"(${month_cost + projected_cost:.2f} / ${monthly_ceiling:.2f})"
-                ),
-            )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.warning("cost_ceiling_check_failed", error=str(exc))
 
 
 router = APIRouter(tags=["chat"])
@@ -207,7 +136,10 @@ async def chat(
     if not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
 
-    _check_cost_ceiling(db, projected_question=body.question)
+    try:
+        check_cost_ceiling(db, projected_question=body.question)
+    except CostCeilingExceeded as exc:
+        raise HTTPException(status_code=429, detail=exc.detail) from exc
 
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
@@ -233,7 +165,7 @@ async def chat(
         _chat_model_name = runtime_cfg.chat_model
     except Exception:
         _chat_model_name = settings.ollama_model
-    usage = _usage_or_estimate(body.question, final.draft_answer or "", final.provider_usage)
+    usage = usage_or_estimate(body.question, final.draft_answer or "", final.provider_usage)
     try:
         finalize_chat_run(
             db=db,
@@ -273,7 +205,10 @@ async def chat_stream(
     if not body.question.strip():
         raise HTTPException(status_code=422, detail="Question cannot be empty")
 
-    _check_cost_ceiling(db, projected_question=body.question)
+    try:
+        check_cost_ceiling(db, projected_question=body.question)
+    except CostCeilingExceeded as exc:
+        raise HTTPException(status_code=429, detail=exc.detail) from exc
 
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
@@ -348,7 +283,7 @@ async def chat_stream(
 
         latency_ms = int((time.monotonic() - started_at) * 1000)
 
-        usage = _usage_or_estimate(
+        usage = usage_or_estimate(
             body.question,
             final.draft_answer or "",
             final.provider_usage,
