@@ -14,7 +14,6 @@ from typing import Any
 
 import httpx
 import structlog
-from fastapi import HTTPException
 from pydantic import BaseModel
 from qdrant_client import QdrantClient as _QdrantClient
 from sqlalchemy import func
@@ -31,6 +30,7 @@ from app.services.provider_settings import (
     validate_hybrid_embedding,
 )
 from app.services.runtime_config import expected_vector_size
+from app.services.settings_exceptions import EmbeddingDimensionConflict, SettingsValidationError
 from app.security.url_validator import validate_provider_url
 from observability.cost_tracker import CostTracker
 
@@ -80,9 +80,9 @@ class PatchSettingsRequest(BaseModel):
 def validate_model_identifier(value: str, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
-        raise HTTPException(status_code=422, detail=f"{field_name} cannot be empty")
+        raise SettingsValidationError(f"{field_name} cannot be empty")
     if len(normalized) > 200:
-        raise HTTPException(status_code=422, detail=f"{field_name} is too long")
+        raise SettingsValidationError(f"{field_name} is too long")
     return normalized
 
 
@@ -92,7 +92,7 @@ def fetch_ollama_model_names() -> set[str]:
             resp = client.get(f"{settings.ollama_url}/api/tags")
             resp.raise_for_status()
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail="Unable to verify model availability") from exc
+        raise SettingsValidationError("Unable to verify model availability") from exc
 
     data = resp.json()
     models = data.get("models", [])
@@ -107,7 +107,7 @@ def fetch_ollama_model_names() -> set[str]:
 def _validate_ollama_model_exists(value: str, field_name: str, available_models: set[str]) -> str:
     normalized = validate_model_identifier(value, field_name)
     if normalized not in available_models:
-        raise HTTPException(status_code=422, detail=f"{field_name} is not available in Ollama")
+        raise SettingsValidationError(f"{field_name} is not available in Ollama")
     return normalized
 
 
@@ -125,15 +125,12 @@ def _validate_embedding_model_dimension(model: str) -> None:
             else vectors_cfg.size  # type: ignore[union-attr]
         )
         if actual != expected:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Embedding model '{model}' requires vector size {expected} but "
-                    f"the Qdrant collection currently has size {actual}. "
-                    "Drop and recreate the collection before switching embedding models."
-                ),
+            raise EmbeddingDimensionConflict(
+                f"Embedding model '{model}' requires vector size {expected} but "
+                f"the Qdrant collection currently has size {actual}. "
+                "Drop and recreate the collection before switching embedding models."
             )
-    except HTTPException:
+    except EmbeddingDimensionConflict:
         raise
     except Exception:  # noqa: S110
         pass  # Qdrant unreachable is non-fatal — startup guard will catch it
@@ -192,13 +189,10 @@ def probe_provider_prerequisites(
     if effective_provider == "openai_compatible" and effective_embedding_source == "ollama":
         try:
             available_ollama = fetch_ollama_model_names()
-        except HTTPException:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Hybrid mode requires local Ollama for embeddings but Ollama is not reachable. "
-                    "Start Ollama first, then switch to Hybrid."
-                ),
+        except SettingsValidationError:
+            raise SettingsValidationError(
+                "Hybrid mode requires local Ollama for embeddings but Ollama is not reachable. "
+                "Start Ollama first, then switch to Hybrid."
             )
         fallback = validate_hybrid_embedding(
             available_ollama=available_ollama,
@@ -225,13 +219,10 @@ def probe_provider_prerequisites(
     if body.providerMode is not None and effective_provider == "ollama":
         try:
             available_for_local = fetch_ollama_model_names()
-        except HTTPException:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Local mode requires Ollama but it is not reachable. "
-                    "Start Ollama first, then switch to Local."
-                ),
+        except SettingsValidationError:
+            raise SettingsValidationError(
+                "Local mode requires Ollama but it is not reachable. "
+                "Start Ollama first, then switch to Local."
             )
         probe_updates.update(
             sanitize_ollama_role_models(
@@ -322,59 +313,51 @@ def collect_field_updates(
         updates["reranker_model"] = validate_model_identifier(body.rerankerModel, "rerankerModel")
     if body.retrievalK is not None:
         if body.retrievalK < 1 or body.retrievalK > 32:
-            raise HTTPException(status_code=422, detail="retrievalK must be between 1 and 32")
+            raise SettingsValidationError("retrievalK must be between 1 and 32")
         updates["retrieval_k"] = body.retrievalK
     if body.scoreFloor is not None:
         if body.scoreFloor < 0 or body.scoreFloor > 1:
-            raise HTTPException(status_code=422, detail="scoreFloor must be between 0 and 1")
+            raise SettingsValidationError("scoreFloor must be between 0 and 1")
         updates["score_floor"] = body.scoreFloor
     if body.chunkSize is not None:
         if body.chunkSize < 128 or body.chunkSize > 2048:
-            raise HTTPException(status_code=422, detail="chunkSize must be between 128 and 2048")
+            raise SettingsValidationError("chunkSize must be between 128 and 2048")
         current_overlap = int(current_config.get("chunk_overlap", 150))
         if body.chunkOverlap is None and current_overlap >= body.chunkSize:
-            raise HTTPException(status_code=422, detail="chunkSize must be larger than chunkOverlap")
+            raise SettingsValidationError("chunkSize must be larger than chunkOverlap")
         updates["chunk_size"] = body.chunkSize
     if body.chunkOverlap is not None:
         if body.chunkOverlap < 0 or body.chunkOverlap > 512:
-            raise HTTPException(status_code=422, detail="chunkOverlap must be between 0 and 512")
+            raise SettingsValidationError("chunkOverlap must be between 0 and 512")
         current_chunk_size = int(current_config.get("chunk_size", 800))
         effective_chunk_size = body.chunkSize if body.chunkSize is not None else current_chunk_size
         if body.chunkOverlap >= effective_chunk_size:
-            raise HTTPException(status_code=422, detail="chunkOverlap must be smaller than chunkSize")
+            raise SettingsValidationError("chunkOverlap must be smaller than chunkSize")
         updates["chunk_overlap"] = body.chunkOverlap
     if body.ssoOnly is not None:
         updates["sso_only"] = body.ssoOnly
     if body.sessionHours is not None:
         if body.sessionHours < 1 or body.sessionHours > 720:
-            raise HTTPException(status_code=422, detail="sessionHours must be between 1 and 720")
+            raise SettingsValidationError("sessionHours must be between 1 and 720")
         updates["session_hours"] = body.sessionHours
     if body.auditRetentionDays is not None:
         if body.auditRetentionDays < 30 or body.auditRetentionDays > 3650:
-            raise HTTPException(
-                status_code=422, detail="auditRetentionDays must be between 30 and 3650"
-            )
+            raise SettingsValidationError("auditRetentionDays must be between 30 and 3650")
         updates["audit_retention_days"] = body.auditRetentionDays
     if body.redactPII is not None:
         updates["redact_pii"] = body.redactPII
     if body.dailyCeilingUsd is not None:
         if body.dailyCeilingUsd < 1 or body.dailyCeilingUsd > 10000:
-            raise HTTPException(
-                status_code=422, detail="dailyCeilingUsd must be between 1 and 10000"
-            )
+            raise SettingsValidationError("dailyCeilingUsd must be between 1 and 10000")
         updates["daily_ceiling_usd"] = body.dailyCeilingUsd
     if body.monthlyCeilingUsd is not None:
         if body.monthlyCeilingUsd < 30 or body.monthlyCeilingUsd > 300000:
-            raise HTTPException(
-                status_code=422, detail="monthlyCeilingUsd must be between 30 and 300000"
-            )
+            raise SettingsValidationError("monthlyCeilingUsd must be between 30 and 300000")
         updates["monthly_ceiling_usd"] = body.monthlyCeilingUsd
 
     if body.providerType is not None:
         if body.providerType not in {"ollama", "openai_compatible"}:
-            raise HTTPException(
-                status_code=422, detail="providerType must be ollama or openai_compatible"
-            )
+            raise SettingsValidationError("providerType must be ollama or openai_compatible")
         updates["provider_type"] = body.providerType
     if body.providerBaseUrl is not None:
         clean_url, resolved_ip = validate_provider_url(body.providerBaseUrl)
@@ -404,20 +387,18 @@ def collect_field_updates(
             updates["vision_model"] = provider_vision_model
     if body.sseDoneMode is not None:
         if body.sseDoneMode not in {"strict", "async"}:
-            raise HTTPException(status_code=422, detail="sseDoneMode must be strict or async")
+            raise SettingsValidationError("sseDoneMode must be strict or async")
         updates["sse_done_mode"] = body.sseDoneMode
     if body.providerCustomModels is not None:
         if len(body.providerCustomModels) > 50:
-            raise HTTPException(status_code=422, detail="Too many custom models (max 50)")
+            raise SettingsValidationError("Too many custom models (max 50)")
         updates["custom_provider_models"] = [
             validate_model_identifier(m, "providerCustomModels")
             for m in body.providerCustomModels
         ]
     if body.embeddingSource is not None:
         if body.embeddingSource not in {"ollama", "provider"}:
-            raise HTTPException(
-                status_code=422, detail="embeddingSource must be ollama or provider"
-            )
+            raise SettingsValidationError("embeddingSource must be ollama or provider")
         updates["embedding_source"] = body.embeddingSource
 
     return updates
@@ -467,7 +448,7 @@ def _get_settings_live_metadata(db: Session) -> tuple[float, list[str], int, lis
     today_cost = CostTracker(settings.cost_per_1k_tokens).get_stats(db, days=1)["total_cost_usd"]
     try:
         available_ollama_models = sorted(fetch_ollama_model_names())
-    except HTTPException:
+    except SettingsValidationError:
         available_ollama_models = []
     doc_count = db.query(func.count(Document.id)).scalar() or 0
 

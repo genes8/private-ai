@@ -15,6 +15,7 @@ from app.services.app_config_store import load_app_config, upsert_app_config
 from app.security.url_validator import validate_provider_url
 from app.services.provider_settings import resolve_provider_config
 from app.services.runtime_config import build_runtime_components
+from app.services.settings_exceptions import EmbeddingDimensionConflict, SettingsValidationError
 from app.services.settings_service import (
     PatchSettingsRequest,
     collect_field_updates,
@@ -54,20 +55,25 @@ def patch_settings(
     """Update mutable application settings stored in the DB."""
     current_config = load_app_config(db)
 
-    # Stage 1: expand mode shorthands, snapshot prev state, derive effective values
-    body, pre_updates, effective_provider, effective_embedding_source, prev_embedding_model, prev_embedding_source = (
-        normalize_patch_request(body, current_config)
-    )
-    updates: dict[str, Any] = dict(pre_updates)
+    try:
+        # Stage 1: expand mode shorthands, snapshot prev state, derive effective values
+        body, pre_updates, effective_provider, effective_embedding_source, prev_embedding_model, prev_embedding_source = (
+            normalize_patch_request(body, current_config)
+        )
+        updates: dict[str, Any] = dict(pre_updates)
 
-    # Stage 2: probe Ollama / cloud reachability, sanitize stale model slots
-    probe_updates, body = probe_provider_prerequisites(
-        body, current_config, effective_provider, effective_embedding_source
-    )
-    updates.update(probe_updates)
+        # Stage 2: probe Ollama / cloud reachability, sanitize stale model slots
+        probe_updates, body = probe_provider_prerequisites(
+            body, current_config, effective_provider, effective_embedding_source
+        )
+        updates.update(probe_updates)
 
-    # Stage 3: validate each field and collect DB updates
-    updates.update(collect_field_updates(body, effective_provider, current_config))
+        # Stage 3: validate each field and collect DB updates
+        updates.update(collect_field_updates(body, effective_provider, current_config))
+    except EmbeddingDimensionConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except SettingsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
 
     # Require API key when switching to openai_compatible
     effective_key = body.providerApiKey or current_config.get("provider_api_key")

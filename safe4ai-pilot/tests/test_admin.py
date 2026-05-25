@@ -718,7 +718,7 @@ class TestSettings:
 
     def test_patch_settings_provider_mode_hybrid_fails_when_ollama_unreachable(self) -> None:
         """PATCH providerMode=hybrid must return 422 when Ollama is not reachable."""
-        from fastapi import HTTPException
+        from app.services.settings_exceptions import SettingsValidationError
 
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
@@ -730,7 +730,7 @@ class TestSettings:
 
         with patch("pathlib.Path.mkdir"), patch(
             "app.services.settings_service.fetch_ollama_model_names",
-            side_effect=HTTPException(status_code=503, detail="Ollama unreachable"),
+            side_effect=SettingsValidationError("Ollama unreachable"),
         ):
             client = _make_test_client(db, admin)
             resp = client.patch("/settings", json={"providerMode": "hybrid"})

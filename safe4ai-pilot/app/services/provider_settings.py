@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import httpx
-from fastapi import HTTPException
 
 from app.config import settings
+from app.services.settings_exceptions import SettingsValidationError
 
 
 @dataclass(frozen=True)
@@ -93,7 +93,7 @@ def expand_provider_mode(
         return ProviderPatch(
             body_overrides={"providerType": "openai_compatible", "embeddingSource": "provider"},
         )
-    raise HTTPException(status_code=422, detail="providerMode must be local, hybrid, or cloud")
+    raise SettingsValidationError("providerMode must be local, hybrid, or cloud")
 
 
 def validate_hybrid_embedding(
@@ -107,19 +107,16 @@ def validate_hybrid_embedding(
 
     Returns a fallback model name if the requested model is unavailable but the
     settings default is.  Returns None when the requested model is already available.
-    Raises HTTPException(422) when neither the requested nor default model is present.
+    Raises SettingsValidationError when neither the requested nor default model is present.
     """
     effective = requested_embedding_model or current_embedding_model
     if effective in available_ollama:
         return None
     if default_embedding_model in available_ollama:
         return default_embedding_model
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            f"Embedding model '{default_embedding_model}' is not available in Ollama. "
-            f"Pull it with: ollama pull {default_embedding_model}"
-        ),
+    raise SettingsValidationError(
+        f"Embedding model '{default_embedding_model}' is not available in Ollama. "
+        f"Pull it with: ollama pull {default_embedding_model}"
     )
 
 
@@ -137,9 +134,8 @@ def _sanitize_model_slot(
     if default in available:
         updates[db_key] = default
         return
-    raise HTTPException(
-        status_code=422,
-        detail=f"'{default}' is not available in Ollama. Pull it with: ollama pull {default}",
+    raise SettingsValidationError(
+        f"'{default}' is not available in Ollama. Pull it with: ollama pull {default}"
     )
 
 
@@ -157,7 +153,7 @@ def sanitize_ollama_role_models(
     local:  generation_model, embedding_model, vision_model
     hybrid: vision_model only (embedding is handled separately by validate_hybrid_embedding)
 
-    Raises HTTPException(422) when a role's default fallback is also absent from Ollama,
+    Raises SettingsValidationError when a role's default fallback is also absent from Ollama,
     so the caller never commits a config the runtime cannot use.
     """
     updates: dict[str, Any] = {}
@@ -187,7 +183,7 @@ def probe_cloud_embeddings(
 ) -> None:
     """Probe the provider's /embeddings endpoint for cloud mode.
 
-    Raises HTTPException(422) on non-200 responses (provider does not support
+    Raises SettingsValidationError on non-200 responses (provider does not support
     embeddings, e.g. DeepSeek) and on network failures (wrong URL, DNS, TLS).
     build_runtime_components() constructs clients without calling /embeddings,
     so a failing probe must be surfaced here — there is no later catch.
@@ -202,23 +198,18 @@ def probe_cloud_embeddings(
                 json={"model": embedding_model, "input": "test"},
             )
         if resp.status_code != 200:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "This provider does not appear to support embeddings "
-                    f"(expected HTTP 200, got {resp.status_code}). "
-                    "Use Hybrid mode instead: cloud chat + local Ollama embeddings."
-                ),
+            raise SettingsValidationError(
+                "This provider does not appear to support embeddings "
+                f"(expected HTTP 200, got {resp.status_code}). "
+                "Use Hybrid mode instead: cloud chat + local Ollama embeddings."
             )
-    except HTTPException:
+    except SettingsValidationError:
         raise
     except httpx.TimeoutException as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Embedding endpoint timed out ({base_url}). Check the URL and try again.",
+        raise SettingsValidationError(
+            f"Embedding endpoint timed out ({base_url}). Check the URL and try again."
         ) from exc
     except Exception as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Could not reach embedding endpoint ({base_url}): {exc}",
+        raise SettingsValidationError(
+            f"Could not reach embedding endpoint ({base_url}): {exc}"
         ) from exc

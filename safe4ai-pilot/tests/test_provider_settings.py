@@ -2,17 +2,17 @@
 
 These tests exercise policy functions directly — no TestClient, no mocked HTTP
 app state required. Each function is a pure helper that returns a dict or raises
-HTTPException, so assertions are straightforward.
+SettingsValidationError, so assertions are straightforward.
 """
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
 
 from app.services.provider_settings import (
     sanitize_ollama_role_models,
     validate_hybrid_embedding,
 )
+from app.services.settings_exceptions import SettingsValidationError
 
 _GEN = "qwen3.5:9b"
 _EMB = "nomic-embed-text"
@@ -83,9 +83,8 @@ def test_sanitize_local_raises_422_when_chat_default_unavailable() -> None:
     cfg = {"generation_model": "deepseek-v4-flash"}
     # Only embedding and vision defaults are available — not the chat default
     available = {_EMB, _VIS}
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(SettingsValidationError) as exc_info:
         sanitize_ollama_role_models("local", cfg, available, **_DEFAULTS)
-    assert exc_info.value.status_code == 422
     assert _GEN in exc_info.value.detail
 
 
@@ -93,9 +92,8 @@ def test_sanitize_local_raises_422_when_embedding_default_unavailable() -> None:
     """Raises 422 when the current embedding model is stale AND the default is also unavailable."""
     cfg = {"generation_model": _GEN, "embedding_model": "text-embedding-3-small"}
     available = {_GEN, _VIS}
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(SettingsValidationError) as exc_info:
         sanitize_ollama_role_models("local", cfg, available, **_DEFAULTS)
-    assert exc_info.value.status_code == 422
     assert _EMB in exc_info.value.detail
 
 
@@ -103,9 +101,8 @@ def test_sanitize_local_raises_422_when_vision_default_unavailable() -> None:
     """Raises 422 when vision model is stale AND the default is also unavailable."""
     cfg = {"generation_model": _GEN, "embedding_model": _EMB, "vision_model": "qwen-vl-plus"}
     available = {_GEN, _EMB}
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(SettingsValidationError) as exc_info:
         sanitize_ollama_role_models("local", cfg, available, **_DEFAULTS)
-    assert exc_info.value.status_code == 422
     assert _VIS in exc_info.value.detail
 
 
@@ -143,9 +140,8 @@ def test_sanitize_hybrid_raises_422_when_vision_default_unavailable() -> None:
     """Hybrid: raises 422 when stale vision model's default is also not in Ollama."""
     cfg = {"embedding_model": _EMB, "vision_model": "qwen-vl-plus"}
     available = {_EMB}  # vision default qwen2.5vl:7b NOT present
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(SettingsValidationError) as exc_info:
         sanitize_ollama_role_models("hybrid", cfg, available, **_DEFAULTS)
-    assert exc_info.value.status_code == 422
     assert _VIS in exc_info.value.detail
 
 
@@ -175,11 +171,10 @@ def test_validate_hybrid_embedding_returns_default_when_requested_unavailable() 
 
 
 def test_validate_hybrid_embedding_raises_when_neither_available() -> None:
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(SettingsValidationError) as exc_info:
         validate_hybrid_embedding(
             available_ollama={"some-other-model"},
             current_embedding_model="text-embedding-3-small",
             requested_embedding_model=None,
             default_embedding_model=_EMB,
         )
-    assert exc_info.value.status_code == 422
