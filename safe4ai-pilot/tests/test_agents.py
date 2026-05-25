@@ -96,6 +96,7 @@ def _build_graph(handler: Any, *, chunks: list[RankedChunk] | None = None) -> An
 
     reranker = MagicMock(spec=Reranker)
     reranker.rerank.return_value = two_chunks
+    reranker.arerank = AsyncMock(return_value=two_chunks)
 
     transport = httpx.MockTransport(handler=handler)
     client = httpx.AsyncClient(transport=transport)
@@ -536,6 +537,7 @@ class TestRuntimeSafety:
         )
         reranker = MagicMock(spec=Reranker)
         reranker.rerank.return_value = retriever.retrieve.return_value
+        reranker.arerank = AsyncMock(return_value=retriever.retrieve.return_value)
 
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport) as client:

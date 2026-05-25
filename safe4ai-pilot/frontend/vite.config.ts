@@ -17,8 +17,9 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      "/auth": { target: API_URL, changeOrigin: true },
-      "/me":    { target: API_URL, changeOrigin: true },
+      "/auth":    { target: API_URL, changeOrigin: true },
+      "/me":      { target: API_URL, changeOrigin: true },
+      "/account": { target: API_URL, changeOrigin: true },
       "/feedback": { target: API_URL, changeOrigin: true },
       "/chat/stream": { target: API_URL, changeOrigin: true },
       "/admin/documents": { target: API_URL, changeOrigin: true, bypass: spaBypass },

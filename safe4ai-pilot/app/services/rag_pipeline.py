@@ -176,7 +176,7 @@ class RagPipeline:
         doc_ids: list[str] | None = None,
     ) -> tuple[str, list[Citation]]:
         chunks = await self._retriever.retrieve(query, doc_ids, collection=collection)
-        ranked: list[RankedChunk] = self._reranker.rerank(query, chunks, top_n=self._rerank_top_n)
+        ranked: list[RankedChunk] = await self._reranker.arerank(query, chunks, top_n=self._rerank_top_n)
 
         if not ranked or max(c.rerank_score for c in ranked) < self._min_rerank_score:
             return _NO_ANSWER, []

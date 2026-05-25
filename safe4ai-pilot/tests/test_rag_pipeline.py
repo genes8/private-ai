@@ -63,6 +63,7 @@ async def test_query_returns_answer_and_citations() -> None:
 
     reranker = MagicMock()
     reranker.rerank.return_value = [_make_ranked_chunk("c1", 0.8)]
+    reranker.arerank = AsyncMock(return_value=reranker.rerank.return_value)
 
     pipeline = _make_pipeline(retriever=retriever, reranker=reranker)
 
@@ -95,6 +96,7 @@ async def test_query_no_answer_fallback() -> None:
     reranker = MagicMock()
     # max rerank_score = 0.3, below 0.45 threshold
     reranker.rerank.return_value = [_make_ranked_chunk("c1", 0.3)]
+    reranker.arerank = AsyncMock(return_value=reranker.rerank.return_value)
 
     pipeline = _make_pipeline(retriever=retriever, reranker=reranker)
 

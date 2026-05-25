@@ -54,6 +54,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _app.state.ingestion_tasks = set()
 
     asyncio.create_task(_prewarm_provider(runtime))
+    asyncio.create_task(_rebuild_bm25(retriever))
     schedule_cleanup(_app)
     yield
 
@@ -168,6 +169,15 @@ app.include_router(review_router)
 app.include_router(settings_router)
 app.include_router(account_router)
 app.include_router(me_router)
+
+
+async def _rebuild_bm25(retriever: Any) -> None:
+    """Rebuild the in-memory BM25 sparse index from Qdrant after startup."""
+    try:
+        count = await asyncio.to_thread(retriever.rebuild_from_qdrant)
+        logger.info("bm25_index_rebuilt", chunk_count=count)
+    except Exception as exc:
+        logger.warning("bm25_rebuild_failed", error=str(exc))
 
 
 async def _prewarm_provider(runtime: Any) -> None:

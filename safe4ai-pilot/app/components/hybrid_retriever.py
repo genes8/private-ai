@@ -80,6 +80,36 @@ class HybridRetriever:
 
             self._rebuild_bm25_index(existing_entries + incoming_entries)
 
+    def rebuild_from_qdrant(self) -> int:
+        """Rebuild the in-memory BM25 index by scrolling all Qdrant payloads.
+
+        Called at startup so that sparse retrieval is immediately available
+        instead of silently degrading to dense-only until the next ingestion.
+        Returns the number of chunks indexed.
+        """
+        entries: list[tuple[str, str, dict[str, Any]]] = []
+        offset: Any = None
+        while True:
+            result, next_offset = self._qdrant.scroll(
+                collection_name=self._collection,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in result:
+                payload = point.payload or {}
+                content = str(payload.get("content", ""))
+                if content:
+                    entries.append((str(point.id), content, payload))
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        with self._bm25_lock:
+            self._rebuild_bm25_index(entries)
+        return len(entries)
+
     def remove_from_bm25(self, doc_id: str) -> None:
         """Remove all BM25 entries for a document and rebuild the sparse index."""
         with self._bm25_lock:

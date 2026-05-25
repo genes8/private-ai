@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
 import structlog
 from sentence_transformers import CrossEncoder
@@ -47,3 +49,16 @@ class Reranker:
         )[:top_n]
 
         return [RankedChunk(**chunk.model_dump(), rerank_score=score) for chunk, score in ranked]
+
+    async def arerank(
+        self,
+        query: str,
+        chunks: list[RetrievedChunk],
+        top_n: int = 6,
+    ) -> list[RankedChunk]:
+        """Async wrapper that runs the blocking CrossEncoder.predict in a thread pool.
+
+        Use this from async graph nodes / pipeline methods to avoid stalling
+        the event loop during CPU-bound inference.
+        """
+        return await asyncio.to_thread(self.rerank, query, chunks, top_n)
