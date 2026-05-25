@@ -11,6 +11,7 @@ from opentelemetry import trace as otel_trace
 
 from app.agents.adaptive_router import route_after_grade, route_quality_gate
 from app.agents.document_grader import grade_chunks
+from app.agents.llm_caller import call_llm
 from app.agents.query_decomposer import decompose_query
 from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
@@ -58,26 +59,6 @@ def build_graph(
     _ollama_url = ollama_url or ""
     _ollama_model = ollama_model or ""
 
-    async def _llm_generate(prompt: str, *, timeout: float = 30.0) -> str:
-        """Route LLM text generation through chat_client when available."""
-        if chat_client is not None:
-            result = await chat_client.chat("", prompt)
-            return result.content
-
-        async def _call(c: httpx.AsyncClient) -> str:
-            resp = await c.post(
-                f"{_ollama_url}/api/generate",
-                json={"model": _ollama_model, "prompt": prompt, "stream": False, "think": False},
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            return str(resp.json().get("response", ""))
-
-        if http_client is not None:
-            return await _call(http_client)
-        async with httpx.AsyncClient() as c:
-            return await _call(c)
-
     async def intake_node(state: PrivateAIState) -> dict[str, Any]:
         with _node_span("intake", state):
             if not state.messages:
@@ -105,7 +86,13 @@ def build_graph(
                 history = ""
             prompt = template.template.format(query=query, history=history)
             try:
-                rewritten = await _llm_generate(prompt)
+                rewritten = await call_llm(
+                    prompt,
+                    chat_client=chat_client,
+                    ollama_url=_ollama_url,
+                    model=_ollama_model,
+                    http_client=http_client,
+                )
                 return {"rewritten_query": rewritten.strip() or query, "current_step": "retrieve"}
             except Exception as exc:
                 logger.warning("rewrite_node_failed", error=str(exc), exc_type=type(exc).__name__)
@@ -220,7 +207,13 @@ def build_graph(
                     answer = result.content.strip()
                     provider_usage = result.usage
                 else:
-                    answer = (await _llm_generate(prompt, timeout=120.0)).strip()
+                    answer = (await call_llm(
+                        prompt,
+                        ollama_url=_ollama_url,
+                        model=_ollama_model,
+                        http_client=http_client,
+                        timeout=120.0,
+                    )).strip()
             except Exception as exc:
                 return {
                     "draft_answer": _NO_ANSWER,

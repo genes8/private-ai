@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from app.agents.llm_caller import call_llm
 from app.prompts.registry import get_prompt
 
 
@@ -29,28 +30,15 @@ async def decompose_query(
             pass
         return [query]
 
-    if chat_client is not None:
-        try:
-            result = await chat_client.chat("You are a query decomposition assistant. Reply with JSON.", prompt)
-            return _parse(result.content.strip())
-        except Exception:
-            return [query]
-
-    async def _call(c: httpx.AsyncClient) -> list[str]:
-        try:
-            resp = await c.post(
-                f"{ollama_url}/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False},
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            raw: str = resp.json().get("response", "{}").strip()
-            return _parse(raw)
-        except Exception:  # noqa: S110
-            pass
+    try:
+        raw = await call_llm(
+            prompt,
+            system="You are a query decomposition assistant. Reply with JSON.",
+            chat_client=chat_client,
+            ollama_url=ollama_url,
+            model=model,
+            http_client=client,
+        )
+        return _parse(raw.strip())
+    except Exception:
         return [query]
-
-    if client is not None:
-        return await _call(client)
-    async with httpx.AsyncClient() as c:
-        return await _call(c)

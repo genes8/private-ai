@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.agents.entity_booster import boost_entity_chunks
+from app.agents.llm_caller import call_llm
 from app.models import GradedChunk, RankedChunk
 from app.prompts.registry import get_prompt
 
@@ -45,15 +46,19 @@ async def grade_chunks(
     template = get_prompt("document_grader", "v1")
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_GRADES)
 
-    async def _grade_one_with_client(chunk: RankedChunk) -> GradedChunk:
+    async def _grade_one(chunk: RankedChunk) -> GradedChunk:
         async with semaphore:
             prompt = template.template.format(query=query, chunk=chunk.content)
             try:
-                result = await chat_client.chat(
-                    "You are a relevance grader. Reply with JSON.", prompt
+                raw = await call_llm(
+                    prompt,
+                    system="You are a relevance grader. Reply with JSON.",
+                    chat_client=chat_client,
+                    ollama_url=ollama_url,
+                    model=model,
+                    http_client=client,
                 )
-                raw = result.content.strip()
-                data: dict[str, Any] = json.loads(raw)
+                data: dict[str, Any] = json.loads(raw.strip())
                 return GradedChunk(
                     **chunk.model_dump(),
                     relevant=bool(data.get("relevant", False)),
@@ -62,35 +67,5 @@ async def grade_chunks(
             except Exception:
                 return GradedChunk(**chunk.model_dump(), relevant=False, reason="grading failed")
 
-    async def _grade_one_ollama(c: httpx.AsyncClient, chunk: RankedChunk) -> GradedChunk:
-        async with semaphore:
-            prompt = template.template.format(query=query, chunk=chunk.content)
-            try:
-                resp = await c.post(
-                    f"{ollama_url}/api/generate",
-                    json={"model": model, "prompt": prompt, "stream": False},
-                    timeout=30.0,
-                )
-                resp.raise_for_status()
-                raw: str = resp.json().get("response", "{}").strip()
-                data = json.loads(raw)
-                return GradedChunk(
-                    **chunk.model_dump(),
-                    relevant=bool(data.get("relevant", False)),
-                    reason=str(data.get("reason", "")),
-                )
-            except Exception:
-                return GradedChunk(**chunk.model_dump(), relevant=False, reason="grading failed")
-
-    if chat_client is not None:
-        results = await asyncio.gather(*[_grade_one_with_client(chunk) for chunk in chunks])
-        return list(results)
-
-    async def _run(c: httpx.AsyncClient) -> list[GradedChunk]:
-        results = await asyncio.gather(*[_grade_one_ollama(c, chunk) for chunk in chunks])
-        return list(results)
-
-    if client is not None:
-        return await _run(client)
-    async with httpx.AsyncClient() as c:
-        return await _run(c)
+    results = await asyncio.gather(*[_grade_one(chunk) for chunk in chunks])
+    return list(results)
