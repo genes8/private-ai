@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
-import re
-
 import structlog
 
 from app.models import GuardResult, RankedChunk
+from app.security.content_filter import PII_PATTERNS
 
 logger = structlog.get_logger(__name__)
-
-_PII_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\b\d{3}[ -]\d{2}[ -]\d{4}\b"),  # SSN: ###-##-#### or ### ## ####
-    re.compile(r"\b(?:\d{4}[- ]){3}\d{4}\b"),  # Credit card
-    re.compile(r"(?<![A-Z0-9])\b[A-Z]{1,2}\d{7,9}\b(?![A-Z0-9])"),  # Passport (7-9 digits)
-]
 
 _LONG_ANSWER_THRESHOLD = 4000
 
@@ -22,7 +15,7 @@ _LONG_ANSWER_THRESHOLD = 4000
 def _find_pii_matches(text: str) -> list[str]:
     """Return all PII substrings found in *text*."""
     matches: list[str] = []
-    for pattern in _PII_PATTERNS:
+    for pattern in PII_PATTERNS:
         matches.extend(m.group() for m in pattern.finditer(text))
     return matches
 

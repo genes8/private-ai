@@ -29,7 +29,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _LOCK_THRESHOLD = 5
 _LOCK_MINUTES = 30
 _CSRF_COOKIE_NAME = "csrf_token"
-_MIN_PASSWORD_LENGTH = 12
 
 _INVALID_CREDS_DETAIL = "Invalid credentials"
 
