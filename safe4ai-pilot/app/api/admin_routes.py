@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Query, Session
 
 from app.auth.middleware import get_current_user, hash_password, require_role
+from app.auth.password_policy import validate_password_strength
 from app.auth.router import limiter
 from app.components.hybrid_retriever import HybridRetriever
 from app.config import settings
@@ -79,20 +80,6 @@ class CreateUserRequest(BaseModel):
         if not _EMAIL_RE.fullmatch(v):
             raise ValueError("Invalid email format")
         return v
-
-
-def _validate_password_strength(password: str) -> None:
-    if len(password) < 12:
-        raise HTTPException(status_code=422, detail="Password must be at least 12 characters")
-    has_upper = any(char.isupper() for char in password)
-    has_lower = any(char.islower() for char in password)
-    has_digit = any(char.isdigit() for char in password)
-    has_special = any(not char.isalnum() for char in password)
-    if not (has_upper and has_lower and has_digit and has_special):
-        raise HTTPException(
-            status_code=422,
-            detail="Password must include uppercase, lowercase, digit, and special character",
-        )
 
 
 async def _run_ingestion_task(
@@ -539,7 +526,7 @@ def create_user(
 ) -> dict[str, str]:
     if body.password is None:
         raise HTTPException(status_code=422, detail="Password is required")
-    _validate_password_strength(body.password)
+    validate_password_strength(body.password)
     existing = db.query(User).filter(User.email == body.email).first()
     if existing is not None:
         raise HTTPException(status_code=409, detail="Email already registered")

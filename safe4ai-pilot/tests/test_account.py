@@ -86,6 +86,7 @@ def _account_config_patch() -> Iterator[None]:
 
 def test_account_settings_succeeds_for_pilot_user() -> None:
     user = _make_user()
+    last_activity_at = datetime(2026, 5, 24, 10, 11, 12, tzinfo=UTC)
     db = MagicMock()
     db.get.return_value = user
     db.query.side_effect = [
@@ -93,7 +94,7 @@ def test_account_settings_succeeds_for_pilot_user() -> None:
         _scalar_query(7),
         _scalar_query(2),
         _scalar_query(1),
-        _scalar_query(None),
+        _scalar_query(last_activity_at),
         _scalar_query(5),
         _scalar_query(120),
         _scalar_query(0),
@@ -118,6 +119,8 @@ def test_account_settings_succeeds_for_pilot_user() -> None:
     assert body["usage"]["questions30d"] == 7
     assert body["usage"]["feedbackPositive"] == 2
     assert body["usage"]["feedbackNegative"] == 1
+    assert "lastActivityAt" in body["usage"]
+    assert "2026-05-24" in body["usage"]["lastActivityAt"]
     assert body["knowledgeBase"]["docCount"] == 5
     assert body["knowledgeBase"]["chunkCount"] == 120
 
@@ -210,6 +213,31 @@ def test_change_password_updates_hash_and_invalidates_tokens() -> None:
     assert user.token_valid_after is not None
     assert user.token_valid_after <= datetime.now(UTC)
     db.commit.assert_called_once()
+
+
+def test_change_password_rejects_old_token_and_accepts_fresh_token() -> None:
+    user = _make_user(password_hash=hash_password("CurrentPass123!"))
+    db = MagicMock()
+    db.get.return_value = user
+
+    client = _authenticated_client(db, user)
+    try:
+        with _account_config_patch():
+            response = client.post(
+                "/account/change-password",
+                json={"currentPassword": "CurrentPass123!", "newPassword": "NewStrongPass123!"},
+            )
+            old_token_response = client.get("/me")
+            role = getattr(user.role, "value", user.role)
+            client.cookies.set("access_token", encode_token(str(user.id), str(role)))
+            fresh_token_response = client.get("/me")
+    finally:
+        _cleanup_overrides()
+
+    assert response.status_code == 200
+    assert old_token_response.status_code == 401
+    assert fresh_token_response.status_code == 200
+    assert fresh_token_response.json()["email"] == "alice@example.com"
 
 
 def test_admin_settings_remains_admin_only_for_pilot_user() -> None:

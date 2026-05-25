@@ -356,12 +356,12 @@ def test_expired_lockout_is_cleared_before_next_failed_attempt(test_client: Test
 
 def test_revoked_token_is_rejected_on_next_request(test_client: TestClient) -> None:
     user = _make_user()
+    token = encode_token("user-1", "pilot_user")
     user.token_valid_after = datetime.now(UTC)
     db = _mock_db_with_user(user)
 
     app.dependency_overrides[get_db] = _override_get_db(db)
     try:
-        token = encode_token("user-1", "pilot_user")
         test_client.cookies.set("access_token", token)
         test_client.cookies.set("csrf_token", "test-csrf-token")
         test_client.headers["X-CSRF-Token"] = "test-csrf-token"

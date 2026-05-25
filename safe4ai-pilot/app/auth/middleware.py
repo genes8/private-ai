@@ -34,11 +34,12 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def encode_token(user_id: str, role: str, *, expiry_hours: int = JWT_EXPIRY_HOURS) -> str:
     """Create a signed JWT for the given user."""
+    now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": user_id,
         "role": role,
-        "iat": datetime.now(UTC),
-        "exp": datetime.now(UTC) + timedelta(hours=expiry_hours),
+        "iat": now.timestamp(),
+        "exp": now + timedelta(hours=expiry_hours),
     }
     return jwt.encode(payload, settings.secret_key, algorithm=JWT_ALGORITHM)
 

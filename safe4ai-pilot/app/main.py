@@ -15,6 +15,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
+from app.api.account_routes import router as account_router
 from app.api.admin_routes import router as admin_router
 from app.api.chat_routes import router as chat_router
 from app.api.observability_routes import router as observability_router
@@ -159,6 +160,7 @@ app.include_router(chat_router)
 app.include_router(observability_router)
 app.include_router(admin_router)
 app.include_router(settings_router)
+app.include_router(account_router)
 
 
 async def _prewarm_provider(runtime: Any) -> None:
