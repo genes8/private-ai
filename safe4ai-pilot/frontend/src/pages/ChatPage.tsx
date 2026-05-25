@@ -1,11 +1,10 @@
-import { BookOpen, Settings, Square } from "lucide-react";
-import { useRef, useState } from "react";
+import { BookOpen, ChevronDown, LogOut, Settings, Shield, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import type { SseCite } from "../api/chat";
 import Avatar from "../components/Avatar";
-import Button from "../components/Button";
 import Logo from "../components/Logo";
 import AnswerBlock from "../components/chat/AnswerBlock";
 import Composer from "../components/chat/Composer";
@@ -40,7 +39,20 @@ export default function ChatPage() {
   const [activeCitationId, setActiveCitationId] = useState<string | null>(null);
   const [drawerMessageId, setDrawerMessageId] = useState<string | null>(null);
   const [mobileSourcesOpen, setMobileSourcesOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [menuOpen]);
 
   const totalChunks = corpusStats?.chunkCount ?? 0;
   const totalDocs = corpusStats?.docCount ?? 0;
@@ -89,23 +101,63 @@ export default function ChatPage() {
                 Generating…
               </span>
             )}
-            <Link to="/settings">
-              <Button variant="ghost" size="sm" iconLeft={<Settings size={13} />}>Settings</Button>
-            </Link>
-            {isAdmin && (
-              <Link to="/admin">
-                <Button variant="ghost" size="sm" iconLeft={<Settings size={13} />}>Admin</Button>
-              </Link>
-            )}
-            <Avatar name={me?.email ?? "U"} size={26} />
-            <button
-              type="button"
-              onClick={signOut}
-              aria-label="Sign out"
-              className="text-[12px] text-text-mute hover:text-text-2 transition-colors"
-            >
-              Sign out
-            </button>
+
+            {/* Avatar menu */}
+            <div className="relative" ref={menuRef}>
+              <button
+                type="button"
+                onClick={() => setMenuOpen((o) => !o)}
+                className="flex items-center gap-1 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                aria-haspopup="true"
+                aria-expanded={menuOpen}
+              >
+                <Avatar name={me?.email ?? "U"} size={26} />
+                <ChevronDown
+                  size={12}
+                  className={`text-text-mute transition-transform duration-150 ${menuOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+
+              {menuOpen && (
+                <div className="absolute right-0 top-9 z-50 w-48 rounded-lg border border-line bg-surface shadow-lg py-1 animate-in fade-in slide-in-from-top-1 duration-100">
+                  {/* Email label */}
+                  <div className="px-3 py-2 border-b border-line">
+                    <p className="text-[11px] font-mono text-text-mute truncate">{me?.email}</p>
+                  </div>
+
+                  <Link
+                    to="/settings"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center gap-2.5 px-3 py-2 text-[12.5px] text-text-2 hover:bg-surface-2 transition-colors"
+                  >
+                    <Settings size={13} className="text-text-3 shrink-0" />
+                    Settings
+                  </Link>
+
+                  {isAdmin && (
+                    <Link
+                      to="/admin"
+                      onClick={() => setMenuOpen(false)}
+                      className="flex items-center gap-2.5 px-3 py-2 text-[12.5px] text-text-2 hover:bg-surface-2 transition-colors"
+                    >
+                      <Shield size={13} className="text-text-3 shrink-0" />
+                      Admin panel
+                    </Link>
+                  )}
+
+                  <div className="border-t border-line my-1" />
+
+                  <button
+                    type="button"
+                    onClick={() => { signOut(); setMenuOpen(false); }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-[12.5px] text-text-2 hover:bg-surface-2 transition-colors"
+                  >
+                    <LogOut size={13} className="text-text-3 shrink-0" />
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 

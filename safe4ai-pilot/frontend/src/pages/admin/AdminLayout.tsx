@@ -1,4 +1,4 @@
-import { Activity, BarChart2, FileText, LogOut, MessageSquare, Settings, Users } from "lucide-react";
+import { Activity, ArrowLeft, BarChart2, FileText, LogOut, MessageSquare, Settings, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -77,6 +77,16 @@ export default function AdminLayout({ children }: Props) {
               )}
             </Link>
           ))}
+
+          <div className="pt-2 mt-2 border-t border-line">
+            <Link
+              to="/chat"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[12.5px] text-text-mute hover:bg-surface hover:text-text-2 transition-colors"
+            >
+              <ArrowLeft size={13} />
+              Back to chat
+            </Link>
+          </div>
         </div>
 
         {/* Index health card */}
