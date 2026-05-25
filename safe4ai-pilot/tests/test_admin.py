@@ -113,10 +113,10 @@ class TestDocumentUpload:
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
 
-        with patch("app.api.admin_routes.asyncio.create_task", side_effect=_close_and_return_task):
+        with patch("app.api.document_routes.asyncio.create_task", side_effect=_close_and_return_task):
             client = _make_test_client(db, admin)
             pdf_bytes = b"%PDF-1.4 fake pdf content"
-            with patch("app.api.admin_routes.UploadValidator.validate") as mock_validate, \
+            with patch("app.api.document_routes.UploadValidator.validate") as mock_validate, \
                  patch("pathlib.Path.write_bytes"), \
                  patch("pathlib.Path.mkdir"):
                 mock_validate.return_value = MagicMock(allowed=True)
@@ -137,7 +137,7 @@ class TestDocumentUpload:
         db = _mock_db_with_admin(admin)
 
         client = _make_test_client(db, admin)
-        with patch("app.api.admin_routes.UploadValidator.validate") as mock_validate, \
+        with patch("app.api.document_routes.UploadValidator.validate") as mock_validate, \
              patch("pathlib.Path.mkdir"):
             mock_validate.return_value = MagicMock(allowed=False, reason="extension not allowed")
             resp = client.post(
@@ -242,7 +242,7 @@ class TestDocumentDelete:
 
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=False), \
-             patch("app.api.admin_routes.QdrantClient") as MockQdrant:
+             patch("app.services.document_service.QdrantClient") as MockQdrant:
             client = _make_test_client(db, admin)
             client.app.state.retriever = mock_retriever  # type: ignore[attr-defined]
             resp = client.delete("/admin/documents/doc-1")
@@ -264,7 +264,7 @@ class TestDocumentDelete:
 
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=False), \
-             patch("app.api.admin_routes.QdrantClient") as MockQdrant:
+             patch("app.services.document_service.QdrantClient") as MockQdrant:
             client = _make_test_client(db, admin)
             resp = client.delete("/admin/documents/doc-1")
 
@@ -301,10 +301,10 @@ class TestDocumentReindex:
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=True), \
              patch(
-                 "app.api.admin_routes.asyncio.create_task",
+                 "app.api.document_routes.asyncio.create_task",
                  side_effect=_close_and_return_task,
              ), \
-             patch("app.api.admin_routes.QdrantClient") as MockQdrant:
+             patch("app.services.document_service.QdrantClient") as MockQdrant:
             client = _make_test_client(db, admin)
             resp = client.post("/admin/documents/doc-1/reindex")
 
@@ -368,10 +368,10 @@ class TestDocumentReindex:
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=True), \
              patch(
-                 "app.api.admin_routes._delete_qdrant_points",
+                 "app.api.document_routes.delete_qdrant_points",
                  side_effect=RuntimeError("qdrant down"),
              ), \
-             patch("app.api.admin_routes._schedule_ingestion_task") as mock_schedule:
+             patch("app.api.document_routes._schedule_ingestion_task") as mock_schedule:
             client = _make_test_client(db, admin)
             resp = client.post("/admin/documents/doc-1/reindex")
 
@@ -392,7 +392,7 @@ class TestDocumentReindex:
 
         with patch("pathlib.Path.mkdir"), \
              patch("pathlib.Path.exists", return_value=True), \
-             patch("app.api.admin_routes._delete_qdrant_points") as mock_delete_qdrant:
+             patch("app.api.document_routes.delete_qdrant_points") as mock_delete_qdrant:
             client = _make_test_client(db, admin)
             resp = client.post("/admin/documents/doc-1/reindex")
 
@@ -515,7 +515,7 @@ class TestSettings:
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
         ), patch.dict(
-            "app.api.settings_routes._settings_live_cache", {"expires_at": 0.0}
+            "app.services.settings_service._settings_live_cache", {"expires_at": 0.0}
         ):
             client = _make_test_client(db, admin)
             resp = client.get("/settings")
@@ -570,7 +570,7 @@ class TestSettings:
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
         ), patch.dict(
-            "app.api.settings_routes._settings_live_cache", {"expires_at": 0.0}
+            "app.services.settings_service._settings_live_cache", {"expires_at": 0.0}
         ):
             client = _make_test_client(db, admin)
             resp = client.get("/settings")
@@ -602,7 +602,7 @@ class TestSettings:
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
         ), patch.dict(
-            "app.api.settings_routes._settings_live_cache", {"expires_at": 0.0}
+            "app.services.settings_service._settings_live_cache", {"expires_at": 0.0}
         ):
             client = _make_test_client(db, admin)
             resp = client.get("/settings")

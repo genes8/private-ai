@@ -15,11 +15,14 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
-from app.api.account_routes import router as account_router
-from app.api.admin_routes import router as admin_router
+from app.api.account_routes import me_router, router as account_router
+from app.api.audit_routes import router as audit_router
 from app.api.chat_routes import router as chat_router
+from app.api.document_routes import router as document_router
 from app.api.observability_routes import router as observability_router
+from app.api.review_routes import router as review_router
 from app.api.settings_routes import router as settings_router
+from app.api.user_routes import router as user_router
 from app.auth.router import limiter as auth_limiter
 from app.auth.router import router as auth_router
 from app.config import settings
@@ -158,9 +161,13 @@ async def limit_body_size(
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(observability_router)
-app.include_router(admin_router)
+app.include_router(document_router)
+app.include_router(user_router)
+app.include_router(audit_router)
+app.include_router(review_router)
 app.include_router(settings_router)
 app.include_router(account_router)
+app.include_router(me_router)
 
 
 async def _prewarm_provider(runtime: Any) -> None:

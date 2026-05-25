@@ -13,16 +13,15 @@ from app.auth.password_policy import validate_password_strength
 from app.db import get_db
 from app.db.models import (
     AuditLog,
-    Document,
-    DocumentChunk,
     FeedbackRating,
-    IngestionStatus,
     QueryFeedback,
     User,
 )
 from app.services.app_config_store import load_app_config
+from app.services.stats_service import get_corpus_stats
 
 router = APIRouter(prefix="/account", tags=["account"])
+me_router = APIRouter(tags=["account"])
 
 
 class ChangePasswordRequest(BaseModel):
@@ -77,20 +76,7 @@ def get_account_settings(
         .scalar()
     )
 
-    doc_count = db.query(func.count(Document.id)).scalar() or 0
-    chunk_count = db.query(func.count(DocumentChunk.id)).scalar() or 0
-    failed_count = (
-        db.query(func.count(Document.id))
-        .filter(Document.ingestion_status == IngestionStatus.failed)
-        .scalar()
-        or 0
-    )
-    in_progress_count = (
-        db.query(func.count(Document.id))
-        .filter(Document.ingestion_status.in_([IngestionStatus.embedding, IngestionStatus.queued]))
-        .scalar()
-        or 0
-    )
+    corpus = get_corpus_stats(db)
 
     role = getattr(current_user.role, "value", current_user.role)
     return {
@@ -113,12 +99,7 @@ def get_account_settings(
             "feedbackNegative": feedback_negative,
             "lastActivityAt": last_activity_at,
         },
-        "knowledgeBase": {
-            "docCount": doc_count,
-            "chunkCount": chunk_count,
-            "failedCount": failed_count,
-            "inProgressCount": in_progress_count,
-        },
+        "knowledgeBase": corpus,
     }
 
 
@@ -139,3 +120,14 @@ def change_password(
     current_user.token_valid_after = datetime.now(UTC)
     db.commit()
     return {"message": "Password changed. Please sign in again with your new password."}
+
+
+@me_router.get("/me")
+def get_me(current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    """Return profile info for the currently authenticated user."""
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "role": current_user.role,
+        "is_active": current_user.is_active,
+    }
