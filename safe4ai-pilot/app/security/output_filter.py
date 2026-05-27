@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import structlog
@@ -26,7 +27,7 @@ class OutputFilter:
     def check(
         self,
         answer: str,
-        source_chunks: list[RankedChunk],
+        source_chunks: Sequence[RankedChunk],
         citations: list[Any] | None = None,
     ) -> GuardResult:
         """Check the generated answer before returning it to the caller.

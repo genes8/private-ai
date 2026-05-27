@@ -39,6 +39,30 @@ logger = structlog.get_logger(__name__)
 
 _DEFAULT_VISION_MODEL = "qwen2.5vl:7b"
 
+# ---------------------------------------------------------------------------
+# Dispatch tables for collect_field_updates — simple fields only.
+# Complex fields (model existence checks, cross-field deps, DNS) stay inline.
+# ---------------------------------------------------------------------------
+
+# (request_attr, db_key) — no validation beyond type
+_BOOL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("rerankerEnabled", "reranker_enabled"),
+    ("ssoOnly", "sso_only"),
+    ("redactPII", "redact_pii"),
+)
+
+# (request_attr, db_key, lo, hi)
+_RANGE_FIELDS: tuple[tuple[str, str, float, float], ...] = (
+    ("retrievalK", "retrieval_k", 1, 32),
+    ("scoreFloor", "score_floor", 0, 1),
+    ("sessionHours", "session_hours", 1, 720),
+    ("auditRetentionDays", "audit_retention_days", 30, 3650),
+    ("dailyCeilingUsd", "daily_ceiling_usd", 1, 10_000),
+    ("monthlyCeilingUsd", "monthly_ceiling_usd", 30, 300_000),
+    ("maxSeats", "max_seats", 0, 10_000),
+    ("monthlyQueryLimit", "monthly_query_limit", 0, 10_000_000),
+)
+
 
 # ---------------------------------------------------------------------------
 # Request model (lives here so the service and route share the same type)
@@ -123,7 +147,11 @@ def _validate_embedding_model_dimension(model: str) -> None:
     if expected is None:
         return
     try:
-        info = _QdrantClient(url=settings.qdrant_url).get_collection("documents")
+        _qdrant = _QdrantClient(url=settings.qdrant_url)
+        try:
+            info = _qdrant.get_collection("documents")
+        finally:
+            _qdrant.close()
         vectors_cfg = info.config.params.vectors
         actual: int = (
             next(iter(vectors_cfg.values())).size  # type: ignore[union-attr]
@@ -313,18 +341,22 @@ def collect_field_updates(
             if body.providerVisionModel is None:
                 updates["provider_vision_model"] = vision_model
 
-    if body.rerankerEnabled is not None:
-        updates["reranker_enabled"] = body.rerankerEnabled
+    # --- Bool fields (no validation beyond type) ---
+    for _attr, _db_key in _BOOL_FIELDS:
+        _val = getattr(body, _attr)
+        if _val is not None:
+            updates[_db_key] = _val
+
+    # --- Range-checked scalar fields ---
+    for _attr, _db_key, _lo, _hi in _RANGE_FIELDS:
+        _val = getattr(body, _attr)
+        if _val is not None:
+            if _val < _lo or _val > _hi:
+                raise SettingsValidationError(f"{_attr} must be between {int(_lo)} and {int(_hi)}")
+            updates[_db_key] = _val
+
     if body.rerankerModel is not None:
         updates["reranker_model"] = validate_model_identifier(body.rerankerModel, "rerankerModel")
-    if body.retrievalK is not None:
-        if body.retrievalK < 1 or body.retrievalK > 32:
-            raise SettingsValidationError("retrievalK must be between 1 and 32")
-        updates["retrieval_k"] = body.retrievalK
-    if body.scoreFloor is not None:
-        if body.scoreFloor < 0 or body.scoreFloor > 1:
-            raise SettingsValidationError("scoreFloor must be between 0 and 1")
-        updates["score_floor"] = body.scoreFloor
     if body.chunkSize is not None:
         if body.chunkSize < 128 or body.chunkSize > 2048:
             raise SettingsValidationError("chunkSize must be between 128 and 2048")
@@ -340,27 +372,6 @@ def collect_field_updates(
         if body.chunkOverlap >= effective_chunk_size:
             raise SettingsValidationError("chunkOverlap must be smaller than chunkSize")
         updates["chunk_overlap"] = body.chunkOverlap
-    if body.ssoOnly is not None:
-        updates["sso_only"] = body.ssoOnly
-    if body.sessionHours is not None:
-        if body.sessionHours < 1 or body.sessionHours > 720:
-            raise SettingsValidationError("sessionHours must be between 1 and 720")
-        updates["session_hours"] = body.sessionHours
-    if body.auditRetentionDays is not None:
-        if body.auditRetentionDays < 30 or body.auditRetentionDays > 3650:
-            raise SettingsValidationError("auditRetentionDays must be between 30 and 3650")
-        updates["audit_retention_days"] = body.auditRetentionDays
-    if body.redactPII is not None:
-        updates["redact_pii"] = body.redactPII
-    if body.dailyCeilingUsd is not None:
-        if body.dailyCeilingUsd < 1 or body.dailyCeilingUsd > 10000:
-            raise SettingsValidationError("dailyCeilingUsd must be between 1 and 10000")
-        updates["daily_ceiling_usd"] = body.dailyCeilingUsd
-    if body.monthlyCeilingUsd is not None:
-        if body.monthlyCeilingUsd < 30 or body.monthlyCeilingUsd > 300000:
-            raise SettingsValidationError("monthlyCeilingUsd must be between 30 and 300000")
-        updates["monthly_ceiling_usd"] = body.monthlyCeilingUsd
-
     if body.providerType is not None:
         if body.providerType not in {"ollama", "openai_compatible"}:
             raise SettingsValidationError("providerType must be ollama or openai_compatible")
@@ -412,14 +423,6 @@ def collect_field_updates(
         if body.tier not in {"evaluation", "team", "enterprise"}:
             raise SettingsValidationError("tier must be evaluation, team, or enterprise")
         updates["tier"] = body.tier
-    if body.maxSeats is not None:
-        if body.maxSeats < 0 or body.maxSeats > 10000:
-            raise SettingsValidationError("maxSeats must be between 0 and 10000")
-        updates["max_seats"] = body.maxSeats
-    if body.monthlyQueryLimit is not None:
-        if body.monthlyQueryLimit < 0 or body.monthlyQueryLimit > 10_000_000:
-            raise SettingsValidationError("monthlyQueryLimit must be between 0 and 10000000")
-        updates["monthly_query_limit"] = body.monthlyQueryLimit
     if body.tierExpiresAt is not None:
         if body.tierExpiresAt == "":
             updates["tier_expires_at"] = ""  # empty string = clear expiry

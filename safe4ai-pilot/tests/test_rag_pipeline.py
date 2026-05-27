@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.models import Citation, RankedChunk, RetrievedChunk
+from app.models import RankedChunk, RetrievedChunk
 from app.services.rag_pipeline import RagPipeline
 from tests.conftest import FAKE_EMBEDDING
 
@@ -26,10 +26,17 @@ def _make_pipeline(
     retriever: MagicMock | None = None,
     reranker: MagicMock | None = None,
     db: MagicMock | None = None,
+    embedding_client: MagicMock | None = None,
 ) -> RagPipeline:
     r = retriever or MagicMock()
     rr = reranker or MagicMock()
     d = db or MagicMock()
+    # Always inject a mock embedding_client so tests never create a live
+    # OllamaProvider (which would attempt real HTTP calls to Ollama).
+    ec = embedding_client or MagicMock()
+    ec.embed_documents = getattr(ec, "embed_documents", None) or AsyncMock(
+        return_value=[FAKE_EMBEDDING]
+    )
 
     with patch("app.services.rag_pipeline.QdrantClient"):
         pipeline = RagPipeline(
@@ -41,69 +48,9 @@ def _make_pipeline(
             qdrant_url="http://localhost:6333",
             collection="test",
             db_session=d,
+            embedding_client=ec,
         )
     return pipeline
-
-
-@pytest.mark.asyncio
-async def test_query_returns_answer_and_citations() -> None:
-    retriever = MagicMock()
-    retriever.retrieve = AsyncMock(
-        return_value=[
-            RetrievedChunk(
-                chunk_id="c1",
-                doc_id="d1",
-                filename="f.pdf",
-                page_number=1,
-                content="relevant content",
-                score=0.9,
-            )
-        ]
-    )
-
-    reranker = MagicMock()
-    reranker.rerank.return_value = [_make_ranked_chunk("c1", 0.8)]
-    reranker.arerank = AsyncMock(return_value=reranker.rerank.return_value)
-
-    pipeline = _make_pipeline(retriever=retriever, reranker=reranker)
-
-    with patch.object(pipeline, "_generate", new=AsyncMock(return_value="Answer text")):
-        answer, citations = await pipeline.query("test query", "col")
-
-    retriever.retrieve.assert_awaited_once_with("test query", None, collection="col")
-    assert answer == "Answer text"
-    assert len(citations) == 1
-    assert isinstance(citations[0], Citation)
-    assert citations[0].score == 0.8
-
-
-@pytest.mark.asyncio
-async def test_query_no_answer_fallback() -> None:
-    retriever = MagicMock()
-    retriever.retrieve = AsyncMock(
-        return_value=[
-            RetrievedChunk(
-                chunk_id="c1",
-                doc_id="d1",
-                filename="f.pdf",
-                page_number=1,
-                content="something",
-                score=0.5,
-            )
-        ]
-    )
-
-    reranker = MagicMock()
-    # max rerank_score = 0.3, below 0.45 threshold
-    reranker.rerank.return_value = [_make_ranked_chunk("c1", 0.3)]
-    reranker.arerank = AsyncMock(return_value=reranker.rerank.return_value)
-
-    pipeline = _make_pipeline(retriever=retriever, reranker=reranker)
-
-    answer, citations = await pipeline.query("test query", "col")
-
-    assert "don't have enough information" in answer
-    assert citations == []
 
 
 @pytest.mark.asyncio
@@ -259,25 +206,6 @@ async def test_ingest_native_pdf_page_gets_native_quality() -> None:
             f.write(b"%PDF fake")
             tmp_path = f.name
         await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
-
-
-@pytest.mark.asyncio
-async def test_embed_batch_prefers_batch_embed_endpoint() -> None:
-    pipeline = _make_pipeline()
-
-    batch_response = MagicMock()
-    batch_response.raise_for_status.return_value = None
-    batch_response.json.return_value = {"embeddings": [FAKE_EMBEDDING, FAKE_EMBEDDING]}
-
-    with patch("app.services.rag_pipeline.httpx.AsyncClient") as MockClient:
-        client = MockClient.return_value.__aenter__.return_value
-        client.post = AsyncMock(return_value=batch_response)
-
-        result = await pipeline._embed_batch(["first", "second"])
-
-    assert result == [FAKE_EMBEDDING, FAKE_EMBEDDING]
-    client.post.assert_awaited_once()
-    assert client.post.call_args.args[0].endswith("/api/embed")
 
 
 # ---------------------------------------------------------------------------

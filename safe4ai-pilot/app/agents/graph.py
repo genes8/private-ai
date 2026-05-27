@@ -15,7 +15,7 @@ from app.agents.llm_caller import call_llm
 from app.agents.query_decomposer import decompose_query
 from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
-from app.models import NO_ANSWER, Citation, GradedChunk, PrivateAIState, RankedChunk
+from app.models import NO_ANSWER, Citation, GradedChunk, PrivateAIState
 from app.prompts.registry import get_prompt
 from app.security.input_guard import InputGuard
 from app.security.output_filter import OutputFilter
@@ -244,13 +244,10 @@ def build_graph(
             relevant = state.generation_context or [c for c in state.graded_chunks if c.relevant]
             if not relevant or not state.draft_answer or state.draft_answer == _NO_ANSWER:
                 return {"current_step": "quality_gate"}
-            ranked_fields = set(RankedChunk.model_fields)
-            source_ranked = [
-                RankedChunk(**{k: v for k, v in c.model_dump().items() if k in ranked_fields})
-                for c in relevant
-            ]
+            # GradedChunk extends RankedChunk — pass directly; output_filter
+            # accepts Sequence[RankedChunk] so subclass instances are fine.
             guard_result = output_filter.check(
-                state.draft_answer, source_ranked, citations=state.citations
+                state.draft_answer, relevant, citations=state.citations
             )
             if not guard_result.allowed:
                 return {

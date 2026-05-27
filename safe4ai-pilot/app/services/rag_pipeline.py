@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import uuid
 from pathlib import Path
 from typing import Any
 
-import httpx
 import structlog
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
@@ -16,10 +14,9 @@ from app.agents.llm_caller import call_llm
 from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
 from app.db.models import Document, DocumentChunk, IngestionStatus
-from app.models import NO_ANSWER, Citation, RankedChunk
 from app.security.content_filter import ContentFilter
 from app.services import document_parser
-from app.services.provider_clients import ChatClient, EmbeddingClient, VisionClient
+from app.services.provider_clients import ChatClient, EmbeddingClient, OllamaProvider, VisionClient
 
 logger = structlog.get_logger(__name__)
 
@@ -27,7 +24,6 @@ _CHUNK_SIZE = 800
 _CHUNK_OVERLAP = 150
 _EMBED_BATCH = 100
 _MIN_RERANK_SCORE = 0.45
-_NO_ANSWER = NO_ANSWER  # module alias — keeps internal references unchanged
 
 
 class RagPipeline:
@@ -60,7 +56,15 @@ class RagPipeline:
         self._collection = collection
         self._db = db_session
         self._chat_client = chat_client
-        self._embedding_client = embedding_client
+        # Always resolve to a concrete EmbeddingClient so _embed_batch never
+        # needs inline HTTP code. OllamaProvider is created as a fallback when
+        # no client is supplied — callers can still inject any EmbeddingClient.
+        self._embedding_client: EmbeddingClient = embedding_client or OllamaProvider(
+            base_url=ollama_url,
+            chat_model=ollama_model,
+            embedding_model=embedding_model,
+            vision_model=vision_model or "",
+        )
         self._vision_client = vision_client
         self._rerank_top_n = rerank_top_n
         self._min_rerank_score = min_rerank_score
@@ -169,83 +173,16 @@ class RagPipeline:
         payloads = [point.payload or {} for point in points]
         self._retriever.update_bm25_index(chunk_ids, contents, payloads)
 
-    async def query(
-        self,
-        query: str,
-        collection: str,
-        doc_ids: list[str] | None = None,
-    ) -> tuple[str, list[Citation]]:
-        chunks = await self._retriever.retrieve(query, doc_ids, collection=collection)
-        ranked: list[RankedChunk] = await self._reranker.arerank(query, chunks, top_n=self._rerank_top_n)
-
-        if not ranked or max(c.rerank_score for c in ranked) < self._min_rerank_score:
-            return _NO_ANSWER, []
-
-        citations = [
-            Citation(
-                filename=c.filename,
-                page_number=c.page_number,
-                excerpt=c.content[:200],
-                score=c.rerank_score,
-            )
-            for c in ranked
-        ]
-
-        context = "\n\n".join(f"[{c.filename} p.{c.page_number}]: {c.content}" for c in ranked)
-        prompt = (
-            "Answer the following question using ONLY the provided context. "
-            "If the context doesn't contain enough information, say so.\n\n"
-            f"Context:\n{context}\n\nQuestion: {query}"
-        )
-
-        answer = await self._generate(prompt)
-        return answer, citations
-
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        if self._embedding_client is not None and hasattr(self._embedding_client, "embed_documents"):
-            results: list[list[float]] = []
-            for i in range(0, len(texts), _EMBED_BATCH):
-                batch = texts[i : i + _EMBED_BATCH]
-                batch_results = await self._embedding_client.embed_documents(batch)  # type: ignore[union-attr]
-                results.extend(batch_results)
-            return results
-
-        results = []
-        async with httpx.AsyncClient() as client:
-            for i in range(0, len(texts), _EMBED_BATCH):
-                batch = texts[i : i + _EMBED_BATCH]
-                try:
-                    resp = await client.post(
-                        f"{self._ollama_url}/api/embed",
-                        json={"model": self._embedding_model, "input": batch},
-                        timeout=120.0,
-                    )
-                    resp.raise_for_status()
-                    body: dict[str, Any] = resp.json()
-                    embeddings = body.get("embeddings")
-                    if not isinstance(embeddings, list):
-                        raise ValueError("Ollama embed response did not include an embeddings list")
-                    results.extend([[float(value) for value in embedding] for embedding in embeddings])
-                    continue
-                except (httpx.HTTPStatusError, ValueError, TypeError):
-                    responses = await asyncio.gather(
-                        *[
-                            client.post(
-                                f"{self._ollama_url}/api/embeddings",
-                                json={"model": self._embedding_model, "prompt": text},
-                                timeout=60.0,
-                            )
-                            for text in batch
-                        ]
-                    )
-                    for fallback_resp in responses:
-                        fallback_resp.raise_for_status()
-                        fallback_body: dict[str, Any] = fallback_resp.json()
-                        results.append(fallback_body["embedding"])
+        """Embed *texts* in slices of _EMBED_BATCH via the stored embedding client."""
+        results: list[list[float]] = []
+        for i in range(0, len(texts), _EMBED_BATCH):
+            batch = texts[i : i + _EMBED_BATCH]
+            results.extend(await self._embedding_client.embed_documents(batch))
         return results
 
     async def _generate(self, prompt: str) -> str:

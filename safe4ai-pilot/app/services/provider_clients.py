@@ -67,6 +67,9 @@ class OpenAICompatibleProvider:
         self._vision_model = vision_model
         self._client = client or httpx.AsyncClient(timeout=60)
 
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._api_key}"}
 
@@ -144,6 +147,13 @@ class OpenAICompatibleProvider:
 
 
 class OllamaProvider:
+    """Ollama-backed provider.
+
+    Stores a single ``httpx.AsyncClient`` for the lifetime of the instance —
+    consistent with ``OpenAICompatibleProvider``.  Call ``await provider.aclose()``
+    before discarding the instance to release the connection pool.
+    """
+
     def __init__(
         self,
         *,
@@ -151,22 +161,26 @@ class OllamaProvider:
         chat_model: str,
         embedding_model: str,
         vision_model: str,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._chat_model = chat_model
         self._embedding_model = embedding_model
         self._vision_model = vision_model
+        self._client = client or httpx.AsyncClient(timeout=60)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def chat(self, system_prompt: str, user_prompt: str) -> ChatResult:
         messages: list[dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                f"{self._base_url}/api/chat",
-                json={"model": self._chat_model, "messages": messages, "stream": False, "think": False},
-            )
+        response = await self._client.post(
+            f"{self._base_url}/api/chat",
+            json={"model": self._chat_model, "messages": messages, "stream": False, "think": False},
+        )
         response.raise_for_status()
         payload = response.json()
         message = payload.get("message")
@@ -178,41 +192,39 @@ class OllamaProvider:
         return vectors[0]
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        async with httpx.AsyncClient(timeout=60) as client:
-            try:
-                response = await client.post(
-                    f"{self._base_url}/api/embed",
-                    json={"model": self._embedding_model, "input": texts},
-                )
-                if response.status_code < 400:
-                    response.raise_for_status()
-                    embeddings = response.json().get("embeddings", [])
-                    return [list(v) for v in embeddings]
-            except (httpx.HTTPStatusError, httpx.RequestError):
-                pass
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/api/embed",
+                json={"model": self._embedding_model, "input": texts},
+            )
+            if response.status_code < 400:
+                embeddings = response.json().get("embeddings", [])
+                return [list(v) for v in embeddings]
+        except (httpx.HTTPStatusError, httpx.RequestError):
+            pass
 
-            # Fallback: call legacy /api/embeddings one at a time
-            vectors: list[list[float]] = []
-            for text in texts:
-                fallback = await client.post(
-                    f"{self._base_url}/api/embeddings",
-                    json={"model": self._embedding_model, "prompt": text},
-                )
-                fallback.raise_for_status()
-                vectors.append(list(fallback.json()["embedding"]))
-            return vectors
+        # Fallback: call legacy /api/embeddings one at a time
+        vectors: list[list[float]] = []
+        for text in texts:
+            fallback = await self._client.post(
+                f"{self._base_url}/api/embeddings",
+                json={"model": self._embedding_model, "prompt": text},
+            )
+            fallback.raise_for_status()
+            vectors.append(list(fallback.json()["embedding"]))
+        return vectors
 
     async def describe_image(self, prompt: str, image_b64: str) -> str:
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                f"{self._base_url}/api/generate",
-                json={
-                    "model": self._vision_model,
-                    "prompt": prompt,
-                    "images": [image_b64],
-                    "stream": False,
-                },
-            )
+        response = await self._client.post(
+            f"{self._base_url}/api/generate",
+            json={
+                "model": self._vision_model,
+                "prompt": prompt,
+                "images": [image_b64],
+                "stream": False,
+            },
+            timeout=120.0,
+        )
         response.raise_for_status()
         return str(response.json().get("response", ""))
 
@@ -224,16 +236,11 @@ class OllamaProvider:
         client: httpx.AsyncClient | None = None,
     ) -> str:
         """Low-level Ollama generate call returning raw response text (for graph nodes)."""
-        async def _call(c: httpx.AsyncClient) -> str:
-            resp = await c.post(
-                f"{self._base_url}/api/generate",
-                json={"model": self._chat_model, "prompt": prompt, "stream": False, "think": False},
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            return str(resp.json().get("response", ""))
-
-        if client is not None:
-            return await _call(client)
-        async with httpx.AsyncClient() as c:
-            return await _call(c)
+        c = client or self._client
+        resp = await c.post(
+            f"{self._base_url}/api/generate",
+            json={"model": self._chat_model, "prompt": prompt, "stream": False, "think": False},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return str(resp.json().get("response", ""))
