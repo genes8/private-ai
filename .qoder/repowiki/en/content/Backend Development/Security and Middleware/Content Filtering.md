@@ -12,7 +12,16 @@
 - [config.py](file://safe4ai-pilot/app/config.py)
 - [AdminAudit.tsx](file://safe4ai-pilot/design/components/AdminAudit.tsx)
 - [test_security_guards.py](file://safe4ai-pilot/tests/test_security_guards.py)
+- [rag_pipeline.py](file://safe4ai-pilot/app/services/rag_pipeline.py)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added documentation for the new `redact()` method in ContentFilter that replaces PII patterns with '[REDACTED]' instead of filtering out entire document chunks
+- Updated ContentFilter section to explain the dual approach of filtering and redaction for privacy compliance
+- Added integration examples showing how redact() is used in the RAG pipeline for document ingestion
+- Enhanced troubleshooting guide with redaction-specific scenarios
+- Updated architecture diagrams to reflect the new redaction capability
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -27,7 +36,7 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document describes the content filtering system used to monitor and block inappropriate or sensitive content across ingestion, retrieval, generation, and output stages. It explains filtering criteria, keyword detection, and contextual analysis approaches, and documents how the system integrates with AI response generation to intercept and modify content before delivery. It also covers filter configuration, policy enforcement, bypass mechanisms, and the relationship between content filtering and audit logging for compliance.
+This document describes the content filtering system used to monitor and block inappropriate or sensitive content across ingestion, retrieval, generation, and output stages. It explains filtering criteria, keyword detection, and contextual analysis approaches, and documents how the system integrates with AI response generation to intercept and modify content before delivery. The system now includes advanced redaction capabilities that replace PII patterns with '[REDACTED]' instead of filtering out entire document chunks, addressing critical data loss issues while maintaining privacy compliance.
 
 ## Project Structure
 The content filtering system spans several modules:
@@ -37,6 +46,7 @@ The content filtering system spans several modules:
 - API endpoints: chat endpoints that trigger the pipeline and stream results.
 - Configuration: global settings such as retention and upload limits.
 - Frontend admin: audit visualization indicating retention policies.
+- Redaction service: automatic PII replacement during document ingestion.
 
 ```mermaid
 graph TB
@@ -49,6 +59,7 @@ end
 subgraph "Pipeline"
 G["LangGraph build_graph<br/>graph.py"]
 ST["PrivateAIState<br/>models.py"]
+RP["RAG Pipeline<br/>rag_pipeline.py"]
 end
 subgraph "API"
 CR["POST /chat<br/>chat_routes.py"]
@@ -65,19 +76,22 @@ G --> CF
 G --> OF
 G --> ST
 CFG --> UV
+CFG --> CF
 AUD --> CFG
+RP --> CF
 ```
 
 **Diagram sources**
 - [graph.py:43-352](file://safe4ai-pilot/app/agents/graph.py#L43-L352)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
-- [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
+- [content_filter.py:25-73](file://safe4ai-pilot/app/security/content_filter.py#L25-L73)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [models.py:38-95](file://safe4ai-pilot/app/models.py#L38-L95)
 - [chat_routes.py:115-251](file://safe4ai-pilot/app/api/chat_routes.py#L115-L251)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [AdminAudit.tsx:1-115](file://safe4ai-pilot/design/components/AdminAudit.tsx#L1-L115)
+- [rag_pipeline.py:130-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L130-L150)
 
 **Section sources**
 - [graph.py:43-352](file://safe4ai-pilot/app/agents/graph.py#L43-L352)
@@ -88,15 +102,15 @@ AUD --> CFG
 
 ## Core Components
 - InputGuard: Validates and sanitizes user queries before they enter the retrieval phase. It strips HTML and control characters, enforces a maximum length, and detects prompt-injection patterns.
-- ContentFilter: Filters out retrieved document chunks containing PII and optionally blocks chunks matching configured terms. It logs exclusions for auditability.
+- ContentFilter: Provides dual protection through PII detection and filtering, plus redaction capabilities. It can either remove chunks containing PII or replace PII patterns with '[REDACTED]' to preserve document context while maintaining privacy compliance.
 - OutputFilter: Verifies generated answers for PII hallucinations (PII present in the answer but not in the source chunks) and suspiciously long outputs.
 - UploadValidator: Enforces allowed file extensions, declared and detected MIME types, and file size limits to prevent risky uploads.
 
-These components integrate with the LangGraph pipeline to enforce safety at each stage.
+These components integrate with the LangGraph pipeline and RAG ingestion process to enforce safety at each stage while minimizing data loss through intelligent redaction.
 
 **Section sources**
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
-- [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
+- [content_filter.py:25-73](file://safe4ai-pilot/app/security/content_filter.py#L25-L73)
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 
@@ -107,6 +121,8 @@ The chat pipeline invokes guards at strategic points to ensure content safety:
 - Generate: Produces an answer grounded in filtered, relevant chunks.
 - Output Filter: Blocks answers with hallucinated PII or warns on excessive length.
 - Quality Gate: Routes to respond or fallback based on grounding and policy decisions.
+
+The RAG pipeline includes automatic redaction during document ingestion to prevent PII exposure while preserving document context.
 
 ```mermaid
 sequenceDiagram
@@ -141,7 +157,7 @@ API-->>Client : "answer/citations or SSE tokens"
 - [chat_routes.py:115-251](file://safe4ai-pilot/app/api/chat_routes.py#L115-L251)
 - [graph.py:56-352](file://safe4ai-pilot/app/agents/graph.py#L56-L352)
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
-- [content_filter.py:29-64](file://safe4ai-pilot/app/security/content_filter.py#L29-L64)
+- [content_filter.py:29-73](file://safe4ai-pilot/app/security/content_filter.py#L29-L73)
 - [output_filter.py:32-61](file://safe4ai-pilot/app/security/output_filter.py#L32-L61)
 
 ## Detailed Component Analysis
@@ -172,12 +188,16 @@ Found --> |No| Allow["Return allowed"]
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 
 ### ContentFilter
-- Purpose: Remove retrieved chunks containing PII and optionally block chunks matching configured terms.
+- Purpose: Provide comprehensive PII protection through both filtering and redaction capabilities.
 - Mechanism:
   - PII detection via compiled regular expressions for SSNs, credit cards, and passports.
+  - **Filtering mode**: Removes chunks containing PII, logging each exclusion for auditability.
+  - **Redaction mode**: Replaces PII patterns with '[REDACTED]' while preserving surrounding content context.
   - Optional blocked terms list (case-insensitive substring matching).
-  - Logs warnings for each excluded chunk with identifiers for auditability.
-- Decision: Returns a filtered list of chunks.
+  - Comprehensive logging for both filtering and redaction actions.
+- Decision: Returns filtered chunks or redacted text depending on the method used.
+
+**Updated** Added redact() method that replaces PII patterns with '[REDACTED]' instead of filtering out entire document chunks, addressing critical data loss issues while maintaining privacy compliance.
 
 ```mermaid
 flowchart TD
@@ -188,7 +208,11 @@ LogPII --> Next["Next chunk"]
 PII --> |No| Keep["Keep chunk"]
 Keep --> Next
 Next --> Done(["Return clean list"])
-Start2(["filter_blocked_sections(chunks)"]) --> CheckTerms{"Blocked terms configured?"}
+Start2(["redact(text)"]) --> RedactLoop["For each PII pattern"]
+RedactLoop --> Replace["Replace with [REDACTED]"]
+Replace --> NextPattern["Next pattern"]
+NextPattern --> Done2(["Return redacted text"])
+Start3(["filter_blocked_sections(chunks)"]) --> CheckTerms{"Blocked terms configured?"}
 CheckTerms --> |No| ReturnAll["Return original chunks"]
 CheckTerms --> |Yes| Loop2["For each chunk"]
 Loop2 --> Lower["Lowercase content"]
@@ -201,10 +225,10 @@ Next2 --> Done2(["Return clean list"])
 ```
 
 **Diagram sources**
-- [content_filter.py:29-64](file://safe4ai-pilot/app/security/content_filter.py#L29-L64)
+- [content_filter.py:29-73](file://safe4ai-pilot/app/security/content_filter.py#L29-L73)
 
 **Section sources**
-- [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
+- [content_filter.py:25-73](file://safe4ai-pilot/app/security/content_filter.py#L25-L73)
 
 ### OutputFilter
 - Purpose: Verify generated answers before delivery.
@@ -263,6 +287,38 @@ Size --> |OK| Allow["Return allowed"]
 **Section sources**
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 
+### RAG Pipeline Integration
+- Purpose: Automatically redact PII during document ingestion to prevent privacy violations.
+- Mechanism:
+  - During document processing, ContentFilter.is_pii() checks if chunks contain PII.
+  - If PII is detected, ContentFilter.redact() replaces patterns with '[REDACTED]'.
+  - Redaction events are logged for audit trail.
+  - Processed chunks are embedded and stored with redacted content.
+- Decision: Preserves document context while eliminating privacy risks.
+
+**New** Added automatic redaction during document ingestion to address data loss issues while maintaining privacy compliance.
+
+```mermaid
+flowchart TD
+Start(["Document Ingestion"]) --> Extract["Extract Text Chunks"]
+Extract --> CheckPII{"PII Detected?"}
+CheckPII --> |Yes| Redact["Apply ContentFilter.redact()"]
+Redact --> LogPII["Log pii_redacted_in_chunk"]
+LogPII --> Embed["Generate Embeddings"]
+CheckPII --> |No| Embed
+Embed --> Store["Store in Vector Database"]
+Store --> Index["Update BM25 Index"]
+Index --> Complete(["Ingestion Complete"])
+```
+
+**Diagram sources**
+- [rag_pipeline.py:130-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L130-L150)
+- [content_filter.py:66-68](file://safe4ai-pilot/app/security/content_filter.py#L66-L68)
+
+**Section sources**
+- [rag_pipeline.py:130-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L130-L150)
+- [content_filter.py:66-68](file://safe4ai-pilot/app/security/content_filter.py#L66-L68)
+
 ### Integration with AI Response Generation
 - The pipeline builds guards and invokes them at each node:
   - intake_node calls InputGuard.
@@ -270,6 +326,9 @@ Size --> |OK| Allow["Return allowed"]
   - generate_node produces the answer and citations.
   - output_filter_node calls OutputFilter and may route to fallback.
 - The generation_context snapshot ensures the output filter validates against the exact chunks supplied to generation, preventing dynamic changes from bypassing checks.
+- RAG pipeline automatically redacts PII during document ingestion using ContentFilter.redact().
+
+**Updated** Added RAG pipeline integration showing automatic redaction during document processing.
 
 ```mermaid
 classDiagram
@@ -292,13 +351,14 @@ class PrivateAIState {
 +int retrieval_attempts
 +GradedChunk[] generation_context
 }
-class InputGuard {
-+check(query) GuardResult
-}
 class ContentFilter {
 +filter_chunks(chunks) RankedChunk[]
 +filter_blocked_sections(chunks) RankedChunk[]
++redact(text) str
 +is_pii(text) bool
+}
+class InputGuard {
++check(query) GuardResult
 }
 class OutputFilter {
 +check(answer, source_chunks) GuardResult
@@ -317,7 +377,7 @@ GuardResult <.. OutputFilter
 **Diagram sources**
 - [models.py:38-95](file://safe4ai-pilot/app/models.py#L38-L95)
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
-- [content_filter.py:29-64](file://safe4ai-pilot/app/security/content_filter.py#L29-L64)
+- [content_filter.py:29-73](file://safe4ai-pilot/app/security/content_filter.py#L29-L73)
 - [output_filter.py:32-61](file://safe4ai-pilot/app/security/output_filter.py#L32-L61)
 
 **Section sources**
@@ -330,15 +390,20 @@ GuardResult <.. OutputFilter
   - Structlog for logging.
   - Pydantic models for typed results and state.
 - Pipeline depends on guards and orchestrates their invocation.
-- Configuration influences upload size limits and retention.
-- Audit UI reflects retention policies.
+- RAG pipeline integrates ContentFilter for automatic document redaction.
+- Configuration influences upload size limits, retention, and redaction preferences.
+- Audit UI reflects retention policies and redaction settings.
+
+**Updated** Added RAG pipeline integration and configuration dependencies.
 
 ```mermaid
 graph LR
 CFG["config.py: Settings"] --> UV["upload_validator.py: UploadValidator"]
+CFG --> CF["content_filter.py: ContentFilter"]
 IG["input_guard.py: InputGuard"] --> G["graph.py: intake_node"]
-CF["content_filter.py: ContentFilter"] --> G
+CF --> G
 OF["output_filter.py: OutputFilter"] --> G
+CF --> RP["rag_pipeline.py: Document Redaction"]
 ST["models.py: GuardResult/PrivateAIState"] --> IG
 ST --> CF
 ST --> OF
@@ -351,11 +416,12 @@ AUD["AdminAudit.tsx: retention UI"] --> CFG
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
-- [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
+- [content_filter.py:25-73](file://safe4ai-pilot/app/security/content_filter.py#L25-L73)
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
 - [models.py:38-95](file://safe4ai-pilot/app/models.py#L38-L95)
 - [chat_routes.py:115-251](file://safe4ai-pilot/app/api/chat_routes.py#L115-L251)
 - [AdminAudit.tsx:1-115](file://safe4ai-pilot/design/components/AdminAudit.tsx#L1-L115)
+- [rag_pipeline.py:130-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L130-L150)
 
 **Section sources**
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
@@ -368,6 +434,10 @@ AUD["AdminAudit.tsx: retention UI"] --> CFG
 - PII detection in output filtering scans the answer and concatenates source texts; avoid extremely large contexts to reduce overhead.
 - GuardResult short-circuits after the first violation, minimizing unnecessary work.
 - Streaming responses mitigate latency while maintaining safety checks at the end of the pipeline.
+- **Redaction performance**: The redact() method processes text once per PII pattern, making it efficient for typical document sizes.
+- **Memory considerations**: Redaction preserves original text structure, avoiding the memory overhead of filtering entire chunks.
+
+**Updated** Added performance considerations for the new redact() method.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -383,10 +453,14 @@ Common issues and resolutions:
 - Upload rejected:
   - Cause: Disallowed extension/type or size exceeded.
   - Resolution: Use allowed formats and sizes; verify declared Content-Type and file integrity.
+- **Redaction not working**:
+  - Cause: PII patterns not matching expected formats.
+  - Resolution: Verify ContentFilter patterns and ensure documents are processed through the RAG pipeline.
+- **Data loss concerns**:
+  - Cause: Previous filtering approach removed entire chunks.
+  - Resolution: Use ContentFilter.redact() instead of filter_chunks() to preserve document context.
 
-Evidence and logging:
-- Guards emit warnings for excluded chunks and suspicious outputs.
-- Chat endpoints capture trace IDs and node states for diagnostics.
+**Updated** Added troubleshooting guidance for redaction-specific issues.
 
 **Section sources**
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
@@ -396,7 +470,9 @@ Evidence and logging:
 - [chat_routes.py:176-242](file://safe4ai-pilot/app/api/chat_routes.py#L176-L242)
 
 ## Conclusion
-The content filtering system enforces safety across ingestion, retrieval, generation, and output stages using targeted guards. InputGuard prevents harmful prompts, ContentFilter removes sensitive chunks, OutputFilter blocks hallucinated PII and warns on excessive length, and UploadValidator ensures safe ingestion. Together with structured logging and audit UI, the system supports compliance and operational visibility.
+The content filtering system enforces safety across ingestion, retrieval, generation, and output stages using targeted guards. InputGuard prevents harmful prompts, ContentFilter provides dual protection through filtering and redaction, OutputFilter blocks hallucinated PII and warns on excessive length, and UploadValidator ensures safe ingestion. The new redact() method addresses critical data loss issues by replacing PII patterns with '[REDACTED]' instead of removing entire document chunks, while the RAG pipeline automatically redacts PII during document ingestion. Together with structured logging and audit UI, the system supports compliance and operational visibility.
+
+**Updated** Enhanced conclusion to reflect the new redaction capabilities and their benefits.
 
 ## Appendices
 
@@ -407,8 +483,25 @@ The content filtering system enforces safety across ingestion, retrieval, genera
   - Adjust maximum upload size via settings; validators enforce declared and detected MIME types and file size.
 - Retention:
   - Audit events are retained per configuration; admin UI indicates retention and archival policies.
+- **Redaction settings**:
+  - Enable automatic PII redaction during document ingestion through the redactPII setting in admin configuration.
+
+**Updated** Added redaction settings configuration.
 
 **Section sources**
 - [test_security_guards.py:132-166](file://safe4ai-pilot/tests/test_security_guards.py#L132-L166)
 - [config.py:16-20](file://safe4ai-pilot/app/config.py#L16-L20)
 - [AdminAudit.tsx:110-113](file://safe4ai-pilot/design/components/AdminAudit.tsx#L110-L113)
+
+### Redaction Implementation Details
+- **Pattern matching**: Uses the same PII detection patterns as filtering (SSNs, credit cards, passports).
+- **Replacement strategy**: Replaces detected patterns with '[REDACTED]' while preserving surrounding text context.
+- **Logging**: Records redaction events with document and page information for audit trails.
+- **Performance**: Processes text efficiently with minimal computational overhead.
+
+**New** Added implementation details for the redact() method.
+
+**Section sources**
+- [content_filter.py:13-17](file://safe4ai-pilot/app/security/content_filter.py#L13-L17)
+- [content_filter.py:24-27](file://safe4ai-pilot/app/security/content_filter.py#L24-L27)
+- [rag_pipeline.py:140-143](file://safe4ai-pilot/app/services/rag_pipeline.py#L140-L143)

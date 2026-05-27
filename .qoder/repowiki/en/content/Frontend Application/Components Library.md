@@ -5,6 +5,7 @@
 - [Button.tsx](file://safe4ai-pilot/frontend/src/components/Button.tsx)
 - [Chip.tsx](file://safe4ai-pilot/frontend/src/components/Chip.tsx)
 - [Avatar.tsx](file://safe4ai-pilot/frontend/src/components/Avatar.tsx)
+- [AdminLayout.tsx](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx)
 - [useAuth.ts](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts)
 - [useChat.ts](file://safe4ai-pilot/frontend/src/hooks/useChat.ts)
 - [useDocuments.ts](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts)
@@ -17,20 +18,30 @@
 - [package.json](file://safe4ai-pilot/frontend/package.json)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Added documentation for Avatar component usage in navigation contexts
+- Enhanced AdminLayout documentation to show Avatar integration in sidebar
+- Updated component integration patterns to reflect Avatar usage in navigation components
+- Expanded navigation component documentation with concrete examples
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
-10. [Appendices](#appendices)
+6. [Navigation Components](#navigation-components)
+7. [Dependency Analysis](#dependency-analysis)
+8. [Performance Considerations](#performance-considerations)
+9. [Troubleshooting Guide](#troubleshooting-guide)
+10. [Conclusion](#conclusion)
+11. [Appendices](#appendices)
 
 ## Introduction
 This document describes the React component library and utility hooks that power the Private AI web frontend. It focuses on reusable UI components (Button, Chip, Avatar) and shared hooks (useAuth, useChat, useDocuments, useAuditStream). It explains component organization, props, styling via design tokens and Tailwind, integration patterns, and TypeScript usage. Practical guidance is included for creating new components, extending existing ones, and building custom hooks aligned with the design system.
+
+**Updated** Enhanced documentation to include Avatar component usage patterns in navigation contexts and AdminLayout integration.
 
 ## Project Structure
 The frontend is organized around a small set of core UI components and hooks, with a cohesive design system built on CSS custom properties and Tailwind configuration. The application bootstraps a React Query provider, routes protected pages, and applies global styles.
@@ -45,7 +56,10 @@ subgraph "Core UI"
 BTN["Button.tsx"]
 CHIP["Chip.tsx"]
 AVA["Avatar.tsx"]
-end
+END
+subgraph "Navigation"
+ADMIN_LAYOUT["AdminLayout.tsx"]
+END
 subgraph "Hooks"
 H_AUTH["useAuth.ts"]
 H_CHAT["useChat.ts"]
@@ -65,9 +79,11 @@ APP --> H_AUDIT
 BTN --> TOKENS
 CHIP --> TOKENS
 AVA --> TOKENS
+ADMIN_LAYOUT --> AVA
 BTN -. uses .-> TW_CFG
 CHIP -. uses .-> TW_CFG
 AVA -. uses .-> TW_CFG
+ADMIN_LAYOUT -. uses .-> TOKENS
 INDEX_CSS --> TOKENS
 INDEX_CSS --> TW_CFG
 ```
@@ -78,7 +94,8 @@ INDEX_CSS --> TW_CFG
 - [Button.tsx:1-56](file://safe4ai-pilot/frontend/src/components/Button.tsx#L1-L56)
 - [Chip.tsx:1-32](file://safe4ai-pilot/frontend/src/components/Chip.tsx#L1-L32)
 - [Avatar.tsx:1-15](file://safe4ai-pilot/frontend/src/components/Avatar.tsx#L1-L15)
-- [useAuth.ts:1-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L28)
+- [AdminLayout.tsx:1-144](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L1-L144)
+- [useAuth.ts:1-36](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L36)
 - [useChat.ts:1-106](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L106)
 - [useDocuments.ts:1-61](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts#L1-L61)
 - [useAuditStream.ts:1-17](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts#L1-L17)
@@ -114,6 +131,7 @@ This section documents the three primary UI primitives and their props, variants
   - Purpose: Initials-based user or entity avatar with configurable size and color.
   - Key props: name, size, color.
   - Styling: Computes initials, sets background and font size based on props.
+  - Navigation integration: Used extensively in AdminLayout sidebar for user identification.
 
 **Section sources**
 - [Button.tsx:1-56](file://safe4ai-pilot/frontend/src/components/Button.tsx#L1-L56)
@@ -222,6 +240,9 @@ Dot --> Children["Render children"]
   - Uses a consistent rounded-circle presentation.
 - Composition patterns
   - Pair with labels or in lists to represent users or entities.
+  - Integrated into navigation components for user identification.
+
+**Updated** Enhanced to include navigation integration patterns.
 
 ```mermaid
 flowchart TD
@@ -250,6 +271,7 @@ Style --> Render["Render initials"]
   - me, isLoading, isAuthenticated, isAdmin, signOut.
 - Integration
   - Consumed by route guards in App.tsx to protect routes.
+  - Used by navigation components for user identification.
 
 ```mermaid
 sequenceDiagram
@@ -274,7 +296,7 @@ Hook-->>Comp : navigate to "/login"
 - [App.tsx:19-31](file://safe4ai-pilot/frontend/src/App.tsx#L19-L31)
 
 **Section sources**
-- [useAuth.ts:1-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L28)
+- [useAuth.ts:1-36](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L36)
 - [App.tsx:1-100](file://safe4ai-pilot/frontend/src/App.tsx#L1-L100)
 
 #### useChat
@@ -365,8 +387,57 @@ Hook->>Hook : refetch every 30s
 **Section sources**
 - [useAuditStream.ts:1-17](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts#L1-L17)
 
+## Navigation Components
+
+### AdminLayout Component
+The AdminLayout serves as the primary navigation container for the admin interface, featuring a sidebar navigation system with integrated user avatar functionality.
+
+- Navigation structure
+  - Static navigation items: Overview, Documents, Activity, Feedback, Users, Settings
+  - Dynamic feedback badge showing negative feedback count
+  - Back-to-chat navigation link
+  - User profile section with Avatar integration
+- Avatar integration patterns
+  - Used in sidebar footer for user identification
+  - Name prop derived from authenticated user email
+  - Size adjusted for sidebar context (24px)
+- Styling approach
+  - Responsive sidebar with fixed width (w-52)
+  - Active state highlighting for current route
+  - Hover states and transitions for interactive elements
+  - Integration with design tokens for consistent theming
+
+```mermaid
+flowchart TD
+Start(["AdminLayout render"]) --> NavItems["Render NAV items"]
+NavItems --> ActiveCheck{"Check active route"}
+ActiveCheck --> Highlight["Apply active state classes"]
+Highlight --> FeedbackBadge["Show negative feedback count"]
+FeedbackBadge --> UserSection["Render user section"]
+UserSection --> Avatar["Render Avatar with user email"]
+Avatar --> SignOut["Render sign out button"]
+SignOut --> End(["Complete"])
+```
+
+**Diagram sources**
+- [AdminLayout.tsx:59-133](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L59-L133)
+
+**Section sources**
+- [AdminLayout.tsx:1-144](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L1-L144)
+
+### Navigation Integration Patterns
+- Route-based active state management
+- Dynamic badge indicators for feedback counts
+- User avatar placement in navigation footers
+- Consistent spacing and typography scales
+- Responsive design considerations for sidebar navigation
+
+**Section sources**
+- [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
+- [AdminLayout.tsx:25-43](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L25-L43)
+
 ## Dependency Analysis
-The design system is centralized in CSS custom properties and extended into Tailwind. Components rely on these tokens for consistent colors, typography, and spacing. The hooks depend on React Query for caching and server synchronization.
+The design system is centralized in CSS custom properties and extended into Tailwind. Components rely on these tokens for consistent colors, typography, and spacing. The hooks depend on React Query for caching and server synchronization. Navigation components integrate Avatar components for user identification.
 
 ```mermaid
 graph LR
@@ -375,10 +446,13 @@ Tokens --> CSS["index.css"]
 TW --> BTN["Button.tsx"]
 TW --> CHIP["Chip.tsx"]
 TW --> AVA["Avatar.tsx"]
+TW --> ADMIN["AdminLayout.tsx"]
 QC["@tanstack/react-query"] --> H_AUTH["useAuth.ts"]
 QC --> H_CHAT["useChat.ts"]
 QC --> H_DOCS["useDocuments.ts"]
 QC --> H_AUDIT["useAuditStream.ts"]
+AVA --> ADMIN
+H_AUTH --> ADMIN
 ```
 
 **Diagram sources**
@@ -388,7 +462,8 @@ QC --> H_AUDIT["useAuditStream.ts"]
 - [Button.tsx:1-56](file://safe4ai-pilot/frontend/src/components/Button.tsx#L1-L56)
 - [Chip.tsx:1-32](file://safe4ai-pilot/frontend/src/components/Chip.tsx#L1-L32)
 - [Avatar.tsx:1-15](file://safe4ai-pilot/frontend/src/components/Avatar.tsx#L1-L15)
-- [useAuth.ts:1-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L28)
+- [AdminLayout.tsx:1-144](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L1-L144)
+- [useAuth.ts:1-36](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L36)
 - [useChat.ts:1-106](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L106)
 - [useDocuments.ts:1-61](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts#L1-L61)
 - [useAuditStream.ts:1-17](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts#L1-L17)
@@ -407,8 +482,9 @@ QC --> H_AUDIT["useAuditStream.ts"]
   - useDocuments polls ingestion status with bounded retries; keep polling duration reasonable to prevent excessive requests.
 - CSS custom properties
   - Using tokens ensures efficient style updates and avoids duplication across components.
-
-[No sources needed since this section provides general guidance]
+- Navigation performance
+  - Avatar components are lightweight and cached through React's component system.
+  - AdminLayout uses efficient route-based active state detection.
 
 ## Troubleshooting Guide
 - Authentication redirects
@@ -419,17 +495,19 @@ QC --> H_AUDIT["useAuditStream.ts"]
   - Upload failures surface an error message; confirm file type and size constraints and retry.
 - Audit pagination
   - If events do not refresh, check the refetch interval and page boundaries.
+- Navigation issues
+  - If Avatar appears incorrectly sized, verify size prop is appropriate for the context (24px for sidebar, default for other contexts).
+  - If navigation active states don't work, check route matching logic in AdminLayout.
 
 **Section sources**
 - [App.tsx:19-31](file://safe4ai-pilot/frontend/src/App.tsx#L19-L31)
 - [useChat.ts:83-87](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L83-L87)
 - [useDocuments.ts:34-36](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts#L34-L36)
 - [useAuditStream.ts:9-13](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts#L9-L13)
+- [AdminLayout.tsx:43](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L43)
 
 ## Conclusion
-The component library centers on three lightweight, theme-driven primitives—Button, Chip, and Avatar—combined with four focused hooks for auth, chat, documents, and audit. The design system is defined via CSS custom properties and Tailwind, ensuring consistent visuals and scalable maintenance. The hooks integrate with React Query to manage server state and caching, enabling robust UI flows with minimal boilerplate.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The component library centers on three lightweight, theme-driven primitives—Button, Chip, and Avatar—combined with four focused hooks for auth, chat, documents, and audit. The design system is defined via CSS custom properties and Tailwind, ensuring consistent visuals and scalable maintenance. The hooks integrate with React Query to manage server state and caching, enabling robust UI flows with minimal boilerplate. Navigation components like AdminLayout demonstrate effective integration patterns for Avatar components and provide a comprehensive framework for user interface navigation experiences.
 
 ## Appendices
 
@@ -451,6 +529,7 @@ The component library centers on three lightweight, theme-driven primitives—Bu
 - Typography and spacing scales are defined in tokens to maintain readability across breakpoints.
 - Components use relative sizing and padding to adapt to container widths.
 - Tailwind utilities enable responsive variants where needed.
+- Navigation components adapt to different screen sizes while maintaining consistent user experience.
 
 **Section sources**
 - [tokens.css:53-68](file://safe4ai-pilot/frontend/src/styles/tokens.css#L53-L68)
@@ -462,6 +541,7 @@ The component library centers on three lightweight, theme-driven primitives—Bu
   - Use tokens and Tailwind utilities for styling.
   - Keep variants and sizes explicit and documented.
   - Export a default component and reuse design tokens.
+- Consider navigation integration patterns for components that might appear in sidebar or footer contexts.
 
 **Section sources**
 - [Button.tsx:21-32](file://safe4ai-pilot/frontend/src/components/Button.tsx#L21-L32)
@@ -472,6 +552,7 @@ The component library centers on three lightweight, theme-driven primitives—Bu
 - Add new variants or sizes by expanding the variant/scale maps and adding corresponding Tailwind classes.
 - Introduce new props with sensible defaults and derive styles from tokens.
 - Maintain backward compatibility by keeping default props unchanged.
+- Consider navigation-specific adaptations when extending components for sidebar usage.
 
 **Section sources**
 - [Button.tsx:7-19](file://safe4ai-pilot/frontend/src/components/Button.tsx#L7-L19)
@@ -482,8 +563,20 @@ The component library centers on three lightweight, theme-driven primitives—Bu
 - Encapsulate state updates and side effects in callbacks returned by the hook.
 - Expose a minimal, predictable interface and handle loading/error states gracefully.
 - Invalidate queries appropriately after mutations.
+- Integrate with navigation components for user state management.
 
 **Section sources**
 - [useAuth.ts:8-18](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L8-L18)
 - [useDocuments.ts:10-26](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts#L10-L26)
 - [useAuditStream.ts:9-13](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts#L9-L13)
+
+### Navigation Component Best Practices
+- Use Avatar components consistently for user identification in navigation contexts.
+- Implement route-based active state management for navigation items.
+- Provide clear visual hierarchy with proper spacing and typography.
+- Consider accessibility with proper ARIA labels and keyboard navigation.
+- Test navigation components across different screen sizes and user contexts.
+
+**Section sources**
+- [AdminLayout.tsx:120-133](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L120-L133)
+- [Avatar.tsx:3-14](file://safe4ai-pilot/frontend/src/components/Avatar.tsx#L3-L14)

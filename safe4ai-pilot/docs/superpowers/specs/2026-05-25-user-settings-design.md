@@ -1,7 +1,53 @@
 # User Settings Design
 
 Date: 2026-05-25
-Status: Approved for planning
+Status: Backend implemented; frontend pending
+
+## Progress
+
+Last updated: 2026-05-25
+
+### Done
+
+- Design spec written and committed in `bb32635 docs: add user settings design spec`.
+- Backend contract tests added and reviewed in `e893e03 test: add account settings contract tests`.
+- Account-scoped backend API implemented and reviewed in `240327e Add account settings routes`.
+- `GET /account/settings` now exists for authenticated users and returns profile, security, usage, and knowledge base aggregates.
+- Usage aggregation is scoped to `current_user.id`.
+- Knowledge base counts are read-only corpus-level aggregates.
+- `POST /account/change-password` now verifies the current password, enforces shared password strength policy, updates the password hash, invalidates existing tokens, and returns the sign-in-again message.
+- Password strength policy is shared between admin user creation and account password change.
+- JWT `iat` precision was adjusted so old tokens are rejected after password change while a fresh immediate login token is accepted.
+- `/settings` backend admin configuration remains admin-only.
+
+Backend verification completed:
+
+- `tests/test_account.py` passes.
+- `tests/test_auth.py` account/auth regression coverage passes.
+- Relevant admin user, `/me`, and corpus-status tests pass.
+- Review evidence included a focused run of `tests/test_account.py tests/test_auth.py tests/test_admin.py`.
+
+### In Progress / Not Counted As Done
+
+- A partial untracked frontend file exists at `safe4ai-pilot/frontend/src/api/account.ts` from an interrupted Task 3 attempt. It has not been reviewed, committed, or counted as complete.
+- The implementation plan exists at `safe4ai-pilot/docs/superpowers/plans/2026-05-25-user-settings.md` but is still untracked at the time of this update.
+
+### Remaining
+
+- Add the frontend account API module and commit it after review.
+- Add authenticated `/settings` route in `frontend/src/App.tsx`.
+- Add a user-visible settings link in `frontend/src/pages/ChatPage.tsx` for ordinary users while keeping the admin console link for admins.
+- Build the full user settings page with Account, Security, Usage, and Knowledge Base sections.
+- Implement frontend password form validation and success flow:
+  - current password
+  - new password
+  - confirm password
+  - strength validation
+  - success message: `Password changed. Please sign in again with your new password.`
+  - clear auth/query state and navigate to `/login`
+- Run frontend build.
+- Run final backend regression checks.
+- Manually verify `/settings`, password change, re-login, and admin-only `/admin/settings` behavior.
 
 ## Goal
 

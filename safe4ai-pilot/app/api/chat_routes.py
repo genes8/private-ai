@@ -22,9 +22,11 @@ from app.config import settings
 from app.db import get_db
 from app.db.models import User
 from app.models import Citation, Message, PrivateAIState
+from app.services.app_config_store import load_app_config
 from app.services.chat_finalizer import finalize_chat_run
 from app.services.conversation import ConversationManager
 from app.services.cost_service import CostCeilingExceeded, check_cost_ceiling, usage_or_estimate
+from app.services.quota_service import QuotaExceeded, TierExpired, check_query_quota, check_tier_expiry
 from app.services.runtime_config import load_runtime_config
 logger = structlog.get_logger(__name__)
 
@@ -118,6 +120,46 @@ def _merge_stream_state(current: PrivateAIState, update: PrivateAIState | dict[s
     return PrivateAIState(**merged)
 
 
+def _prepare_chat_run(
+    request: Request,
+    body: ChatRequest,
+    current_user: User,
+    db: Session,
+) -> tuple[str, PrivateAIState, Any]:
+    """Shared preflight for /chat and /chat/stream.
+
+    Validates the question, enforces tier expiry + cost ceiling + query quota,
+    resolves or creates a session, and returns ``(session_id, run_state, graph)``.
+    Raises HTTPException on any failure so callers only contain unique logic.
+    """
+    if not body.question.strip():
+        raise HTTPException(status_code=422, detail="Question cannot be empty")
+
+    tier_config = load_app_config(db)
+    try:
+        check_tier_expiry(tier_config)
+    except TierExpired as exc:
+        raise HTTPException(status_code=403, detail=exc.detail) from exc
+    try:
+        check_cost_ceiling(db, projected_question=body.question)
+    except CostCeilingExceeded as exc:
+        raise HTTPException(status_code=429, detail=exc.detail) from exc
+    try:
+        check_query_quota(db, tier_config)
+    except QuotaExceeded as exc:
+        raise HTTPException(status_code=429, detail=exc.detail) from exc
+
+    graph = getattr(request.app.state, "graph", None)
+    if graph is None:
+        raise HTTPException(status_code=503, detail="AI pipeline not ready")
+
+    convo = ConversationManager(db)
+    session_id, state = _resolve_session(body, str(current_user.id), convo)
+    trace_id = str(uuid.uuid4())
+    run_state = _build_run_state(state, body.question, trace_id)
+    return session_id, run_state, graph
+
+
 # ---------------------------------------------------------------------------
 # POST /chat — blocking, no frontend consumer.
 # Intentionally kept for offline_eval.py, integration tests, and direct
@@ -133,22 +175,7 @@ async def chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
-    if not body.question.strip():
-        raise HTTPException(status_code=422, detail="Question cannot be empty")
-
-    try:
-        check_cost_ceiling(db, projected_question=body.question)
-    except CostCeilingExceeded as exc:
-        raise HTTPException(status_code=429, detail=exc.detail) from exc
-
-    graph = getattr(request.app.state, "graph", None)
-    if graph is None:
-        raise HTTPException(status_code=503, detail="AI pipeline not ready")
-
-    convo = ConversationManager(db)
-    session_id, state = _resolve_session(body, str(current_user.id), convo)
-    trace_id = str(uuid.uuid4())
-    run_state = _build_run_state(state, body.question, trace_id)
+    session_id, run_state, graph = _prepare_chat_run(request, body, current_user, db)
 
     started_at = time.monotonic()
     try:
@@ -202,22 +229,7 @@ async def chat_stream(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
-    if not body.question.strip():
-        raise HTTPException(status_code=422, detail="Question cannot be empty")
-
-    try:
-        check_cost_ceiling(db, projected_question=body.question)
-    except CostCeilingExceeded as exc:
-        raise HTTPException(status_code=429, detail=exc.detail) from exc
-
-    graph = getattr(request.app.state, "graph", None)
-    if graph is None:
-        raise HTTPException(status_code=503, detail="AI pipeline not ready")
-
-    convo = ConversationManager(db)
-    session_id, state = _resolve_session(body, str(current_user.id), convo)
-    trace_id = str(uuid.uuid4())
-    run_state = _build_run_state(state, body.question, trace_id)
+    session_id, run_state, graph = _prepare_chat_run(request, body, current_user, db)
 
     async def event_stream() -> AsyncIterator[str]:
         def _sse(event: str, data: dict[str, Any]) -> str:

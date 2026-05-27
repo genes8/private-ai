@@ -15,6 +15,8 @@ from app.auth.password_policy import validate_password_strength
 from app.auth.router import limiter
 from app.db import get_db
 from app.db.models import User, UserRole
+from app.services.app_config_store import load_app_config
+from app.services.quota_service import SeatLimitExceeded, TierExpired, check_seat_limit, check_tier_expiry
 from app.services.user_service import deactivate_user_cascade
 
 logger = structlog.get_logger(__name__)
@@ -69,6 +71,17 @@ def create_user(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_role("admin")),
 ) -> dict[str, str]:
+    # Tier preflight: expiry and seat cap checks before any DB write
+    current_config = load_app_config(db)
+    try:
+        check_tier_expiry(current_config)
+    except TierExpired as exc:
+        raise HTTPException(status_code=403, detail=exc.detail) from exc
+    try:
+        check_seat_limit(db, current_config)
+    except SeatLimitExceeded as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
+
     if body.password is None:
         raise HTTPException(status_code=422, detail="Password is required")
     validate_password_strength(body.password)

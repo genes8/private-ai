@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from unittest.mock import patch
 
-from app.models import RankedChunk
+from app.models import Citation, RankedChunk
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -22,6 +22,10 @@ def _make_chunk(content: str, chunk_id: str = "c1", doc_id: str = "d1") -> Ranke
         score=0.9,
         rerank_score=0.85,
     )
+
+
+def _make_citation(filename: str = "doc.pdf", page: int = 1) -> Citation:
+    return Citation(filename=filename, page_number=page, excerpt="excerpt text", score=0.9)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +172,9 @@ def test_output_filter_blocks_pii_not_in_source() -> None:
     of = OutputFilter()
     answer = "The user's SSN is 123-45-6789."
     clean_chunk = _make_chunk("No personal data here.")
-    result = of.check(answer, [clean_chunk])
+    # Pass a citation so we reach the PII rule (rule 0 requires citations when chunks exist)
+    citation = _make_citation()
+    result = of.check(answer, [clean_chunk], citations=[citation])
     assert result.allowed is False
     assert "PII" in result.reason
 
@@ -179,7 +185,8 @@ def test_output_filter_allows_clean_output() -> None:
     of = OutputFilter()
     answer = "The refund policy is 30 days."
     chunk = _make_chunk("The refund policy is 30 days.")
-    result = of.check(answer, [chunk])
+    citation = _make_citation()
+    result = of.check(answer, [chunk], citations=[citation])
     assert result.allowed is True
     assert result.reason == "ok"
 
@@ -192,7 +199,8 @@ def test_output_filter_allows_pii_present_in_source() -> None:
     pii = "123-45-6789"
     answer = f"The SSN on file is {pii}."
     chunk = _make_chunk(f"Employee SSN: {pii}")
-    result = of.check(answer, [chunk])
+    citation = _make_citation()
+    result = of.check(answer, [chunk], citations=[citation])
     assert result.allowed is True
 
 
@@ -203,9 +211,66 @@ def test_output_filter_allows_long_answer() -> None:
     of = OutputFilter()
     long_answer = "word " * 900  # > 4000 chars
     chunk = _make_chunk("source content")
-    result = of.check(long_answer, [chunk])
+    citation = _make_citation()
+    result = of.check(long_answer, [chunk], citations=[citation])
     # Still allowed — long answers are warned, not blocked
     assert result.allowed is True
+
+
+# ---------------------------------------------------------------------------
+# OutputFilter — citation enforcement (new tests)
+# ---------------------------------------------------------------------------
+
+
+def test_output_filter_blocks_when_sources_present_but_no_citations() -> None:
+    """Rule 0: answer with source chunks but empty citations list is blocked."""
+    from app.security.output_filter import OutputFilter
+
+    of = OutputFilter()
+    result = of.check("Some answer.", [_make_chunk("source")], citations=[])
+    assert result.allowed is False
+    assert "sources" in result.reason.lower()
+
+
+def test_output_filter_blocks_when_citations_kwarg_missing() -> None:
+    """Rule 0: calling check(answer, [chunk]) without citations= is also blocked."""
+    from app.security.output_filter import OutputFilter
+
+    of = OutputFilter()
+    result = of.check("Some answer.", [_make_chunk("source")])
+    assert result.allowed is False
+    assert "sources" in result.reason.lower()
+
+
+def test_output_filter_passes_with_citations() -> None:
+    """Rule 0 is satisfied when at least one citation is provided."""
+    from app.security.output_filter import OutputFilter
+
+    of = OutputFilter()
+    result = of.check("Some answer.", [_make_chunk("source")], citations=[_make_citation()])
+    assert result.allowed is True
+
+
+def test_output_filter_no_citation_check_without_sources() -> None:
+    """Rule 0 is exempt when source_chunks is empty (no-context fallback)."""
+    from app.security.output_filter import OutputFilter
+
+    of = OutputFilter()
+    result = of.check("I don't know.", [], citations=[])
+    assert result.allowed is True
+
+
+def test_output_filter_pii_still_checked_when_citations_present() -> None:
+    """PII rule (rule 1) still fires when rule 0 is satisfied."""
+    from app.security.output_filter import OutputFilter
+
+    of = OutputFilter()
+    pii_answer = "The SSN is 123-45-6789."
+    chunk = _make_chunk("No SSN data here.")
+    citation = _make_citation()
+    result = of.check(pii_answer, [chunk], citations=[citation])
+    assert result.allowed is False
+    assert "PII" in result.reason
 
 
 

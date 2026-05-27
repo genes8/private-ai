@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.middleware import hash_password
 from app.db.models import (
+    DELETED_USER_ID,
     AgentRun,
     AuditLog,
     Document,
@@ -22,7 +23,7 @@ from app.db.models import Session as DbSession
 
 logger = structlog.get_logger(__name__)
 
-_DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
+_DELETED_USER_ID = DELETED_USER_ID  # alias kept so call-sites below are unchanged
 _DELETED_USER_EMAIL = "deleted@redacted.local"
 
 

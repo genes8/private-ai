@@ -24,6 +24,11 @@ _KEY_TYPES: dict[str, type] = {
     "reranker_enabled": bool,
     "sso_only": bool,
     "redact_pii": bool,
+    # Tier / license config
+    "tier": str,                  # "evaluation" | "team" | "enterprise"
+    "max_seats": int,             # 0 = unlimited
+    "monthly_query_limit": int,   # 0 = unlimited
+    "tier_expires_at": str,       # ISO-8601 UTC string; absent/empty = no expiry
 }
 
 # Keys in this set are encrypted at rest using Fernet derived from SECRET_KEY.

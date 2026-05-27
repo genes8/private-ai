@@ -1,6 +1,10 @@
 import enum
 
 from pgvector.sqlalchemy import Vector
+
+# Canonical sentinel ID for the ghost "deleted" user.  Every file that filters
+# or creates this user must import this constant instead of copying the string.
+DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -87,7 +91,7 @@ class Document(Base):
         String,
         ForeignKey("users.id", ondelete="SET DEFAULT"),
         nullable=False,
-        server_default="00000000-0000-0000-0000-000000000001",
+        server_default=DELETED_USER_ID,
     )
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
     doc_metadata = Column(JSON, nullable=True)

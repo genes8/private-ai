@@ -8,6 +8,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.provider_clients import ProviderUsage
 
 
+# Canonical no-answer sentinel — used in graph nodes and RagPipeline.query()
+# to signal that the corpus has no answer. String identity (==) is used for
+# control-flow decisions; define once here to prevent silent drift.
+NO_ANSWER = "I don't have enough information in the provided documents to answer this question."
+
+
 class Message(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -99,3 +105,8 @@ class PrivateAIState(BaseModel):
     # snapshot of the exact chunks supplied to generate_node for the current answer;
     # output_filter_node validates against this rather than the live graded_chunks snapshot
     generation_context: list[GradedChunk] = Field(default_factory=list)
+
+    @property
+    def effective_query(self) -> str:
+        """The best available query string: rewritten if available, else the raw last message."""
+        return self.rewritten_query or (self.messages[-1].content if self.messages else "")

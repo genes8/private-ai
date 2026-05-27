@@ -4,6 +4,7 @@
 **Referenced Files in This Document**
 - [ingestion_service.py](file://safe4ai-pilot/app/services/ingestion_service.py)
 - [rag_pipeline.py](file://safe4ai-pilot/app/services/rag_pipeline.py)
+- [document_parser.py](file://safe4ai-pilot/app/services/document_parser.py)
 - [hybrid_retriever.py](file://safe4ai-pilot/app/components/hybrid_retriever.py)
 - [reranker.py](file://safe4ai-pilot/app/components/reranker.py)
 - [models.py](file://safe4ai-pilot/app/models.py)
@@ -18,10 +19,10 @@
 
 ## Update Summary
 **Changes Made**
-- Enhanced error handling and transaction management in ingestion service with improved status tracking
-- Added queued and indexing states for better document lifecycle management
-- Improved OCR quality detection with confidence scoring and low-confidence page tracking
-- Enhanced job recovery mechanism for stuck ingestion processes
+- Extracted parsing logic into dedicated `document_parser.py` service (182 lines) that consolidates all document parsing functionality
+- Refactored `rag_pipeline.py` to remove over 99 lines of parsing code and delegate all document processing to the new service
+- Improved testability since parsing logic can now be tested independently without instantiating the full pipeline
+- Enhanced modularity with dedicated OCR capabilities, PDF processing with automatic fallback, DOCX and XLSX handling
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -49,7 +50,7 @@ This document describes the end-to-end document processing system that transform
 ## Project Structure
 The system is organized around a FastAPI backend with modular services:
 - API layer: uploads, admin operations, and status polling
-- Services: ingestion orchestration, RAG pipeline, semantic caching
+- Services: ingestion orchestration, RAG pipeline, document parsing, semantic caching
 - Components: hybrid retriever and reranker
 - Models: shared Pydantic models and DB ORM models
 - Security: upload validation and guards
@@ -63,6 +64,7 @@ end
 subgraph "Services"
 IS["ingestion_service.py"]
 RP["rag_pipeline.py"]
+DP["document_parser.py"]
 SC["semantic_cache.py"]
 end
 subgraph "Components"
@@ -84,6 +86,7 @@ C["config.py"]
 end
 AR --> IS
 IS --> RP
+RP --> DP
 RP --> HR
 RP --> RR
 RP --> SC
@@ -95,6 +98,7 @@ RP --> MDB
 AR --> MDB
 C --> IS
 C --> RP
+C --> DP
 C --> HR
 C --> RR
 C --> SC
@@ -104,6 +108,7 @@ C --> SC
 - [admin_routes.py:63-114](file://safe4ai-pilot/app/api/admin_routes.py#L63-L114)
 - [ingestion_service.py:21-87](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L87)
 - [rag_pipeline.py:34-182](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L182)
+- [document_parser.py:1-183](file://safe4ai-pilot/app/services/document_parser.py#L1-183)
 - [hybrid_retriever.py:13-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L13-L143)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
 - [semantic_cache.py:14-104](file://safe4ai-pilot/app/services/semantic_cache.py#L14-L104)
@@ -119,7 +124,8 @@ C --> SC
 
 ## Core Components
 - Ingestion Service: Orchestrates background ingestion with enhanced error handling, transaction management, and improved status tracking through queued, embedding, and indexing states.
-- RAG Pipeline: Loads supported formats, chunks text with OCR quality detection, generates embeddings, stores vectors and payloads, updates BM25 index, and supports OCR for low-text PDF pages with confidence scoring.
+- RAG Pipeline: Loads supported formats via dedicated document parser, chunks text with OCR quality detection, generates embeddings, stores vectors and payloads, updates BM25 index, and supports OCR for low-text PDF pages with confidence scoring.
+- Document Parser: Dedicated service (182 lines) consolidating all document parsing functionality including OCR capabilities, PDF processing with automatic fallback, DOCX and XLSX handling.
 - Hybrid Retriever: Combines dense vector similarity (Qdrant) and sparse BM25 ranking, then merges results via Reciprocal Rank Fusion.
 - Reranker: Uses a cross-encoder to re-rank candidate chunks for improved relevance.
 - Semantic Cache: Stores query embeddings and cached answers for reuse.
@@ -129,7 +135,8 @@ C --> SC
 
 **Section sources**
 - [ingestion_service.py:21-167](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L167)
-- [rag_pipeline.py:34-313](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L313)
+- [rag_pipeline.py:34-345](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L345)
+- [document_parser.py:1-183](file://safe4ai-pilot/app/services/document_parser.py#L1-183)
 - [hybrid_retriever.py:13-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L13-L143)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
 - [semantic_cache.py:14-104](file://safe4ai-pilot/app/services/semantic_cache.py#L14-L104)
@@ -140,7 +147,7 @@ C --> SC
 ## Architecture Overview
 High-level ingestion and retrieval flow with enhanced status tracking:
 - Upload validated and stored; ingestion job created with pending status and scheduled.
-- Background ingestion loads file content, performs OCR with quality detection, chunks, embeds, upserts vectors, persists chunk metadata, and updates BM25 index.
+- Background ingestion loads file content via dedicated document parser, performs OCR with quality detection, chunks, embeds, upserts vectors, persists chunk metadata, and updates BM25 index.
 - Enhanced status tracking moves documents through queued → embedding → indexed → failed states with proper transaction management.
 - Retrieval combines dense vectors and BM25, then reranks with a cross-encoder.
 - Optional semantic cache accelerates repeated queries.
@@ -151,6 +158,7 @@ participant Client as "Client"
 participant API as "Admin Routes"
 participant Ingest as "Ingestion Service"
 participant Pipe as "RAG Pipeline"
+participant Parser as "Document Parser"
 participant QD as "Qdrant"
 participant BM as "BM25 Index"
 participant ENC as "Embedding Model"
@@ -160,7 +168,9 @@ API->>API : "Validate + persist raw file"
 API->>API : "Create Document (queued) + Job (pending)"
 API->>Ingest : "Schedule run_ingestion()"
 Ingest->>Pipe : "ingest(file_path, doc_id, filename, uploaded_by)"
-Pipe->>Pipe : "Load + chunk + OCR quality detection"
+Pipe->>Parser : "load_pdf/load_docx/load_xlsx"
+Parser-->>Pipe : "Parsed pages with OCR quality"
+Pipe->>Pipe : "Chunk + OCR quality detection"
 Pipe->>ENC : "Generate embeddings (batch)"
 ENC-->>Pipe : "Embeddings"
 Pipe->>QD : "Upsert vectors + payload (including ocr_quality)"
@@ -176,6 +186,7 @@ API-->>Client : "ingestion_status, job_status, error"
 - [admin_routes.py:63-114](file://safe4ai-pilot/app/api/admin_routes.py#L63-L114)
 - [ingestion_service.py:21-87](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L87)
 - [rag_pipeline.py:62-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L62-L150)
+- [document_parser.py:102-159](file://safe4ai-pilot/app/services/document_parser.py#L102-L159)
 - [hybrid_retriever.py:29-41](file://safe4ai-pilot/app/components/hybrid_retriever.py#L29-L41)
 
 **Section sources**
@@ -240,35 +251,81 @@ Job status tracking includes:
 - [ingestion_service.py:44-46](file://safe4ai-pilot/app/services/ingestion_service.py#L44-L46)
 - [admin_routes.py:440](file://safe4ai-pilot/app/api/admin_routes.py#L440)
 
-### RAG Pipeline with OCR Quality Detection
-Enhanced responsibilities:
-- File loading and preprocessing for PDF, DOCX, XLSX, TXT with quality detection.
-- Advanced OCR for scanned PDFs with confidence scoring and low-confidence page tracking.
-- Chunking with overlap, batch embedding generation, and vector upsert with quality metadata.
-- Persisting chunk metadata including OCR quality indicators and updating BM25 index.
-- Query-time retrieval, reranking, and answer synthesis.
+### Document Parser Service
+**Updated** Extracted parsing logic into dedicated service for improved modularity and testability.
 
-Processing logic highlights:
-- PDF: extract text per page; if below threshold or garbled, convert page to image and run OCR via Ollama vision model; compute confidence (high/medium/low) and track low-confidence pages.
-- DOCX/XLSX/TXT: native parsing; XLSX rows converted to tabular text.
-- Chunking: recursive character splitting with configurable size and overlap.
-- Embeddings: batched requests to Ollama embeddings endpoint.
-- Vector storage: Qdrant upsert with payload metadata including ocr_quality field.
-- BM25: rebuild index from chunk IDs and payloads for sparse retrieval.
-- Query: hybrid retrieval + reranking; minimum rerank score threshold determines fallback.
+The Document Parser service consolidates all document parsing functionality in a single, cohesive module:
+- PDF processing with automatic fallback to OCR for low-text pages
+- DOCX and XLSX native parsing with specialized handling
+- Comprehensive OCR capabilities with confidence scoring
+- Garbage text detection to prevent processing of poor OCR output
+- Structured page data with quality metadata
+
+Key capabilities:
+- PDF parsing with native text extraction and intelligent OCR fallback
+- DOCX processing using docx2txt library
+- XLSX processing with row-by-row conversion to tabular text
+- OCR with structured prompts for both text extraction and quality assessment
+- Confidence scoring (high/medium/low) with JSON-based evaluation
+- Temporary file management for OCR processing
+- Error handling and logging for failed OCR operations
 
 ```mermaid
 flowchart TD
 U["Upload"] --> Detect["Detect file type"]
-Detect --> |PDF| LoadPDF["Load PDF pages"]
-Detect --> |DOCX| LoadDOCX["Parse DOCX"]
-Detect --> |XLSX| LoadXLSX["Parse XLSX"]
+Detect --> |PDF| LoadPDF["Load PDF pages via document_parser"]
+Detect --> |DOCX| LoadDOCX["Parse DOCX via document_parser"]
+Detect --> |XLSX| LoadXLSX["Parse XLSX via document_parser"]
 Detect --> |TXT| LoadTXT["Read text"]
 LoadPDF --> CheckText{"Text length >= OCR threshold<br/>AND not garbled?"}
 CheckText --> |Yes| Native["Treat as native<br/>(ocr_quality: 'native')"]
 CheckText --> |No| OCR["Convert page to image<br/>Run OCR via Ollama vision"]
 OCR --> Quality["Quality assessment:<br/>high/medium/low confidence"]
 Quality --> Pages["Assemble pages with quality tag"]
+LoadDOCX --> Pages
+LoadXLSX --> Pages
+LoadTXT --> Pages
+Pages --> Split["Recursive chunking"]
+Split --> Filter["Content filter (PII removal)"]
+Filter --> Embed["Batch embeddings via Ollama"]
+Embed --> Upsert["Upsert to Qdrant + persist chunks<br/>(payload includes ocr_quality)"]
+Upsert --> BM25["Update BM25 index"]
+BM25 --> Done(["Indexed"])
+```
+
+**Diagram sources**
+- [document_parser.py:102-159](file://safe4ai-pilot/app/services/document_parser.py#L102-L159)
+- [document_parser.py:162-182](file://safe4ai-pilot/app/services/document_parser.py#L162-L182)
+- [document_parser.py:41-99](file://safe4ai-pilot/app/services/document_parser.py#L41-L99)
+
+**Section sources**
+- [document_parser.py:1-183](file://safe4ai-pilot/app/services/document_parser.py#L1-183)
+
+### RAG Pipeline with Document Parser Integration
+**Updated** Refactored to delegate all parsing logic to dedicated document_parser service.
+
+Enhanced responsibilities:
+- Delegates file loading and preprocessing to dedicated Document Parser service
+- Maintains chunking with overlap, batch embedding generation, and vector upsert with quality metadata
+- Persists chunk metadata including OCR quality indicators and updates BM25 index
+- Supports query-time retrieval, reranking, and answer synthesis
+
+Processing logic highlights:
+- File loading: Delegates to document_parser.load_pdf, load_docx, load_xlsx functions
+- Chunking: recursive character splitting with configurable size and overlap
+- Embeddings: batched requests to Ollama embeddings endpoint
+- Vector storage: Qdrant upsert with payload metadata including ocr_quality field
+- BM25: rebuild index from chunk IDs and payloads for sparse retrieval
+- Query: hybrid retrieval + reranking; minimum rerank score threshold determines fallback
+
+```mermaid
+flowchart TD
+U["Upload"] --> Detect["Detect file type"]
+Detect --> |PDF| LoadPDF["Delegates to document_parser.load_pdf"]
+Detect --> |DOCX| LoadDOCX["Delegates to document_parser.load_docx"]
+Detect --> |XLSX| LoadXLSX["Delegates to document_parser.load_xlsx"]
+Detect --> |TXT| LoadTXT["Native text processing"]
+LoadPDF --> Pages["Parsed pages with OCR quality"]
 LoadDOCX --> Pages
 LoadXLSX --> Pages
 LoadTXT --> Pages
@@ -288,12 +345,13 @@ end
 ```
 
 **Diagram sources**
-- [rag_pipeline.py:62-313](file://safe4ai-pilot/app/services/rag_pipeline.py#L62-L313)
+- [rag_pipeline.py:77-100](file://safe4ai-pilot/app/services/rag_pipeline.py#L77-L100)
+- [rag_pipeline.py:323-340](file://safe4ai-pilot/app/services/rag_pipeline.py#L323-L340)
 - [hybrid_retriever.py:56-142](file://safe4ai-pilot/app/components/hybrid_retriever.py#L56-L142)
 - [reranker.py:15-35](file://safe4ai-pilot/app/components/reranker.py#L15-L35)
 
 **Section sources**
-- [rag_pipeline.py:34-313](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L313)
+- [rag_pipeline.py:34-345](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L345)
 
 ### Enhanced OCR Quality Detection
 The system now implements sophisticated OCR quality assessment:
@@ -491,21 +549,25 @@ Route --> |No| Fallback["Fallback"]
 - Qdrant and Ollama are external dependencies for vector storage and embeddings/LLM.
 - DB models define document lifecycle and chunk metadata used across ingestion and retrieval.
 - Upload validator ensures only allowed files enter the pipeline.
+- Document Parser service provides centralized parsing functionality for all document types.
 
 ```mermaid
 graph LR
 CFG["config.py"] --> IS["ingestion_service.py"]
 CFG --> RP["rag_pipeline.py"]
+CFG --> DP["document_parser.py"]
 CFG --> HR["hybrid_retriever.py"]
 CFG --> RR["reranker.py"]
 CFG --> SC["semantic_cache.py"]
 UV["upload_validator.py"] --> AR["admin_routes.py"]
 AR --> IS
 IS --> RP
+RP --> DP
 RP --> HR
 RP --> RR
 RP --> SC
 RP --> DB["db/models.py"]
+DP --> DB
 HR --> QD["Qdrant"]
 RR --> CE["CrossEncoder"]
 RP --> OLL["Ollama"]
@@ -515,6 +577,7 @@ RP --> OLL["Ollama"]
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
 - [ingestion_service.py:46-62](file://safe4ai-pilot/app/services/ingestion_service.py#L46-L62)
 - [rag_pipeline.py:35-56](file://safe4ai-pilot/app/services/rag_pipeline.py#L35-L56)
+- [document_parser.py:1-20](file://safe4ai-pilot/app/services/document_parser.py#L1-L20)
 - [hybrid_retriever.py:14-24](file://safe4ai-pilot/app/components/hybrid_retriever.py#L14-L24)
 - [reranker.py:12-13](file://safe4ai-pilot/app/components/reranker.py#L12-L13)
 - [semantic_cache.py:15-25](file://safe4ai-pilot/app/services/semantic_cache.py#L15-L25)
@@ -529,11 +592,12 @@ RP --> OLL["Ollama"]
 ## Performance Considerations
 - Embedding batching: the pipeline batches embedding requests to reduce overhead.
 - Chunk sizing and overlap: tuned to balance recall and context coherence.
-- Enhanced OCR quality gating: reduces downstream noise by skipping low-confidence OCR pages and tracking quality metrics.
+- Enhanced OCR quality gating: reduces downstream noise by delegating parsing to dedicated service and tracking quality metrics.
 - Hybrid retrieval with RRF: balances lexical matching and semantic similarity.
 - Semantic cache: leverages pgvector for efficient nearest-neighbor lookup on repeated queries.
 - Concurrency: background ingestion tasks prevent blocking the API.
 - Transaction isolation: independent database sessions prevent request conflicts.
+- Modular design: dedicated parsing service improves testability and allows for independent optimization.
 
 ## Troubleshooting Guide
 Common issues and remedies:
@@ -543,6 +607,7 @@ Common issues and remedies:
 - Qdrant deletion failures: deletion attempts log warnings and continue to avoid blocking.
 - Upload validation failures: ensure file extension, MIME type, and size meet allowed criteria.
 - Status tracking issues: monitor queued → embedding → indexed state transitions for proper processing flow.
+- Parsing service issues: dedicated document parser service can be tested independently for parsing failures.
 
 Operational checks:
 - Poll ingestion status via the status endpoint to monitor state transitions.
@@ -550,6 +615,7 @@ Operational checks:
 - Monitor semantic cache hit rate and total hits.
 - Track OCR quality metrics and low-confidence page counts.
 - Monitor job recovery statistics for system health.
+- Test document parser service independently for parsing functionality.
 
 **Section sources**
 - [ingestion_service.py:90-113](file://safe4ai-pilot/app/services/ingestion_service.py#L90-L113)
@@ -557,7 +623,7 @@ Operational checks:
 - [admin_routes.py:261-277](file://safe4ai-pilot/app/api/admin_routes.py#L261-L277)
 
 ## Conclusion
-The system integrates robust ingestion, hybrid retrieval, and reranking to deliver accurate, contextual answers from uploaded documents. Enhanced error handling, transaction management, and status tracking provide reliable operation with clear visibility into document processing states. The addition of OCR quality detection improves processing reliability by identifying and tracking low-quality OCR results. With semantic caching, careful error handling, and comprehensive monitoring, it provides reliable performance and observability for production deployments.
+The system integrates robust ingestion, hybrid retrieval, and reranking to deliver accurate, contextual answers from uploaded documents. Enhanced error handling, transaction management, and status tracking provide reliable operation with clear visibility into document processing states. The extraction of parsing logic into a dedicated Document Parser service significantly improves modularity, testability, and maintainability. The addition of OCR quality detection improves processing reliability by identifying and tracking low-quality OCR results. With semantic caching, careful error handling, comprehensive monitoring, and modular design, it provides reliable performance and observability for production deployments.
 
 ## Appendices
 
@@ -584,6 +650,7 @@ The system integrates robust ingestion, hybrid retrieval, and reranking to deliv
 - Configure document processing workflows:
   - Adjust chunk size and overlap in the pipeline constants.
   - Tune OCR threshold and confidence ratio for scanned documents.
+  - Test document parser service independently for parsing functionality.
 - Customize OCR settings:
   - Modify OCR threshold and quality gate logic in the pipeline.
   - Monitor OCR quality metrics and adjust confidence thresholds.
@@ -596,6 +663,7 @@ The system integrates robust ingestion, hybrid retrieval, and reranking to deliv
   - Track job recovery statistics for stuck job detection.
   - Monitor OCR quality distribution and low-confidence page rates.
   - Observe status transition patterns for processing reliability.
+  - Test parsing service independently for performance optimization.
 
 **Section sources**
 - [rag_pipeline.py:25-31](file://safe4ai-pilot/app/services/rag_pipeline.py#L25-L31)
@@ -608,6 +676,7 @@ The system integrates robust ingestion, hybrid retrieval, and reranking to deliv
 - Monitor semantic cache hit rate and total hits.
 - Track OCR quality metrics and low-confidence page distributions.
 - Monitor job recovery statistics and system health indicators.
+- Monitor document parser service performance and error rates.
 
 **Section sources**
 - [admin_routes.py:151-175](file://safe4ai-pilot/app/api/admin_routes.py#L151-L175)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import structlog
 
 from app.models import GuardResult, RankedChunk
@@ -21,15 +23,34 @@ def _find_pii_matches(text: str) -> list[str]:
 
 
 class OutputFilter:
-    def check(self, answer: str, source_chunks: list[RankedChunk]) -> GuardResult:
-        """Check the generated answer for PII hallucination and suspicious length.
+    def check(
+        self,
+        answer: str,
+        source_chunks: list[RankedChunk],
+        citations: list[Any] | None = None,
+    ) -> GuardResult:
+        """Check the generated answer before returning it to the caller.
 
-        Rules:
+        Rules (evaluated in order):
+        0. If source chunks are present but the answer has no citations,
+           block the response. This is a state-level check — the graph
+           populates citations directly from the retrieved chunks, so an
+           empty citation list with non-empty source_chunks indicates a
+           code path that skipped citation population.
         1. If the answer contains PII that is absent from every source chunk,
            block the response.
         2. If the answer exceeds 4 000 chars, log a warning (still allowed).
         """
-        # 1. PII hallucination check
+        # Rule 0: Citation presence check
+        # Only applies when source documents were retrieved. No-context
+        # fallback answers (source_chunks=[]) are exempt.
+        if source_chunks and not citations:
+            return GuardResult(
+                allowed=False,
+                reason="Answer cites no sources",
+            )
+
+        # Rule 1: PII hallucination check
         answer_pii = _find_pii_matches(answer)
         if answer_pii:
             source_text = " ".join(c.content for c in source_chunks)
@@ -40,7 +61,7 @@ class OutputFilter:
                         reason="Output contains PII not in source documents",
                     )
 
-        # 2. Suspicious length heuristic
+        # Rule 2: Suspicious length heuristic
         if len(answer) > _LONG_ANSWER_THRESHOLD:
             logger.warning(
                 "output_suspiciously_long",

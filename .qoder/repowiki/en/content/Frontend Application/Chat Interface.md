@@ -13,6 +13,7 @@
 - [SuggestedPrompt.tsx](file://safe4ai-pilot/frontend/src/components/chat/SuggestedPrompt.tsx)
 - [TrustSignal.tsx](file://safe4ai-pilot/frontend/src/components/chat/TrustSignal.tsx)
 - [SourceRow.tsx](file://safe4ai-pilot/frontend/src/components/chat/SourceRow.tsx)
+- [Avatar.tsx](file://safe4ai-pilot/frontend/src/components/Avatar.tsx)
 - [ChatA.tsx](file://design/components/ChatA.tsx)
 - [ChatB.tsx](file://design/components/ChatB.tsx)
 - [ChatShared.tsx](file://design/components/ChatShared.tsx)
@@ -20,10 +21,10 @@
 
 ## Update Summary
 **Changes Made**
-- Added live elapsed timer component to AnswerBlock for real-time streaming response feedback
-- Enhanced SourceRow component with expandable excerpt functionality for better citation transparency
-- Updated API types to include optional excerpt field in SseCite interface
-- Improved citation transparency with expandable source previews
+- Added sophisticated avatar dropdown menu system replacing previous flat button layout for Settings, Admin panel, and Sign-out functionality
+- Implemented advanced state management with outside click detection and smooth animations
+- Enhanced header component with dropdown menu integration and improved user experience
+- Updated mobile-first design considerations for avatar menu accessibility
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -32,18 +33,19 @@
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
 6. [Enhanced Streaming Experience](#enhanced-streaming-experience)
-7. [Mobile-First Design Implementation](#mobile-first-design-implementation)
-8. [Dependency Analysis](#dependency-analysis)
-9. [Performance Considerations](#performance-considerations)
-10. [Troubleshooting Guide](#troubleshooting-guide)
-11. [Conclusion](#conclusion)
-12. [Appendices](#appendices)
+7. [Avatar Dropdown Menu System](#avatar-dropdown-menu-system)
+8. [Mobile-First Design Implementation](#mobile-first-design-implementation)
+9. [Dependency Analysis](#dependency-analysis)
+10. [Performance Considerations](#performance-considerations)
+11. [Troubleshooting Guide](#troubleshooting-guide)
+12. [Conclusion](#conclusion)
+13. [Appendices](#appendices)
 
 ## Introduction
-This document explains the chat interface system responsible for AI conversation handling and user interaction. It covers the ChatPage component architecture, message rendering, real-time streaming responses, and supporting UI components such as MessageBubble, Composer, StreamingPipeline, and citation management. The system now features enhanced streaming feedback with live elapsed timers, improved citation transparency through expandable excerpts, and a mobile-first design approach with independent mobile sources drawer controls. The system documents state management for conversations, loading states, and error handling during AI interactions, along with suggested prompts, trust signals, and response formatting. Practical examples show how to extend chat functionality, implement custom message types, and handle different AI response formats. Finally, it addresses performance optimization for large conversations and real-time communication patterns.
+This document explains the chat interface system responsible for AI conversation handling and user interaction. It covers the ChatPage component architecture, message rendering, real-time streaming responses, and supporting UI components such as MessageBubble, Composer, StreamingPipeline, and citation management. The system now features enhanced streaming feedback with live elapsed timers, improved citation transparency through expandable excerpts, and a sophisticated avatar dropdown menu system that replaces the previous flat button layout for Settings, Admin panel, and Sign-out functionality. The new implementation includes state management, outside click detection, and smooth animations. The system documents state management for conversations, loading states, and error handling during AI interactions, along with suggested prompts, trust signals, and response formatting. Practical examples show how to extend chat functionality, implement custom message types, and handle different AI response formats. Finally, it addresses performance optimization for large conversations and real-time communication patterns.
 
 ## Project Structure
-The chat system spans a small set of UI components and a single hook orchestrating state and streaming. The main page renders messages, a composer, optional suggested prompts, and a citation drawer. The useChat hook manages conversation lifecycle, streaming updates, and feedback submission. The API module encapsulates server-sent events for streaming with enhanced citation metadata including optional excerpts. The mobile-first design introduces independent controls for the sources drawer on smaller screens while maintaining desktop layout patterns.
+The chat system spans a small set of UI components and a single hook orchestrating state and streaming. The main page renders messages, a composer, optional suggested prompts, and a citation drawer. The useChat hook manages conversation lifecycle, streaming updates, and feedback submission. The API module encapsulates server-sent events for streaming with enhanced citation metadata including optional excerpts. The avatar dropdown menu system provides a sophisticated replacement for the previous flat button layout with improved accessibility and user experience.
 
 ```mermaid
 graph TB
@@ -54,6 +56,8 @@ ChatPage --> StreamingPipeline["StreamingPipeline.tsx"]
 ChatPage --> AnswerBlock["AnswerBlock.tsx"]
 ChatPage --> TrustSignal["TrustSignal.tsx"]
 ChatPage --> SourceRow["SourceRow.tsx"]
+ChatPage --> AvatarDropdown["Avatar Dropdown Menu"]
+AvatarDropdown --> Avatar["Avatar.tsx"]
 useChatHook --> API["chat.ts"]
 AnswerBlock --> CitationChip["CitationChip.tsx"]
 AnswerBlock --> LiveTimer["LiveTimer Component"]
@@ -72,6 +76,7 @@ ChatPage --> SuggestedPrompt["SuggestedPrompt.tsx"]
 - [SuggestedPrompt.tsx](file://safe4ai-pilot/frontend/src/components/chat/SuggestedPrompt.tsx)
 - [TrustSignal.tsx](file://safe4ai-pilot/frontend/src/components/chat/TrustSignal.tsx)
 - [SourceRow.tsx](file://safe4ai-pilot/frontend/src/components/chat/SourceRow.tsx)
+- [Avatar.tsx](file://safe4ai-pilot/frontend/src/components/Avatar.tsx)
 
 **Section sources**
 - [ChatPage.tsx](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx)
@@ -79,7 +84,7 @@ ChatPage --> SuggestedPrompt["SuggestedPrompt.tsx"]
 - [chat.ts](file://safe4ai-pilot/frontend/src/api/chat.ts)
 
 ## Core Components
-- ChatPage: Renders header, suggested prompts, messages, streaming pipeline, composer, and citation drawer. Orchestrates user input, sends messages via useChat, and displays assistant responses with citations and trust signals. Now includes mobile-first design with independent sources drawer toggle and automatic composer scrolling.
+- ChatPage: Renders header with branding, avatar dropdown menu, and sign-out functionality. Shows welcome screen with suggested prompts when no messages exist. Iterates messages and renders MessageBubble per role. Displays AnswerBlock for assistant messages with body, sources, trust, and streaming indicator. Shows a streaming pipeline panel when steps exist and streaming is active. Controls Composer input, submit, and stop-generating action. Renders a citation drawer from the last assistant message's sources. **Enhanced**: Now includes sophisticated avatar dropdown menu system with state management and outside click detection.
 - useChat: Manages messages, streaming steps, and loading state. Provides sendMessage, stop, and rate handlers. Streams SSE events and updates state accordingly.
 - API (chat.ts): Implements a streaming generator over server-sent events for steps, tokens, citations, completion metadata, and errors. Enhanced with optional excerpt field in citation metadata.
 - MessageBubble: Wraps user or assistant content with appropriate alignment and styling.
@@ -91,6 +96,8 @@ ChatPage --> SuggestedPrompt["SuggestedPrompt.tsx"]
 - SuggestedPrompt: Prompt cards with helpful hints below source suggestions, featuring improved selection UX.
 - TrustSignal: Non-interactive badge showing latency, cache hit, retrievals, and model.
 - SourceRow: Displays a single source with file, page, and score. Enhanced with expandable excerpt functionality for better citation transparency.
+- Avatar: Displays user initials in a circular avatar container with customizable size and color.
+- **New**: Avatar Dropdown Menu: Sophisticated dropdown menu replacing flat button layout for Settings, Admin panel, and Sign-out functionality with state management and smooth animations.
 
 **Section sources**
 - [ChatPage.tsx](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx)
@@ -104,14 +111,16 @@ ChatPage --> SuggestedPrompt["SuggestedPrompt.tsx"]
 - [SuggestedPrompt.tsx](file://safe4ai-pilot/frontend/src/components/chat/SuggestedPrompt.tsx)
 - [TrustSignal.tsx](file://safe4ai-pilot/frontend/src/components/chat/TrustSignal.tsx)
 - [SourceRow.tsx](file://safe4ai-pilot/frontend/src/components/chat/SourceRow.tsx)
+- [Avatar.tsx](file://safe4ai-pilot/frontend/src/components/Avatar.tsx)
 
 ## Architecture Overview
-The chat architecture follows a unidirectional data flow with enhanced mobile responsiveness and improved streaming feedback:
+The chat architecture follows a unidirectional data flow with enhanced mobile responsiveness, improved streaming feedback, and sophisticated avatar dropdown menu system:
 - User interacts via Composer in ChatPage.
 - useChat creates user and assistant messages, starts streaming, and updates state.
 - The API streams structured events: step progress, incremental tokens, citations with optional excerpts, and completion metadata.
 - ChatPage renders messages, streaming pipeline, and citation drawer with mobile-specific controls; AnswerBlock handles citations, trust signals, and live elapsed timer.
 - SourceRow provides enhanced citation transparency with expandable excerpts.
+- **New**: Avatar dropdown menu provides centralized access to Settings, Admin panel, and Sign-out functionality with state management and outside click detection.
 
 ```mermaid
 sequenceDiagram
@@ -119,6 +128,7 @@ participant U as "User"
 participant CP as "ChatPage"
 participant HC as "useChat"
 participant API as "chat.ts"
+participant AD as "Avatar Dropdown"
 participant AS as "Assistant"
 U->>CP : "Type message"
 CP->>HC : "sendMessage(question)"
@@ -130,6 +140,11 @@ API-->>HC : "cite : source metadata with optional excerpt"
 API-->>HC : "done : traceId, latency, cache, model, kRetrieved"
 HC-->>CP : "messages, steps, streaming flags"
 CP-->>U : "Render updated UI with live timer and expanded citations"
+U->>CP : "Click avatar dropdown"
+CP->>AD : "Toggle menuOpen state"
+AD-->>U : "Display Settings/Admin/Sign-out options"
+U->>AD : "Select option"
+AD->>CP : "Close menu and navigate"
 ```
 
 **Diagram sources**
@@ -141,22 +156,23 @@ CP-->>U : "Render updated UI with live timer and expanded citations"
 
 ### ChatPage
 Responsibilities:
-- Renders header with branding, admin link, avatar, and sign-out.
+- Renders header with branding, avatar dropdown menu, and sign-out functionality.
 - Shows welcome screen with suggested prompts when no messages exist.
 - Iterates messages and renders MessageBubble per role.
 - Displays AnswerBlock for assistant messages with body, sources, trust, and streaming indicator.
 - Shows a streaming pipeline panel when steps exist and streaming is active.
 - Controls Composer input, submit, and stop-generating action.
 - Renders a citation drawer from the last assistant message's sources.
-- **New**: Implements mobile-first design with independent sources drawer toggle and automatic composer scrolling.
+- **Enhanced**: Implements sophisticated avatar dropdown menu system with state management and outside click detection.
 
 Key behaviors:
 - Maintains a scroll target to keep the latest content in view after sending.
 - Uses a derived drawerSources list from the most recent assistant message.
 - Integrates stop() from useChat to abort the ongoing stream.
-- **New**: Manages mobileSourcesOpen state for independent mobile drawer control.
-- **New**: Automatically scrolls to composer when suggested prompts are selected.
-- **New**: Provides helpful hint text below source suggestions for better UX guidance.
+- **New**: Manages menuOpen state for avatar dropdown menu with controlled visibility.
+- **New**: Implements outside click detection using menuRef to automatically close dropdown when clicking outside.
+- **New**: Provides smooth animations with CSS classes for dropdown appearance.
+- **New**: Integrates ARIA attributes for accessibility support.
 
 **Section sources**
 - [ChatPage.tsx](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx)
@@ -314,6 +330,22 @@ Expandable Excerpt Feature:
 **Section sources**
 - [SourceRow.tsx](file://safe4ai-pilot/frontend/src/components/chat/SourceRow.tsx)
 
+### Avatar Component
+Responsibilities:
+- Displays user initials in a circular avatar container.
+- Supports customizable size and color.
+- Generates initials from user email address.
+- Provides consistent visual identity across the application.
+
+Implementation Details:
+- Extracts first two letters from user name and converts to uppercase.
+- Uses default dark gray background color (#0b0d10) when none specified.
+- Calculates font size based on avatar diameter for proportional scaling.
+- Provides centered alignment for initials within the circular container.
+
+**Section sources**
+- [Avatar.tsx](file://safe4ai-pilot/frontend/src/components/Avatar.tsx)
+
 ### Design References
 The design system provides visual patterns for chat layouts, trust signals, and source listings. These inform the implementation of the runtime components, including mobile-first responsive design patterns and enhanced citation transparency.
 
@@ -378,6 +410,55 @@ The SourceRow component now provides significantly improved citation transparenc
 - [SourceRow.tsx:38-44](file://safe4ai-pilot/frontend/src/components/chat/SourceRow.tsx#L38-L44)
 - [chat.ts:9](file://safe4ai-pilot/frontend/src/api/chat.ts#L9)
 
+## Avatar Dropdown Menu System
+
+### Sophisticated State Management
+The avatar dropdown menu system represents a significant enhancement to the user interface, replacing the previous flat button layout with a more sophisticated and accessible solution:
+
+**State Management**:
+- **menuOpen State**: Central state variable controlling dropdown visibility with boolean values
+- **menuRef Reference**: DOM reference for detecting outside clicks and managing dropdown positioning
+- **Automatic Cleanup**: Proper event listener cleanup using useEffect return function to prevent memory leaks
+
+**Outside Click Detection**:
+- **Event Listener**: Adds mousedown event listener to document when menu is open
+- **DOM Containment Check**: Uses `!menuRef.current.contains(e.target as Node)` to detect clicks outside the dropdown
+- **Automatic Closure**: Closes menu when user clicks anywhere outside the dropdown menu area
+- **Memory Safety**: Removes event listeners on component unmount to prevent memory leaks
+
+**Accessibility Features**:
+- **ARIA Attributes**: Implements `aria-haspopup="true"` and `aria-expanded={menuOpen}` for screen reader support
+- **Keyboard Navigation**: Dropdown opens on click and can be closed by clicking outside or selecting an option
+- **Focus Management**: Dropdown appears above other content with z-index of 50 for proper layering
+
+**Visual Design**:
+- **Smooth Animations**: CSS classes `animate-in fade-in slide-in-from-top-1 duration-100` provide elegant entrance effects
+- **Rotating Chevron**: Down arrow icon rotates 180 degrees when menu is open for visual feedback
+- **Consistent Styling**: Matches existing design language with border, shadow, and background styling
+- **Responsive Positioning**: Positioned absolutely relative to avatar container for proper alignment
+
+### Enhanced User Experience
+The avatar dropdown menu provides several improvements over the previous flat button layout:
+
+**Centralized Access**:
+- **Single Entry Point**: Users can access all account-related functions from one location
+- **Logical Grouping**: Settings, Admin panel, and Sign-out are grouped together for intuitive navigation
+- **Reduced Clutter**: Eliminates multiple individual buttons in the header area
+
+**Professional Appearance**:
+- **Modern Design**: Dropdown menu follows contemporary UI patterns for user account management
+- **Consistent Branding**: Maintains design consistency with the rest of the application
+- **Visual Hierarchy**: Clear separation between different functional groups within the dropdown
+
+**Functional Benefits**:
+- **Scalability**: Easy to add new menu items without cluttering the header
+- **Maintainability**: Single implementation handles all account-related navigation
+- **Performance**: Efficient state management with minimal re-rendering
+
+**Section sources**
+- [ChatPage.tsx:46-55](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L46-L55)
+- [ChatPage.tsx:105-160](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L105-L160)
+
 ## Mobile-First Design Implementation
 
 ### Independent Mobile Sources Drawer Toggle
@@ -409,12 +490,19 @@ The mobile-first approach implements several responsive design patterns:
 - **Conditional Rendering**: Desktop-only features (like the right-side citation drawer) are conditionally rendered based on screen size.
 - **Touch-Friendly Controls**: Interactive elements are sized appropriately for touch interaction on mobile devices.
 
+### Avatar Menu Responsiveness
+The avatar dropdown menu adapts seamlessly to different screen sizes:
+
+- **Consistent Behavior**: Dropdown menu works consistently across all device sizes
+- **Touch Optimization**: Menu is easily accessible on mobile devices with appropriate sizing
+- **Performance Considerations**: State management is optimized for mobile performance
+
 **Section sources**
 - [ChatPage.tsx](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx)
 - [SuggestedPrompt.tsx](file://safe4ai-pilot/frontend/src/components/chat/SuggestedPrompt.tsx)
 
 ## Dependency Analysis
-The runtime depends on a small set of cohesive modules. The page depends on the hook and several presentational components. The hook depends on the API module for streaming. The API depends on the backend streaming endpoint. The mobile-first design adds minimal overhead through conditional rendering and state management. The enhanced streaming experience adds lightweight timer component with efficient interval management.
+The runtime depends on a small set of cohesive modules. The page depends on the hook and several presentational components. The hook depends on the API module for streaming. The API depends on the backend streaming endpoint. The mobile-first design adds minimal overhead through conditional rendering and state management. The enhanced streaming experience adds lightweight timer component with efficient interval management. The avatar dropdown menu system adds sophisticated state management with outside click detection and smooth animations.
 
 ```mermaid
 graph LR
@@ -425,6 +513,8 @@ ChatPage --> StreamingPipeline["StreamingPipeline.tsx"]
 ChatPage --> AnswerBlock["AnswerBlock.tsx"]
 ChatPage --> TrustSignal["TrustSignal.tsx"]
 ChatPage --> SourceRow["SourceRow.tsx"]
+ChatPage --> AvatarDropdown["Avatar Dropdown Menu"]
+AvatarDropdown --> Avatar["Avatar.tsx"]
 useChat --> API["chat.ts"]
 AnswerBlock --> CitationChip["CitationChip.tsx"]
 AnswerBlock --> LiveTimer["LiveTimer Component"]
@@ -443,6 +533,7 @@ ChatPage --> SuggestedPrompt["SuggestedPrompt.tsx"]
 - [SuggestedPrompt.tsx](file://safe4ai-pilot/frontend/src/components/chat/SuggestedPrompt.tsx)
 - [TrustSignal.tsx](file://safe4ai-pilot/frontend/src/components/chat/TrustSignal.tsx)
 - [SourceRow.tsx](file://safe4ai-pilot/frontend/src/components/chat/SourceRow.tsx)
+- [Avatar.tsx](file://safe4ai-pilot/frontend/src/components/Avatar.tsx)
 
 **Section sources**
 - [ChatPage.tsx](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx)
@@ -455,6 +546,7 @@ ChatPage --> SuggestedPrompt["SuggestedPrompt.tsx"]
   - Memoize derived values like drawerSources to prevent recomputation on every render.
   - **Enhanced**: Use conditional rendering for mobile-specific components to reduce DOM overhead on larger screens.
   - **New**: LiveTimer component uses efficient interval cleanup to prevent memory leaks.
+  - **New**: Avatar dropdown menu implements efficient state management with proper cleanup.
 - Efficient streaming updates:
   - Append deltas to assistant content incrementally; avoid full re-composition of long texts.
   - Debounce or batch UI updates when receiving bursts of tokens.
@@ -465,6 +557,7 @@ ChatPage --> SuggestedPrompt["SuggestedPrompt.tsx"]
   - Keep heavy computations off the main thread; defer non-critical work until after streaming completes.
   - **Enhanced**: Mobile scrolling operations use smooth animation with minimal performance impact.
   - **New**: SourceRow excerpt expansion uses simple state toggling with minimal DOM manipulation.
+  - **New**: Avatar dropdown menu uses CSS animations for smooth transitions without JavaScript overhead.
 - Network efficiency:
   - Use AbortController to cancel stale requests promptly.
   - Reuse session IDs to leverage backend caching where applicable.
@@ -474,6 +567,7 @@ ChatPage --> SuggestedPrompt["SuggestedPrompt.tsx"]
   - Avoid deep cloning of messages; spread only necessary fields when updating.
   - **Enhanced**: Conditional rendering reduces component tree complexity on mobile devices.
   - **New**: LiveTimer uses simple interval-based updates rather than complex state machines.
+  - **New**: Avatar dropdown menu uses efficient DOM containment checks for outside click detection.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -501,6 +595,16 @@ Common issues and resolutions:
   - Check that the `bottomRef` is properly initialized and that the scrollIntoView operation has sufficient timeout.
 - **New**: Suggested prompts not displaying hints:
   - Ensure the SuggestedPrompt component receives the correct `source` prop and that the hint text is properly rendered.
+- **New**: Avatar dropdown menu not closing:
+  - Verify that outside click detection is working by checking menuRef DOM reference.
+  - Ensure event listeners are properly cleaned up on component unmount.
+  - Check that menuOpen state is properly toggled when clicking menu items.
+- **New**: Dropdown menu not accessible:
+  - Verify ARIA attributes are properly set: `aria-haspopup="true"` and `aria-expanded={menuOpen}`.
+  - Ensure keyboard navigation works for screen readers.
+- **New**: Animation performance issues:
+  - Check that CSS animation classes are not conflicting with other styles.
+  - Verify that dropdown menu is not causing layout thrashing on mobile devices.
 
 **Section sources**
 - [useChat.ts](file://safe4ai-pilot/frontend/src/hooks/useChat.ts)
@@ -511,7 +615,7 @@ Common issues and resolutions:
 - [SourceRow.tsx](file://safe4ai-pilot/frontend/src/components/chat/SourceRow.tsx)
 
 ## Conclusion
-The chat interface system is a focused, reactive pipeline that integrates user input, real-time streaming, and contextual presentation with enhanced mobile-first design and improved streaming feedback. The recent updates introduce independent mobile sources drawer controls, automatic scrolling to composer for improved UX, helpful prompt hints, a live elapsed timer for real-time streaming feedback, and enhanced SourceRow component with expandable excerpt functionality for better citation transparency. The live timer provides immediate feedback during the typically 1-3 second streaming period, while the expandable excerpts allow users to verify source relevance before opening documents. These enhancements maintain the system's modular design and reactive architecture while significantly improving user experience and citation transparency. The mobile-first approach ensures optimal performance and usability across all device sizes while maintaining the system's maintainable patterns.
+The chat interface system is a focused, reactive pipeline that integrates user input, real-time streaming, and contextual presentation with enhanced mobile-first design and improved streaming feedback. The recent updates introduce sophisticated avatar dropdown menu system that replaces the previous flat button layout for Settings, Admin panel, and Sign-out functionality, featuring advanced state management, outside click detection, and smooth animations. The system now includes independent mobile sources drawer controls, automatic scrolling to composer for improved UX, helpful prompt hints, a live elapsed timer for real-time streaming feedback, and enhanced SourceRow component with expandable excerpt functionality for better citation transparency. The avatar dropdown menu provides centralized access to account functions with proper accessibility support and smooth user experience. These enhancements maintain the system's modular design and reactive architecture while significantly improving user experience, accessibility, and professional appearance. The mobile-first approach ensures optimal performance and usability across all device sizes while maintaining the system's maintainable patterns.
 
 ## Appendices
 
@@ -529,7 +633,8 @@ The chat interface system is a focused, reactive pipeline that integrates user i
 - **Enhanced**: Mobile customization:
   - Leverage the responsive design patterns to create mobile-specific variations of components.
   - Use conditional rendering to optimize performance on different screen sizes.
-  - **New**: Consider implementing similar live timer functionality for other streaming scenarios.
+  - **New**: Consider implementing similar avatar dropdown menu functionality for other components.
+  - **New**: Implement sophisticated state management patterns for dropdown menus and modal dialogs.
 
 ### Practical Examples
 - Implementing a "thinking" step:
@@ -545,6 +650,13 @@ The chat interface system is a focused, reactive pipeline that integrates user i
 - **New**: Mobile drawer enhancement:
   - Extend the mobile sources drawer with additional filtering options or search capabilities.
   - Implement swipe gestures for better mobile interaction patterns.
+- **New**: Avatar dropdown menu extension:
+  - Add new menu items following the existing pattern with proper state management.
+  - Implement keyboard navigation support for accessibility.
+  - Add submenu functionality for complex navigation hierarchies.
+- **New**: Outside click detection pattern:
+  - Implement similar patterns for other dropdown menus and modal dialogs.
+  - Use proper cleanup patterns to prevent memory leaks.
 
 ### Real-Time Communication Patterns
 - Use AbortController to cancel stale requests when a new query is sent.
@@ -555,6 +667,11 @@ The chat interface system is a focused, reactive pipeline that integrates user i
   - Use CSS transforms instead of layout-triggering properties for smoother animations.
   - Leverage hardware acceleration for mobile-specific UI transitions.
   - **New**: Optimize live timer updates for battery efficiency on mobile devices.
+  - **New**: Implement efficient state management for dropdown menus on mobile devices.
+- **New**: Dropdown menu optimization:
+  - Use CSS animations instead of JavaScript for smoother transitions.
+  - Implement proper event delegation to minimize event listener overhead.
+  - Use requestAnimationFrame for smooth UI updates.
 
 ### Mobile-First Design Patterns
 - **Independent Component States**: Manage separate state variables for mobile and desktop components to avoid conflicts.
@@ -564,6 +681,7 @@ The chat interface system is a focused, reactive pipeline that integrates user i
 - **Accessibility**: Implement proper ARIA attributes and keyboard navigation for mobile devices.
 - **Battery Efficiency**: Consider power consumption when implementing frequent updates like live timers.
 - **Network Optimization**: Minimize network requests for mobile users with data constraints.
+- **Dropdown Menu Patterns**: Implement efficient state management and outside click detection for mobile devices.
 
 ### Enhanced Streaming Features
 - **Live Elapsed Timer**: Provides real-time feedback during streaming responses with 250ms update interval.
@@ -571,3 +689,7 @@ The chat interface system is a focused, reactive pipeline that integrates user i
 - **Conditional Display**: Timer replaces trust signal during streaming for better user experience.
 - **Memory Management**: Timer automatically cleans up intervals to prevent memory leaks.
 - **Backward Compatibility**: Excerpt field is optional to maintain compatibility with existing citation data.
+- **Avatar Dropdown Menu**: Sophisticated replacement for flat button layout with state management and smooth animations.
+- **Outside Click Detection**: Efficient implementation prevents memory leaks and provides clean user experience.
+- **Accessibility Support**: Proper ARIA attributes and keyboard navigation support for screen readers.
+- **Performance Optimization**: CSS animations and efficient state management for smooth mobile performance.

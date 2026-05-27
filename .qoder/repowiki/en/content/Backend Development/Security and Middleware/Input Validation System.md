@@ -14,6 +14,13 @@
 - [codebase-summary.md](file://safe4ai-pilot/docs/codebase-summary.md)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Enhanced InputGuard injection pattern detection with role-specific blocklists
+- Added `_ROLE_SUBSTITUTION_WORDS` and `_MALICIOUS_ROLE_WORDS` for nuanced role-based filtering
+- Improved injection detection to reduce false positives on legitimate user queries
+- Updated validation rules to differentiate between benign and malicious role references
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
@@ -34,6 +41,8 @@ This document describes the input validation system used to sanitize user inputs
 - Integration with FastAPI request handling and error response formatting
 
 The system ensures robustness against prompt injection, oversized payloads, and sensitive data exposure while maintaining a clear separation of concerns across guard components.
+
+**Updated** Enhanced with role-specific blocklists that differentiate between benign role references and malicious injection attempts, reducing false positives on legitimate user queries.
 
 ## Project Structure
 The input validation system spans several modules:
@@ -77,7 +86,7 @@ TEST --> OF
 ```
 
 **Diagram sources**
-- [input_guard.py:1-49](file://safe4ai-pilot/app/security/input_guard.py#L1-L49)
+- [input_guard.py:1-61](file://safe4ai-pilot/app/security/input_guard.py#L1-L61)
 - [upload_validator.py:1-73](file://safe4ai-pilot/app/security/upload_validator.py#L1-L73)
 - [content_filter.py:1-64](file://safe4ai-pilot/app/security/content_filter.py#L1-L64)
 - [output_filter.py:1-61](file://safe4ai-pilot/app/security/output_filter.py#L1-L61)
@@ -85,10 +94,10 @@ TEST --> OF
 - [config.py:20-21](file://safe4ai-pilot/app/config.py#L20-L21)
 - [main.py:87-95](file://safe4ai-pilot/app/main.py#L87-L95)
 - [chat_routes.py:115-148](file://safe4ai-pilot/app/api/chat_routes.py#L115-L148)
-- [test_security_guards.py:1-305](file://safe4ai-pilot/tests/test_security_guards.py#L1-L305)
+- [test_security_guards.py:1-306](file://safe4ai-pilot/tests/test_security_guards.py#L1-L306)
 
 **Section sources**
-- [input_guard.py:1-49](file://safe4ai-pilot/app/security/input_guard.py#L1-L49)
+- [input_guard.py:1-61](file://safe4ai-pilot/app/security/input_guard.py#L1-L61)
 - [upload_validator.py:1-73](file://safe4ai-pilot/app/security/upload_validator.py#L1-L73)
 - [content_filter.py:1-64](file://safe4ai-pilot/app/security/content_filter.py#L1-L64)
 - [output_filter.py:1-61](file://safe4ai-pilot/app/security/output_filter.py#L1-L61)
@@ -96,18 +105,21 @@ TEST --> OF
 - [config.py:20-21](file://safe4ai-pilot/app/config.py#L20-L21)
 - [main.py:87-95](file://safe4ai-pilot/app/main.py#L87-L95)
 - [chat_routes.py:115-148](file://safe4ai-pilot/app/api/chat_routes.py#L115-L148)
-- [test_security_guards.py:1-305](file://safe4ai-pilot/tests/test_security_guards.py#L1-L305)
+- [test_security_guards.py:1-306](file://safe4ai-pilot/tests/test_security_guards.py#L1-L306)
 
 ## Core Components
-- InputGuard: Sanitizes user queries by removing HTML tags and non-printable characters, enforcing a maximum length, and detecting prompt injection patterns.
+- InputGuard: Sanitizes user queries by removing HTML tags and non-printable characters, enforcing a maximum length, and detecting prompt injection patterns using enhanced role-specific blocklists.
 - UploadValidator: Validates file extensions, declared MIME types, actual MIME types (via magic bytes), and file size; generates safe filenames.
 - ContentFilter: Detects and filters out document chunks containing sensitive information (PII) and optional blocked terms.
 - OutputFilter: Verifies generated answers for hallucinated PII not present in source chunks and logs suspiciously long outputs.
 - GuardResult: Standardized result structure returned by all guards indicating whether an input is allowed and the reason.
 - Settings: Centralized configuration including maximum upload size.
 
+**Updated** Enhanced InputGuard now uses role-specific blocklists for more nuanced injection detection.
+
 **Section sources**
-- [input_guard.py:24-48](file://safe4ai-pilot/app/security/input_guard.py#L24-L48)
+- [input_guard.py:11-18](file://safe4ai-pilot/app/security/input_guard.py#L11-L18)
+- [input_guard.py:20-34](file://safe4ai-pilot/app/security/input_guard.py#L20-L34)
 - [upload_validator.py:24-72](file://safe4ai-pilot/app/security/upload_validator.py#L24-L72)
 - [content_filter.py:25-63](file://safe4ai-pilot/app/security/content_filter.py#L25-L63)
 - [output_filter.py:31-60](file://safe4ai-pilot/app/security/output_filter.py#L31-L60)
@@ -130,7 +142,7 @@ participant Upload as "UploadValidator<br/>upload_validator.py"
 Client->>FastAPI : "POST /chat"
 FastAPI->>Chat : "Invoke handler"
 Chat->>Chat : "Validate non-empty question"
-Chat->>Guard : "Sanitize and validate query"
+Chat->>Guard : "Sanitize and validate query with role-specific blocklists"
 Guard-->>Chat : "GuardResult"
 alt "Allowed"
 Chat-->>Client : "200 OK with answer"
@@ -150,7 +162,7 @@ end
 **Diagram sources**
 - [main.py:87-95](file://safe4ai-pilot/app/main.py#L87-L95)
 - [chat_routes.py:115-148](file://safe4ai-pilot/app/api/chat_routes.py#L115-L148)
-- [input_guard.py:27-48](file://safe4ai-pilot/app/security/input_guard.py#L27-L48)
+- [input_guard.py:27-61](file://safe4ai-pilot/app/security/input_guard.py#L27-L61)
 - [upload_validator.py:25-72](file://safe4ai-pilot/app/security/upload_validator.py#L25-L72)
 
 ## Detailed Component Analysis
@@ -159,7 +171,9 @@ end
 InputGuard performs three steps:
 1. Strip HTML tags and non-printable control characters, keeping printable characters and whitespace.
 2. Enforce a maximum character limit (~512 tokens at 4 chars/token).
-3. Detect potential prompt injection patterns (e.g., instructions to bypass behavior, special tokens).
+3. Detect potential prompt injection patterns using enhanced role-specific blocklists.
+
+**Updated** Enhanced with role-specific blocklists that differentiate between benign role substitutions and malicious injection attempts.
 
 ```mermaid
 flowchart TD
@@ -167,37 +181,45 @@ Start(["check(query)"]) --> CleanHTML["Remove HTML tags"]
 CleanHTML --> CleanCtrl["Strip non-printable control characters<br/>keep printable + whitespace"]
 CleanCtrl --> LenCheck{"Length <= MAX_CHARS?"}
 LenCheck --> |No| DenyLong["Return denied: Query too long"]
-LenCheck --> |Yes| InjectCheck["Scan for injection patterns"]
+LenCheck --> |Yes| RoleBlocks["Apply role-specific blocklists"]
+RoleBlocks --> InjectCheck["Scan for injection patterns with enhanced detection"]
 InjectCheck --> Found{"Pattern match?"}
-Found --> |Yes| DenyInject["Return denied: Prompt injection detected"]
+Found --> |Yes| DenyInject["Return denied: Potential prompt injection detected"]
 Found --> |No| Allow["Return allowed: ok"]
 ```
 
 **Diagram sources**
-- [input_guard.py:27-48](file://safe4ai-pilot/app/security/input_guard.py#L27-L48)
+- [input_guard.py:27-61](file://safe4ai-pilot/app/security/input_guard.py#L27-L61)
 
 Validation rules and behaviors:
 - Allowed character set: printable characters plus whitespace characters.
 - Length restriction: maximum 2048 characters.
-- Injection patterns: designed to detect attempts to override system behavior or exploit special tokens.
+- Enhanced injection patterns: designed to detect attempts to override system behavior or exploit special tokens, with role-specific blocklists for nuanced detection.
+
+**Updated** Role-specific blocklists:
+- `_ROLE_SUBSTITUTION_WORDS`: Benign role substitutions like "different assistant", "new bot", "unfiltered ai"
+- `_MALICIOUS_ROLE_WORDS`: Malicious role references like "hacker", "cracker", "evil assistant"
+- Differentiates between legitimate role changes and malicious injection attempts
 
 Integration with FastAPI:
 - Chat routes enforce non-empty questions and rely on InputGuard for further sanitization.
 
 Examples of filtering techniques:
 - Regex-based stripping of HTML tags.
-- Regex-based detection of injection phrases.
+- Regex-based detection of injection phrases with role-specific patterns.
 - Character-by-character filtering to retain only printable and whitespace characters.
 
 Custom validation rules:
 - Extendable pattern list for injection detection.
 - Configurable maximum length.
+- Role-specific blocklists can be customized for different deployment contexts.
 
 **Section sources**
-- [input_guard.py:9-19](file://safe4ai-pilot/app/security/input_guard.py#L9-L19)
-- [input_guard.py:24-48](file://safe4ai-pilot/app/security/input_guard.py#L24-L48)
+- [input_guard.py:11-18](file://safe4ai-pilot/app/security/input_guard.py#L11-L18)
+- [input_guard.py:20-34](file://safe4ai-pilot/app/security/input_guard.py#L20-L34)
+- [input_guard.py:42-61](file://safe4ai-pilot/app/security/input_guard.py#L42-L61)
 - [chat_routes.py:123-124](file://safe4ai-pilot/app/api/chat_routes.py#L123-L124)
-- [test_security_guards.py:32-83](file://safe4ai-pilot/tests/test_security_guards.py#L32-L83)
+- [test_security_guards.py:51-83](file://safe4ai-pilot/tests/test_security_guards.py#L51-L83)
 
 ### UploadValidator: File Upload Validation and Safe Storage
 UploadValidator enforces:
@@ -352,7 +374,7 @@ MW-->>Client : "413 Request Entity Too Large"
 else "Within limit"
 MW->>Routes : "Forward request"
 Routes->>Routes : "Validate non-empty question"
-Routes->>Guard : "Sanitize and validate"
+Routes->>Guard : "Sanitize and validate with role-specific blocklists"
 Guard-->>Routes : "GuardResult"
 alt "Denied"
 Routes-->>Client : "422 Unprocessable Entity"
@@ -365,7 +387,7 @@ end
 **Diagram sources**
 - [main.py:87-95](file://safe4ai-pilot/app/main.py#L87-L95)
 - [chat_routes.py:115-148](file://safe4ai-pilot/app/api/chat_routes.py#L115-L148)
-- [input_guard.py:27-48](file://safe4ai-pilot/app/security/input_guard.py#L27-L48)
+- [input_guard.py:27-61](file://safe4ai-pilot/app/security/input_guard.py#L27-L61)
 
 **Section sources**
 - [main.py:87-95](file://safe4ai-pilot/app/main.py#L87-L95)
@@ -419,18 +441,24 @@ MW --> ST
 - Early exits: Guards return immediately upon detection of violations to minimize processing.
 - Lightweight filtering: Character filtering and simple regex scans keep overhead low.
 - Logging: Structured logging is used for audit trails without blocking the main path.
+- Role-specific optimization: Separate blocklists allow for more efficient pattern matching and reduced false positives.
+
+**Updated** Role-specific blocklists improve performance by allowing more precise pattern matching and reducing unnecessary rejections of legitimate queries.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
 - Oversized uploads: Ensure the request body does not exceed the configured maximum; the middleware returns 413 when exceeded.
 - Empty or whitespace-only questions: Chat routes reject empty submissions with 422.
 - Disallowed file types: UploadValidator rejects unknown extensions or mismatched MIME types; verify allowed lists and magic-byte detection.
-- Prompt injection flagged: Review query content for injection patterns; adjust patterns if needed.
+- Prompt injection flagged: Review query content for injection patterns; the enhanced role-specific blocklists help reduce false positives on legitimate role references.
 - Hallucinated PII in outputs: Confirm that sensitive information originates from source chunks; refine retrieval or reranking if necessary.
 
 Evidence from tests:
 - Body size enforcement and empty-question rejection are verified by tests.
 - UploadValidator behavior for extensions, MIME types, magic bytes, and size is covered by unit tests.
+- InputGuard tests demonstrate proper handling of injection patterns and role-specific references.
+
+**Updated** Enhanced role-specific blocklists reduce false positives on legitimate user queries while maintaining strong injection detection capabilities.
 
 **Section sources**
 - [test_security_guards.py:89-104](file://safe4ai-pilot/tests/test_security_guards.py#L89-L104)
@@ -439,7 +467,9 @@ Evidence from tests:
 
 ## Conclusion
 The input validation system provides layered protection:
-- InputGuard defends against prompt injection and enforces length limits.
+- InputGuard defends against prompt injection and enforces length limits, with enhanced role-specific blocklists that reduce false positives on legitimate user queries.
 - UploadValidator ensures safe, correctly typed file uploads with strict size checks.
 - ContentFilter and OutputFilter mitigate risks of sensitive data exposure.
 - FastAPI middleware and route-level checks integrate these guards seamlessly, returning clear error responses for invalid inputs.
+
+**Updated** The enhanced injection pattern detection with role-specific blocklists provides improved accuracy in distinguishing between benign role references and malicious injection attempts, resulting in better user experience while maintaining strong security guarantees.

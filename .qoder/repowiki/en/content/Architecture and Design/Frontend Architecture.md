@@ -8,16 +8,27 @@
 - [AdminLayout.tsx](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx)
 - [useChat.ts](file://safe4ai-pilot/frontend/src/hooks/useChat.ts)
 - [useAuth.ts](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts)
+- [useSettings.ts](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts)
 - [ErrorBoundary.tsx](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx)
 - [client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
 - [chat.ts](file://safe4ai-pilot/frontend/src/api/chat.ts)
+- [settings.ts](file://safe4ai-pilot/frontend/src/api/settings.ts)
 - [tailwind.config.ts](file://safe4ai-pilot/frontend/tailwind.config.ts)
 - [package.json](file://safe4ai-pilot/frontend/package.json)
 - [vite.config.ts](file://safe4ai-pilot/frontend/vite.config.ts)
 - [AnswerBlock.tsx](file://safe4ai-pilot/frontend/src/components/chat/AnswerBlock.tsx)
 - [OverviewPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx)
 - [ActivityPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx)
+- [SettingsPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx)
+- [SettingsPage.tsx](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added documentation for the new `useSettings()` React hook and its role in settings management
+- Updated routing documentation to reflect the separation between admin and user settings pages
+- Enhanced component analysis to include the new settings architecture
+- Updated diagrams to show the new settings management flow
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -52,16 +63,20 @@ subgraph "Routing"
 R1["/chat"]
 R2["/admin/*"]
 R3["/login"]
+R4["/settings"]
 end
 subgraph "Pages"
 CP["ChatPage.tsx"]
 AL["AdminLayout.tsx"]
 OP["OverviewPage.tsx"]
 AP["ActivityPage.tsx"]
+ASP["Admin SettingsPage.tsx"]
+USP["User SettingsPage.tsx"]
 end
 subgraph "Hooks"
 HC["useChat.ts"]
 HA["useAuth.ts"]
+HS["useSettings.ts"]
 end
 subgraph "Components"
 EB["ErrorBoundary.tsx"]
@@ -70,6 +85,7 @@ end
 subgraph "API"
 AC["api/client.ts"]
 AS["api/chat.ts"]
+SS["api/settings.ts"]
 end
 subgraph "Styling"
 TW["tailwind.config.ts"]
@@ -78,37 +94,47 @@ M --> A
 A --> R1
 A --> R2
 A --> R3
+A --> R4
 R1 --> CP
 R2 --> AL
 AL --> OP
 AL --> AP
+AL --> ASP
+R4 --> USP
 CP --> HC
 CP --> HA
 CP --> AB
+ASP --> HS
+USP --> HA
 CP --> AS
 AS --> AC
+SS --> AC
 M --> EB
 M --> TW
 ```
 
 **Diagram sources**
-- [main.tsx:1-24](file://safe4ai-pilot/frontend/src/main.tsx#L1-L24)
-- [App.tsx:25-92](file://safe4ai-pilot/frontend/src/App.tsx#L25-L92)
+- [main.tsx:1-33](file://safe4ai-pilot/frontend/src/main.tsx#L1-L33)
+- [App.tsx:1-121](file://safe4ai-pilot/frontend/src/App.tsx#L1-L121)
 - [ChatPage.tsx:29-191](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L29-L191)
 - [AdminLayout.tsx:23-97](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L23-L97)
 - [OverviewPage.tsx:43-213](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L43-L213)
 - [ActivityPage.tsx:21-136](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx#L21-L136)
+- [SettingsPage.tsx:46-352](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L46-L352)
+- [SettingsPage.tsx:53-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L53-L274)
 - [useChat.ts:17-104](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L17-L104)
 - [useAuth.ts:5-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L5-L28)
+- [useSettings.ts:146-285](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L146-L285)
 - [ErrorBoundary.tsx:13-43](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx#L13-L43)
 - [AnswerBlock.tsx:36-114](file://safe4ai-pilot/frontend/src/components/chat/AnswerBlock.tsx#L36-L114)
 - [client.ts:1-20](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L20)
 - [chat.ts:21-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L76)
+- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
 - [tailwind.config.ts:1-44](file://safe4ai-pilot/frontend/tailwind.config.ts#L1-L44)
 
 **Section sources**
-- [main.tsx:1-24](file://safe4ai-pilot/frontend/src/main.tsx#L1-L24)
-- [App.tsx:1-92](file://safe4ai-pilot/frontend/src/App.tsx#L1-L92)
+- [main.tsx:1-33](file://safe4ai-pilot/frontend/src/main.tsx#L1-L33)
+- [App.tsx:1-121](file://safe4ai-pilot/frontend/src/App.tsx#L1-L121)
 - [package.json:1-32](file://safe4ai-pilot/frontend/package.json#L1-L32)
 - [vite.config.ts:1-17](file://safe4ai-pilot/frontend/vite.config.ts#L1-L17)
 
@@ -117,7 +143,7 @@ M --> TW
 - Routing enforces authentication and admin-only access via route guards.
 - Chat page composes messaging UI, streaming pipeline, and citation drawer.
 - Admin layout provides sidebar navigation and content area for admin pages.
-- Shared hooks encapsulate chat state and authentication state.
+- Shared hooks encapsulate chat state, authentication state, and settings management.
 - Design system is driven by Tailwind tokens and consistent component primitives.
 
 **Section sources**
@@ -127,13 +153,14 @@ M --> TW
 - [AdminLayout.tsx:23-97](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L23-L97)
 - [useChat.ts:17-104](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L17-L104)
 - [useAuth.ts:5-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L5-L28)
+- [useSettings.ts:146-285](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L146-L285)
 - [tailwind.config.ts:3-43](file://safe4ai-pilot/frontend/tailwind.config.ts#L3-L43)
 
 ## Architecture Overview
 The frontend follows a layered architecture:
 - Entry layer: Vite + React + React Router + React Query
 - UI layer: Pages, Layouts, and Components
-- State layer: Hooks for chat and auth
+- State layer: Hooks for chat, auth, and settings
 - API layer: Typed client and SSE streaming
 - Styling layer: Tailwind tokens and theme
 
@@ -145,27 +172,37 @@ E --> EB["ErrorBoundary"]
 BR --> APP["App Routes<br/>App.tsx"]
 APP --> CHAT["ChatPage"]
 APP --> ADMIN["AdminLayout"]
+APP --> USERSET["User SettingsPage"]
 ADMIN --> OVER["OverviewPage"]
 ADMIN --> ACT["ActivityPage"]
+ADMIN --> ADMSET["Admin SettingsPage"]
 CHAT --> HC["useChat"]
 CHAT --> HA["useAuth"]
 CHAT --> AB["AnswerBlock"]
+USERSET --> HA
+ADMSET --> HS["useSettings"]
+HS --> SS["api/settings.ts"]
+SS --> AC["api/client.ts"]
 HC --> API["api/chat.ts"]
-API --> AC["api/client.ts"]
+API --> AC
 E --> TW["Tailwind Theme<br/>tailwind.config.ts"]
 ```
 
 **Diagram sources**
 - [main.tsx:13-23](file://safe4ai-pilot/frontend/src/main.tsx#L13-L23)
-- [App.tsx:25-92](file://safe4ai-pilot/frontend/src/App.tsx#L25-L92)
+- [App.tsx:25-121](file://safe4ai-pilot/frontend/src/App.tsx#L25-L121)
 - [ChatPage.tsx:29-191](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L29-L191)
 - [AdminLayout.tsx:23-97](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L23-L97)
 - [OverviewPage.tsx:43-213](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L43-L213)
 - [ActivityPage.tsx:21-136](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx#L21-L136)
+- [SettingsPage.tsx:46-352](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L46-L352)
+- [SettingsPage.tsx:53-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L53-L274)
 - [useChat.ts:17-104](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L17-L104)
 - [useAuth.ts:5-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L5-L28)
+- [useSettings.ts:146-285](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L146-L285)
 - [AnswerBlock.tsx:36-114](file://safe4ai-pilot/frontend/src/components/chat/AnswerBlock.tsx#L36-L114)
 - [chat.ts:21-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L76)
+- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
 - [client.ts:1-20](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L20)
 - [tailwind.config.ts:1-44](file://safe4ai-pilot/frontend/tailwind.config.ts#L1-L44)
 
@@ -174,6 +211,7 @@ E --> TW["Tailwind Theme<br/>tailwind.config.ts"]
 ### Routing and Guards
 - Authentication guard redirects unauthenticated users to login.
 - Admin guard restricts admin routes to admin users.
+- Separate routes for admin settings (`/admin/settings`) and user settings (`/settings`).
 - Catch-all route navigates to chat.
 
 ```mermaid
@@ -193,14 +231,23 @@ GA->>P : Render ChatPage
 else Not authenticated
 GA->>APP : Redirect to "/login"
 end
-U->>BR : Navigate to "/admin/documents"
+U->>BR : Navigate to "/admin/settings"
 BR->>APP : Match route
 APP->>GI : Wrap page
 GI->>GI : Check useAuth()
 alt Admin
-GI->>P : Render DocumentsPage
+GI->>P : Render Admin SettingsPage
 else Not admin
 GI->>APP : Redirect to "/chat"
+end
+U->>BR : Navigate to "/settings"
+BR->>APP : Match route
+APP->>GA : Wrap page
+GA->>GA : Check useAuth()
+alt Authenticated
+GA->>P : Render User SettingsPage
+else Not authenticated
+GA->>APP : Redirect to "/login"
 end
 ```
 
@@ -211,6 +258,45 @@ end
 **Section sources**
 - [App.tsx:11-23](file://safe4ai-pilot/frontend/src/App.tsx#L11-L23)
 - [useAuth.ts:5-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L5-L28)
+
+### Settings Management Architecture
+**Updated** The settings system has been refactored to use a dedicated `useSettings()` hook that encapsulates all settings-related logic.
+
+- `useSettings()` hook manages settings query, mutations, optimistic updates, and save queuing
+- Admin SettingsPage uses the hook for centralized settings management
+- User SettingsPage handles account-specific settings (password changes, profile info)
+- Optimistic updates provide immediate UI feedback during saves
+- Save queue prevents conflicts when multiple settings changes occur rapidly
+- Automatic reindex warnings when embedding configurations change
+
+```mermaid
+sequenceDiagram
+participant UI as "Admin SettingsPage"
+participant HS as "useSettings Hook"
+participant QC as "React Query Client"
+participant API as "api/settings.ts"
+participant AC as "api/client.ts"
+UI->>HS : set(key, value)
+HS->>HS : Create diff object
+HS->>QC : Optimistically update cache
+HS->>HS : Queue save operation
+HS->>API : patchSettings(diff)
+API->>AC : fetch("/settings", PATCH)
+API-->>HS : Updated settings
+HS->>QC : Update cache with real data
+HS->>UI : Update UI state
+```
+
+**Diagram sources**
+- [SettingsPage.tsx:46-352](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L46-L352)
+- [useSettings.ts:146-285](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L146-L285)
+- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
+- [client.ts:1-20](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L20)
+
+**Section sources**
+- [useSettings.ts:146-285](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L146-L285)
+- [SettingsPage.tsx:46-352](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L46-L352)
+- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
 
 ### Chat State Management and Streaming
 - useChat manages messages, streaming steps, and lifecycle.
@@ -260,6 +346,7 @@ HC->>AC : submitFeedback(session, traceId, rating)
 - AdminLayout renders sidebar navigation, active item highlighting, and content area.
 - OverviewPage displays statistics, charts, and notable items with periodic refresh.
 - ActivityPage shows a live audit stream with filtering and CSV export.
+- SettingsPage provides comprehensive configuration management with automatic saving.
 
 ```mermaid
 flowchart TD
@@ -270,6 +357,9 @@ Nav --> |Activity| AP["ActivityPage"]
 Nav --> |Documents| DP["DocumentsPage"]
 Nav --> |Feedback| FP["FeedbackPage"]
 Nav --> |Users| UP["UsersPage"]
+Nav --> |Settings| SP["SettingsPage"]
+SP --> HS["useSettings Hook"]
+SP --> SS["Settings API"]
 OP --> Stats["React Query: getStats"]
 AP --> Stream["useAuditStream"]
 DP --> List["DocumentRow"]
@@ -282,6 +372,8 @@ UP --> ListU["User Rows"]
 - [AdminLayout.tsx:27-53](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L27-L53)
 - [OverviewPage.tsx:43-48](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L43-L48)
 - [ActivityPage.tsx:21-27](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx#L21-L27)
+- [SettingsPage.tsx:46-352](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L46-L352)
+- [useSettings.ts:146-285](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L146-L285)
 
 **Section sources**
 - [AdminLayout.tsx:23-97](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L23-L97)
@@ -318,6 +410,7 @@ Classes --> Tokens
 ### API Integration Layer
 - api/client.ts centralizes fetch with credentials and JSON parsing.
 - api/chat.ts implements SSE streaming for chat responses.
+- api/settings.ts provides typed settings management with optimistic updates.
 - Vite proxy forwards routes to backend host.
 
 ```mermaid
@@ -327,6 +420,7 @@ participant VC as "Vite Proxy"
 participant BE as "Backend"
 participant AC as "api/client.ts"
 participant AT as "api/chat.ts"
+participant AS as "api/settings.ts"
 FE->>VC : POST /chat/stream
 VC->>BE : Forward to VITE_API_URL
 BE-->>FE : SSE stream
@@ -334,16 +428,25 @@ FE->>AT : streamChat(...)
 AT->>AC : fetch("/chat/stream")
 AC-->>AT : Response Reader
 AT-->>FE : Async events (step/token/cite/done/error)
+FE->>VC : PATCH /settings
+VC->>BE : Forward to VITE_API_URL
+BE-->>FE : Updated settings
+FE->>AS : patchSettings(...)
+AS->>AC : fetch("/settings", PATCH)
+AC-->>AS : Updated settings
+AS-->>FE : Settings response
 ```
 
 **Diagram sources**
 - [vite.config.ts:8-14](file://safe4ai-pilot/frontend/vite.config.ts#L8-L14)
 - [client.ts:1-20](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L20)
 - [chat.ts:21-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L76)
+- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
 
 **Section sources**
 - [client.ts:1-20](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L20)
 - [chat.ts:21-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L76)
+- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
 - [vite.config.ts:1-17](file://safe4ai-pilot/frontend/vite.config.ts#L1-L17)
 
 ### Error Boundary Implementation
@@ -398,29 +501,30 @@ Pkg --> Dev2
 ## Performance Considerations
 - React Query caching: global staleTime configured to reduce redundant requests.
 - Streaming rendering: incremental updates to messages and steps improve perceived performance.
+- Optimistic updates: immediate UI feedback during settings saves reduces perceived latency.
+- Save queuing: prevents conflicts when multiple settings changes occur rapidly.
 - Minimal re-renders: callbacks memoized with useCallback keep components stable.
 - Lazy loading: code-splitting via dynamic imports can be introduced for heavy admin pages.
-- Image and asset optimization: leverage Vite’s bundling and Tailwind purging.
+- Image and asset optimization: leverage Vite's bundling and Tailwind purging.
 - Accessibility: ensure focus management, ARIA attributes, and keyboard navigation in interactive components.
-
-[No sources needed since this section provides general guidance]
 
 ## Troubleshooting Guide
 - Authentication issues: verify cookie credentials and session validity; check sign-out flow clears React Query cache.
 - Chat streaming failures: confirm SSE endpoint availability and network connectivity; inspect AbortController usage and error events.
 - Admin access denied: ensure user role is admin; route guards redirect unauthorized users.
+- Settings save failures: check network connectivity and server response; use retry mechanism for unsaved changes.
+- Optimistic update conflicts: wait for save queue to complete before making conflicting changes.
 - Styling inconsistencies: validate Tailwind token usage and CSS order; rebuild after theme changes.
 - Build/runtime errors: use ErrorBoundary recovery; inspect console logs for derived error state.
 
 **Section sources**
 - [useAuth.ts:14-18](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L14-L18)
 - [useChat.ts:24-26](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L24-L26)
+- [useSettings.ts:165-200](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L165-L200)
 - [ErrorBoundary.tsx:20-22](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx#L20-L22)
 
 ## Conclusion
-The Private AI frontend employs a clean separation of concerns: routing and guards manage access, React Query handles data, hooks encapsulate state, and Tailwind provides a cohesive design system. Real-time chat uses SSE for streaming, while admin pages present dashboards and activity feeds. The architecture supports scalability, maintainability, and a strong UX through thoughtful component composition and performance-conscious patterns.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The Private AI frontend employs a clean separation of concerns: routing and guards manage access, React Query handles data, hooks encapsulate state, and Tailwind provides a cohesive design system. Real-time chat uses SSE for streaming, while admin pages present dashboards and activity feeds. The new settings management architecture provides centralized, optimistic updates with automatic conflict resolution. The architecture supports scalability, maintainability, and a strong UX through thoughtful component composition and performance-conscious patterns.
 
 ## Appendices
 
@@ -440,4 +544,21 @@ UI --> HA["useAuth.ts"]
 - [chat.ts:21-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L76)
 - [client.ts:1-20](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L20)
 - [AnswerBlock.tsx:36-114](file://safe4ai-pilot/frontend/src/components/chat/AnswerBlock.tsx#L36-L114)
+- [useAuth.ts:5-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L5-L28)
+
+### Component Interaction Diagram: Settings Management Flow
+```mermaid
+graph TB
+UI["Admin SettingsPage.tsx"] --> HS["useSettings.ts"]
+HS --> QC["React Query Client"]
+HS --> API["api/settings.ts"]
+API --> AC["api/client.ts"]
+UI --> HA["useAuth.ts"]
+```
+
+**Diagram sources**
+- [SettingsPage.tsx:46-352](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L46-L352)
+- [useSettings.ts:146-285](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L146-L285)
+- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
+- [client.ts:1-20](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L20)
 - [useAuth.ts:5-28](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L5-L28)

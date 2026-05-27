@@ -20,8 +20,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Document
+from app.db.models import AuditLog, Document, User
 from app.services.app_config_store import load_app_config
+from app.services.quota_service import count_active_seats, count_monthly_queries
 from app.services.provider_settings import (
     expand_provider_mode,
     probe_cloud_embeddings,
@@ -71,6 +72,11 @@ class PatchSettingsRequest(BaseModel):
     providerCustomModels: list[str] | None = None
     embeddingSource: str | None = None   # "ollama" | "provider"
     providerMode: str | None = None      # "local" | "hybrid" | "cloud"
+    # Tier / license config (admin-writable)
+    tier: str | None = None              # "evaluation" | "team" | "enterprise"
+    maxSeats: int | None = None          # 0 = unlimited
+    monthlyQueryLimit: int | None = None # 0 = unlimited
+    tierExpiresAt: str | None = None     # ISO-8601 UTC or "" to clear
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +407,32 @@ def collect_field_updates(
             raise SettingsValidationError("embeddingSource must be ollama or provider")
         updates["embedding_source"] = body.embeddingSource
 
+    # --- Tier / license config ---
+    if body.tier is not None:
+        if body.tier not in {"evaluation", "team", "enterprise"}:
+            raise SettingsValidationError("tier must be evaluation, team, or enterprise")
+        updates["tier"] = body.tier
+    if body.maxSeats is not None:
+        if body.maxSeats < 0 or body.maxSeats > 10000:
+            raise SettingsValidationError("maxSeats must be between 0 and 10000")
+        updates["max_seats"] = body.maxSeats
+    if body.monthlyQueryLimit is not None:
+        if body.monthlyQueryLimit < 0 or body.monthlyQueryLimit > 10_000_000:
+            raise SettingsValidationError("monthlyQueryLimit must be between 0 and 10000000")
+        updates["monthly_query_limit"] = body.monthlyQueryLimit
+    if body.tierExpiresAt is not None:
+        if body.tierExpiresAt == "":
+            updates["tier_expires_at"] = ""  # empty string = clear expiry
+        else:
+            try:
+                from datetime import datetime  # noqa: PLC0415
+                datetime.fromisoformat(body.tierExpiresAt)
+            except ValueError as exc:
+                raise SettingsValidationError(
+                    "tierExpiresAt must be a valid ISO-8601 datetime or empty string"
+                ) from exc
+            updates["tier_expires_at"] = body.tierExpiresAt
+
     return updates
 
 
@@ -581,6 +613,14 @@ def serialize_settings(db: Session) -> dict[str, Any]:
             "dailyCeilingUsd": _val("daily_ceiling_usd", 50),
             "monthlyCeilingUsd": _val("monthly_ceiling_usd", 500),
             "todayUsd": today_cost,
+        },
+        "tier": {
+            "name": _val("tier", "evaluation"),
+            "maxSeats": int(_val("max_seats", 0)),
+            "monthlyQueryLimit": int(_val("monthly_query_limit", 0)),
+            "tierExpiresAt": _val("tier_expires_at", None) or None,
+            "seatsUsed": count_active_seats(db),
+            "monthlyQueriesUsed": count_monthly_queries(db),
         },
     }
 

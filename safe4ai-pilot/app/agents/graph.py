@@ -15,7 +15,7 @@ from app.agents.llm_caller import call_llm
 from app.agents.query_decomposer import decompose_query
 from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
-from app.models import Citation, GradedChunk, PrivateAIState, RankedChunk
+from app.models import NO_ANSWER, Citation, GradedChunk, PrivateAIState, RankedChunk
 from app.prompts.registry import get_prompt
 from app.security.input_guard import InputGuard
 from app.security.output_filter import OutputFilter
@@ -34,7 +34,7 @@ def _node_span(name: str, state: PrivateAIState) -> Generator[otel_trace.Span, N
         span.set_attribute("node", name)
         yield span
 
-_NO_ANSWER = "I don't have enough information in the provided documents to answer this question."
+_NO_ANSWER = NO_ANSWER  # module alias — keeps all internal references unchanged
 
 # Max retrieve passes before the self-correction loop is cut off
 _MAX_RETRIEVAL_ATTEMPTS = 2
@@ -100,7 +100,7 @@ def build_graph(
 
     async def retrieve_node(state: PrivateAIState) -> dict[str, Any]:
         with _node_span("retrieve", state) as span:
-            query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            query = state.effective_query
             effective_top_k = retrieval_top_k + state.retrieval_attempts * 4
             try:
                 raw_chunks = await retriever.retrieve(query, top_k=effective_top_k)
@@ -123,7 +123,7 @@ def build_graph(
 
     async def grade_node(state: PrivateAIState) -> dict[str, Any]:
         with _node_span("grade", state) as span:
-            query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            query = state.effective_query
             graded = await grade_chunks(
                 query,
                 state.retrieved_chunks,
@@ -142,7 +142,7 @@ def build_graph(
 
     async def decompose_node(state: PrivateAIState) -> dict[str, Any]:
         with _node_span("decompose", state) as span:
-            query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            query = state.effective_query
             sub_queries = await decompose_query(
                 query,
                 chat_client=chat_client,
@@ -183,7 +183,7 @@ def build_graph(
 
     async def generate_node(state: PrivateAIState) -> dict[str, Any]:
         with _node_span("generate", state):
-            query = state.rewritten_query or (state.messages[-1].content if state.messages else "")
+            query = state.effective_query
             relevant = [c for c in state.graded_chunks if c.relevant]
 
             if not relevant:
@@ -249,7 +249,9 @@ def build_graph(
                 RankedChunk(**{k: v for k, v in c.model_dump().items() if k in ranked_fields})
                 for c in relevant
             ]
-            guard_result = output_filter.check(state.draft_answer, source_ranked)
+            guard_result = output_filter.check(
+                state.draft_answer, source_ranked, citations=state.citations
+            )
             if not guard_result.allowed:
                 return {
                     "draft_answer": _NO_ANSWER,

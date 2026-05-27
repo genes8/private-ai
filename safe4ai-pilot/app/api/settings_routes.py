@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import httpx
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth.middleware import require_role
 from app.auth.router import limiter
 from app.db import get_db
-from app.db.models import User
+from app.db.models import AuditLog, User
 from app.services.app_config_store import load_app_config, upsert_app_config
 from app.security.url_validator import validate_provider_url
 from app.services.provider_settings import resolve_provider_config
@@ -45,12 +46,17 @@ def get_settings(
     return serialize_settings(db)
 
 
+_PROVIDER_AUDIT_KEYS: frozenset[str] = frozenset(
+    {"provider_type", "embedding_source", "provider_base_url", "provider_api_key"}
+)
+
+
 @router.patch("/settings", status_code=200)
 def patch_settings(
     request: Request,
     body: PatchSettingsRequest,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_admin: User = Depends(require_role("admin")),
 ) -> dict[str, Any]:
     """Update mutable application settings stored in the DB."""
     current_config = load_app_config(db)
@@ -97,6 +103,43 @@ def patch_settings(
             status_code=422,
             detail=f"Configuration is invalid and was not saved: {exc}",
         ) from exc
+
+    # Persist provider-change audit trail in the same transaction so settings
+    # and audit are always consistent (both saved or both rolled back).
+    # Compare updates against the *canonically resolved* previous provider config
+    # rather than raw DB values. provider_type and embedding_source are always
+    # written to updates as their resolved defaults even on non-provider patches
+    # (e.g., retrievalK patch), so a key-existence check would fire on every
+    # patch against an empty config. Using the resolved baseline avoids false positives.
+    _prev_resolved = resolve_provider_config(current_config)
+    _prev_baseline = {
+        "provider_type": _prev_resolved.provider_type,
+        "embedding_source": _prev_resolved.embedding_source,
+        "provider_base_url": current_config.get("provider_base_url"),
+        "provider_api_key": current_config.get("provider_api_key"),
+    }
+    changed_provider_keys = {
+        k for k in _PROVIDER_AUDIT_KEYS
+        if k in updates and updates[k] != _prev_baseline.get(k)
+    }
+    if changed_provider_keys:
+        audit_entry = AuditLog(
+            id=str(uuid.uuid4()),
+            user_id=str(current_admin.id),
+            action_type="settings_provider_change",
+            response_metadata={
+                # Use the resolved baseline (not raw current_config) so that a
+                # default-ollama deployment that has never written provider_type
+                # to the DB records "ollama" rather than None.
+                "old_provider": _prev_baseline["provider_type"],
+                "new_provider": updates["provider_type"],
+                "old_embedding_source": _prev_baseline["embedding_source"],
+                "new_embedding_source": updates["embedding_source"],
+                "changed_keys": sorted(changed_provider_keys),
+            },
+        )
+        db.add(audit_entry)
+
     db.commit()
     request.app.state.retriever = retriever
     request.app.state.reranker = reranker

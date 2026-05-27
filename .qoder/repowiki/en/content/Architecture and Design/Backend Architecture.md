@@ -30,11 +30,10 @@
 
 ## Update Summary
 **Changes Made**
-- Enhanced security middleware documentation to include new CSRF protection system
-- Added comprehensive SSRF protection documentation with URL validator implementation
-- Documented strengthened input/output filtering with guard components
-- Updated architecture diagrams to reflect new security controls
-- Added security guard components to the layered architecture model
+- Enhanced reranking component documentation to include asynchronous arerank() method that prevents event loop stalls during CPU-intensive inference
+- Added persistent BM25 indexing documentation with rebuild_from_qdrant() method that ensures immediate sparse retrieval availability
+- Updated architecture diagrams to reflect asynchronous reranking and persistent indexing improvements
+- Added performance considerations for async thread pool utilization
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -51,13 +50,15 @@
 ## Introduction
 This document describes the backend architecture of the FastAPI-based Private AI system. The system follows a layered architecture separating presentation (FastAPI routers), business logic (services), and data access (SQLAlchemy ORM). It integrates external systems for vector search (Qdrant) and local LLM inference (Ollama) through a LangGraph pipeline. The backend emphasizes secure authentication, robust middleware, structured logging, and observability with comprehensive security controls including CSRF protection, SSRF prevention, and content filtering.
 
+**Updated** Enhanced with asynchronous reranking capabilities and persistent BM25 indexing for improved performance and reliability.
+
 ## Project Structure
-The backend is organized into clear layers with enhanced security controls:
+The backend is organized into clear layers with enhanced security controls and performance optimizations:
 - Presentation: FastAPI routers under app/api
 - Business Logic: Services under app/services
 - Data Access: SQLAlchemy models and session management under app/db
 - Authentication: JWT middleware and auth router under app/auth
-- AI Components: Retrieval and reranking under app/components
+- AI Components: Retrieval and reranking under app/components with asynchronous processing
 - Application Orchestration: Graph pipeline under app/agents
 - Security Guards: Input/output filters, upload validation, and SSRF protection under app/security
 - Observability: Tracing, feedback, and cost tracking under observability/
@@ -141,9 +142,11 @@ ContentFilter --> Retriever
   - Chat: Blocking and streaming chat endpoints backed by a LangGraph pipeline with security guards.
   - Observability: Metrics and feedback endpoints.
 - Data Access: SQLAlchemy declarative base, engine, session factory, and comprehensive ORM models.
-- AI Components: HybridRetriever for Qdrant/Ollama embeddings and retrieval; Reranker for relevance scoring.
+- AI Components: HybridRetriever for Qdrant/Ollama embeddings and retrieval with persistent BM25 indexing; Reranker for relevance scoring with asynchronous processing.
 - Services: Conversation persistence, ingestion orchestration, and semantic caching support.
 - Security Guards: InputGuard for query sanitization, OutputFilter for response validation, ContentFilter for PII detection, and URLValidator for SSRF protection.
+
+**Updated** Enhanced with asynchronous reranking capabilities and persistent BM25 indexing for improved performance.
 
 **Section sources**
 - [main.py:28-60](file://safe4ai-pilot/app/main.py#L28-L60)
@@ -165,6 +168,8 @@ ContentFilter --> Retriever
 ## Architecture Overview
 The system initializes shared resources during app lifespan, including database schema creation, stuck ingestion recovery, and prewarming of the LLM. The LangGraph pipeline is built once and reused across requests. Enhanced middleware enforces CORS, secure headers, comprehensive CSRF protection, body size limits, and rate limiting. Authentication relies on signed JWT cookies with role-based enforcement. Security guards are integrated throughout the pipeline to prevent various attack vectors.
 
+**Updated** Enhanced with asynchronous reranking and persistent BM25 indexing for improved performance and reliability.
+
 ```mermaid
 sequenceDiagram
 participant Client as "Client"
@@ -177,6 +182,7 @@ participant InputGuard as "Input Guard<br/>security/input_guard.py"
 participant DB as "DB Session<br/>db/__init__.py"
 participant Graph as "LangGraph Pipeline<br/>agents/graph.py"
 participant Ret as "HybridRetriever<br/>components/hybrid_retriever.py"
+participant Rerank as "Reranker<br/>components/reranker.py"
 participant SSRF as "SSRF Validator<br/>security/url_validator.py"
 participant OutputFilter as "Output Filter<br/>security/output_filter.py"
 Client->>App : HTTP Request
@@ -193,6 +199,9 @@ Chat->>Graph : Invoke pipeline with state
 Graph->>Ret : Retrieve chunks
 Ret->>SSRF : Validate provider URL
 SSRF-->>Ret : Validated URL or error
+Graph->>Rerank : Async rerank with arerank()
+Rerank->>Rerank : Run predict() in thread pool
+Rerank-->>Graph : Ranked chunks
 Graph->>OutputFilter : Validate response
 OutputFilter-->>Chat : GuardResult (allowed/denied)
 Graph-->>Chat : Final state with answer and citations
@@ -215,6 +224,7 @@ Chat-->>Client : Response or SSE stream
 
 ### FastAPI Application and Lifecycle
 - Lifespan: Creates vector extension, metadata, recovers stuck jobs, builds HybridRetriever and LangGraph once, prewarms Ollama, schedules cleanup tasks.
+- **Updated** Asynchronous BM25 Index Rebuild: Initiates persistent BM25 index restoration from Qdrant during startup using asyncio.to_thread() to prevent blocking the event loop.
 - Enhanced Middleware Stack: Includes CORS, secure headers, CSRF protection, body size enforcement, and rate limiting.
 - Routers: Includes auth, chat, observability, and admin routers.
 - Health Endpoint: Checks Postgres, Qdrant, and Ollama connectivity with security headers.
@@ -226,19 +236,24 @@ Lifespan --> DBInit["Ensure Extensions & Tables"]
 DBInit --> RecoverJobs["Recover Stuck Jobs"]
 RecoverJobs --> BuildComponents["Build Retriever & Graph"]
 BuildComponents --> Prewarm["Prewarm Ollama"]
-Prewarm --> ScheduleCleanup["Schedule Audit Cleanup"]
+Prewarm --> AsyncBM25["_rebuild_bm25 Task"]
+AsyncBM25 --> ThreadPool["asyncio.to_thread()"]
+ThreadPool --> QdrantScroll["Scroll Qdrant Payloads"]
+QdrantScroll --> BM25Index["Rebuild BM25 Index"]
+BM25Index --> ScheduleCleanup["Schedule Audit Cleanup"]
 ScheduleCleanup --> Ready(["App Ready"])
 ```
 
 **Diagram sources**
 - [main.py:28-60](file://safe4ai-pilot/app/main.py#L28-L60)
-- [main.py:104-116](file://safe4ai-pilot/app/main.py#L104-L116)
-- [ingestion_service.py](file://safe4ai-pilot/app/services/ingestion_service.py)
+- [main.py:174-181](file://safe4ai-pilot/app/main.py#L174-L181)
+- [hybrid_retriever.py:83-111](file://safe4ai-pilot/app/components/hybrid_retriever.py#L83-L111)
 
 **Section sources**
 - [main.py:28-60](file://safe4ai-pilot/app/main.py#L28-L60)
 - [main.py:69-95](file://safe4ai-pilot/app/main.py#L69-L95)
 - [main.py:118-147](file://safe4ai-pilot/app/main.py#L118-L147)
+- [main.py:174-181](file://safe4ai-pilot/app/main.py#L174-L181)
 
 ### Configuration Management
 - Settings class defines typed configuration with defaults and environment file binding.
@@ -473,8 +488,8 @@ USERS ||--o{ HUMAN_REVIEW_QUEUE : "reviews"
 - [models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
 
 ### AI Components and Pipelines
-- HybridRetriever: Integrates Qdrant for vector search and Ollama for embeddings with SSRF protection.
-- Reranker: Uses Ollama to improve relevance scores.
+- HybridRetriever: Integrates Qdrant for vector search and Ollama for embeddings with SSRF protection. **Updated** Features persistent BM25 indexing that restores sparse retrieval capabilities immediately after startup.
+- Reranker: Uses Ollama to improve relevance scores with asynchronous processing to prevent event loop stalls during CPU-intensive inference.
 - LangGraph Pipeline: Orchestrates rewrite → retrieve → grade → decompose → generate → filter → quality gate → respond/fallback nodes.
 - Conversation Manager: Persists session state and messages to the database.
 
@@ -483,12 +498,15 @@ classDiagram
 class HybridRetriever {
 +url : string
 +collection : string
-+ollama_url : string
 +embedding_model : string
++rebuild_from_qdrant() int
 +retrieve(query) list
++update_bm25_index() void
++remove_from_bm25() void
 }
 class Reranker {
-+rerank(query, candidates) list
++rerank(query, chunks) list
++arerank(query, chunks) list
 }
 class ConversationManager {
 +new_session(user_id) string
@@ -638,6 +656,8 @@ AI --> Ext
 - Database Pooling: Engine configured with pre-ping to maintain healthy connections.
 - Streaming Responses: SSE streaming reduces perceived latency and memory footprint for long-running chats.
 - Security Overhead: CSRF validation adds minimal overhead with constant-time token comparison.
+- **Updated** Asynchronous Reranking: arerank() method uses asyncio.to_thread() to run CPU-intensive CrossEncoder.predict() operations in separate threads, preventing event loop stalls during inference.
+- **Updated** Persistent BM25 Indexing: rebuild_from_qdrant() method restores in-memory BM25 index by scrolling all Qdrant payloads during startup, ensuring immediate availability of sparse retrieval capabilities without degraded performance.
 
 **Section sources**
 - [main.py:58-58](file://safe4ai-pilot/app/main.py#L58-L58)
@@ -646,6 +666,8 @@ AI --> Ext
 - [router.py:40-40](file://safe4ai-pilot/app/auth/router.py#L40-L40)
 - [admin_routes.py:64-114](file://safe4ai-pilot/app/api/admin_routes.py#L64-L114)
 - [db_init.py:8-8](file://safe4ai-pilot/app/db/__init__.py#L8-L8)
+- [reranker.py:53-65](file://safe4ai-pilot/app/components/reranker.py#L53-L65)
+- [hybrid_retriever.py:83-111](file://safe4ai-pilot/app/components/hybrid_retriever.py#L83-L111)
 
 ## Troubleshooting Guide
 - Authentication Failures: 401 Not authenticated indicates missing or invalid JWT; verify cookie presence and signature.
@@ -656,6 +678,8 @@ AI --> Ext
 - SSRF Protection: 422 URL validation errors indicate blocked private/reserved addresses; use public endpoints only.
 - Input/Output Filtering: Queries blocked by InputGuard or OutputFilter will return 422 with specific reasons.
 - External Dependencies: Use /health to verify Postgres, Qdrant, and Ollama availability; address timeouts or network misconfigurations.
+- **Updated** Asynchronous Reranking: If reranking appears slow, verify that arerank() is being used instead of rerank() in async contexts to utilize thread pool processing.
+- **Updated** BM25 Index Availability: If sparse retrieval seems degraded immediately after startup, check that the BM25 rebuild task completed successfully and verify Qdrant scroll operations are functioning.
 
 **Section sources**
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
@@ -667,6 +691,10 @@ AI --> Ext
 - [url_validator.py:26-56](file://safe4ai-pilot/app/security/url_validator.py#L26-L56)
 - [input_guard.py:26-48](file://safe4ai-pilot/app/security/input_guard.py#L26-L48)
 - [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
+- [reranker.py:53-65](file://safe4ai-pilot/app/components/reranker.py#L53-L65)
+- [hybrid_retriever.py:83-111](file://safe4ai-pilot/app/components/hybrid_retriever.py#L83-L111)
 
 ## Conclusion
 The backend employs a clean layered architecture with FastAPI as the presentation layer, robust authentication and middleware, and a cohesive business logic layer backed by SQLAlchemy. Enhanced security controls include comprehensive CSRF protection, SSRF prevention, input/output filtering, and content protection. AI orchestration is centralized in a reusable LangGraph pipeline that integrates Qdrant and Ollama with security guards throughout the pipeline. Configuration-driven settings enable flexible deployments, while comprehensive middleware, rate limiting, and health checks ensure reliability and security.
+
+**Updated** The system now features asynchronous reranking capabilities that prevent event loop stalls during CPU-intensive inference operations, and persistent BM25 indexing that ensures immediate availability of sparse retrieval capabilities after startup. These enhancements improve overall system performance and reliability while maintaining the existing security and architectural foundations.

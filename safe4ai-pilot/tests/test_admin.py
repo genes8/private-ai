@@ -912,6 +912,110 @@ class TestSettings:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_provider_change_creates_audit_log(self) -> None:
+        """PATCH /settings with a provider-related key creates a settings_provider_change AuditLog."""
+        from app.db.models import AuditLog as AuditLogModel
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.count.return_value = 0
+        db.get.side_effect = lambda model, pk: admin if model is User else None
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.settings_routes.upsert_app_config"
+        ), patch(
+            "app.api.settings_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ), patch(
+            "app.services.settings_service.fetch_ollama_model_names",
+            return_value={"qwen3.5:9b"},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch(
+                "/settings",
+                json={"providerType": "openai_compatible", "providerApiKey": "sk-test"},
+            )
+
+        assert resp.status_code == 200
+        # db.add must have been called with at least one AuditLog for provider change
+        added_audit_logs = [
+            call.args[0]
+            for call in db.add.call_args_list
+            if isinstance(call.args[0], AuditLogModel)
+        ]
+        assert len(added_audit_logs) == 1
+        assert added_audit_logs[0].action_type == "settings_provider_change"
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_non_provider_change_does_not_create_provider_audit(self) -> None:
+        """PATCH /settings with only a retrieval param must NOT create a provider audit row."""
+        from app.db.models import AuditLog as AuditLogModel
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.count.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.settings_routes.upsert_app_config"
+        ), patch(
+            "app.api.settings_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ), patch(
+            "app.services.settings_service.fetch_ollama_model_names",
+            return_value={"qwen3.5:9b"},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch("/settings", json={"retrievalK": 8})
+
+        assert resp.status_code == 200
+        provider_audit_logs = [
+            call.args[0]
+            for call in db.add.call_args_list
+            if isinstance(call.args[0], AuditLogModel)
+            and getattr(call.args[0], "action_type", "") == "settings_provider_change"
+        ]
+        assert len(provider_audit_logs) == 0
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_provider_audit_rollback_on_build_failure(self) -> None:
+        """When build_runtime_components fails, settings and audit log are both rolled back."""
+        from app.db.models import AuditLog as AuditLogModel
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.get.side_effect = lambda model, pk: admin if model is User else None
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.settings_routes.upsert_app_config"
+        ), patch(
+            "app.api.settings_routes.build_runtime_components",
+            side_effect=RuntimeError("Qdrant not reachable"),
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch(
+                "/settings",
+                json={"providerType": "openai_compatible", "providerApiKey": "sk-test"},
+            )
+
+        assert resp.status_code == 422
+        assert "invalid" in resp.json()["detail"].lower()
+        # db.rollback must have been called; db.commit must NOT have been called
+        db.rollback.assert_called_once()
+        db.commit.assert_not_called()
+        from app.main import app
+        app.dependency_overrides.clear()
+
 
 # ---------------------------------------------------------------------------
 # User management
@@ -1655,5 +1759,149 @@ class TestCorpusStats:
         assert "inProgressCount" in body
         assert body["failedCount"] == 0
         assert body["inProgressCount"] == 0
+        from app.main import app
+        app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Tier / quota enforcement (endpoint-level smoke tests)
+# Unit tests for the helpers themselves live in test_quota_service.py.
+# ---------------------------------------------------------------------------
+
+
+class TestTierEnforcement:
+    def test_create_user_blocked_at_seat_cap(self) -> None:
+        """POST /admin/users returns 422 when SeatLimitExceeded is raised."""
+        from app.services.quota_service import SeatLimitExceeded
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.filter.return_value.first.return_value = None
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.user_routes.load_app_config",
+            return_value={"tier": "evaluation", "max_seats": 2},
+        ), patch(
+            "app.api.user_routes.check_seat_limit",
+            side_effect=SeatLimitExceeded("Seat limit reached (2/2 seats on evaluation tier)"),
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.post(
+                "/admin/users",
+                json={"email": "x@test.com", "password": "Strongpassword123!", "role": "pilot_user"},
+            )
+
+        assert resp.status_code == 422
+        assert "Seat limit" in resp.json()["detail"]
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_create_user_succeeds_below_seat_cap(self) -> None:
+        """POST /admin/users succeeds when seat limit is not reached."""
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.filter.return_value.first.return_value = None
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.user_routes.load_app_config",
+            return_value={"tier": "evaluation", "max_seats": 5},
+        ), patch(
+            "app.api.user_routes.check_seat_limit"
+        ), patch(
+            "app.api.user_routes.check_tier_expiry"
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.post(
+                "/admin/users",
+                json={"email": "y@test.com", "password": "Strongpassword123!", "role": "pilot_user"},
+            )
+
+        assert resp.status_code == 201
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_create_user_blocked_when_tier_expired(self) -> None:
+        """POST /admin/users returns 403 when check_tier_expiry raises TierExpired."""
+        from app.services.quota_service import TierExpired
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.user_routes.load_app_config", return_value={}
+        ), patch(
+            "app.api.user_routes.check_tier_expiry",
+            side_effect=TierExpired("Evaluation period has expired. Contact us to upgrade."),
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.post(
+                "/admin/users",
+                json={"email": "z@test.com", "password": "Strongpassword123!", "role": "pilot_user"},
+            )
+
+        assert resp.status_code == 403
+        assert "expired" in resp.json()["detail"].lower()
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_chat_blocked_when_quota_exceeded(self) -> None:
+        """POST /chat returns 429 when QuotaExceeded is raised before LLM invocation."""
+        from app.services.quota_service import QuotaExceeded
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.chat_routes.load_app_config", return_value={"monthly_query_limit": 5000}
+        ), patch(
+            "app.api.chat_routes.check_tier_expiry"
+        ), patch(
+            "app.api.chat_routes.check_cost_ceiling"
+        ), patch(
+            "app.api.chat_routes.check_query_quota",
+            side_effect=QuotaExceeded("Monthly query limit reached (5000/5000 queries on evaluation tier)"),
+        ) as mock_quota:
+            # LLM graph must NOT be called when quota is exceeded
+            mock_graph = AsyncMock()
+            client = _make_test_client(db, admin)
+            client.app.state.graph = mock_graph
+            resp = client.post(
+                "/chat",
+                json={"question": "What is the policy?"},
+            )
+
+        assert resp.status_code == 429
+        assert "Monthly query limit" in resp.json()["detail"]
+        mock_graph.ainvoke.assert_not_called()
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_chat_stream_blocked_when_quota_exceeded(self) -> None:
+        """POST /chat/stream returns 429 when QuotaExceeded fires before graph is invoked."""
+        from app.services.quota_service import QuotaExceeded
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.chat_routes.load_app_config", return_value={"monthly_query_limit": 5000}
+        ), patch(
+            "app.api.chat_routes.check_tier_expiry"
+        ), patch(
+            "app.api.chat_routes.check_cost_ceiling"
+        ), patch(
+            "app.api.chat_routes.check_query_quota",
+            side_effect=QuotaExceeded("Monthly query limit reached"),
+        ):
+            mock_graph = AsyncMock()
+            client = _make_test_client(db, admin)
+            client.app.state.graph = mock_graph
+            resp = client.post(
+                "/chat/stream",
+                json={"question": "What is the policy?"},
+            )
+
+        assert resp.status_code == 429
+        mock_graph.astream.assert_not_called()
         from app.main import app
         app.dependency_overrides.clear()

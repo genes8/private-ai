@@ -8,12 +8,17 @@
 - [chat_routes.py](file://safe4ai-pilot/app/api/chat_routes.py)
 - [admin_routes.py](file://safe4ai-pilot/app/api/admin_routes.py)
 - [observability_routes.py](file://safe4ai-pilot/app/api/observability_routes.py)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
+- [account_routes.py](file://safe4ai-pilot/app/api/account_routes.py)
 - [models.py](file://safe4ai-pilot/app/models.py)
 - [db/models.py](file://safe4ai-pilot/app/db/models.py)
 - [config.py](file://safe4ai-pilot/app/config.py)
+- [password_policy.py](file://safe4ai-pilot/app/auth/password_policy.py)
 - [frontend/auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
 - [frontend/chat.ts](file://safe4ai-pilot/frontend/src/api/chat.ts)
 - [frontend/client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
+- [frontend/settings.ts](file://safe4ai-pilot/frontend/src/api/settings.ts)
+- [frontend/account.ts](file://safe4ai-pilot/frontend/src/api/account.ts)
 - [cost_tracker.py](file://safe4ai-pilot/observability/cost_tracker.py)
 - [feedback.py](file://safe4ai-pilot/observability/feedback.py)
 - [url_validator.py](file://safe4ai-pilot/app/security/url_validator.py)
@@ -24,14 +29,17 @@
 - [provider_clients.py](file://safe4ai-pilot/app/services/provider_clients.py)
 - [test_security_audit.py](file://safe4ai-pilot/tests/test_security_audit.py)
 - [test_admin.py](file://safe4ai-pilot/tests/test_admin.py)
+- [test_account.py](file://safe4ai-pilot/tests/test_account.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added new security-related endpoints for provider URL validation and connection testing
-- Enhanced administrative endpoints with corpus statistics and provider model listing capabilities
-- Updated authentication and authorization documentation to reflect new security measures
-- Added comprehensive security validation documentation for SSRF protection and input/output filtering
+- Added comprehensive user account settings API endpoints including GET /account/settings for retrieving user account information and POST /account/change-password for password modification
+- Integrated account router into main application with proper dependency injection
+- Updated authentication and authorization documentation to reflect new user-facing functionality
+- Enhanced API reference to include comprehensive user account management functionality alongside existing admin-only settings
+- Added password policy enforcement and SSO compatibility features
+- Separated user account management endpoints from admin settings endpoints with distinct authentication requirements
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -46,7 +54,7 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document provides comprehensive API documentation for the FastAPI backend serving the Safe4AI Pilot application. It covers authentication endpoints, chat endpoints (blocking and streaming), administrative endpoints for document and user management, audit and statistics, observability endpoints for feedback and cost tracking, and newly enhanced security endpoints for provider configuration and validation. It also documents request/response schemas, error handling patterns, status codes, authentication methods, rate limiting, security considerations, and CORS policies. Practical examples and client integration patterns are included for developers building clients against these APIs.
+This document provides comprehensive API documentation for the FastAPI backend serving the Safe4AI Pilot application. It covers authentication endpoints, chat endpoints (blocking and streaming), administrative endpoints for document and user management, audit and statistics, observability endpoints for feedback and cost tracking, security endpoints for provider configuration and validation, and newly added user account management endpoints for profile management and password changes. It also documents request/response schemas, error handling patterns, status codes, authentication methods, rate limiting, security considerations, and CORS policies. Practical examples and client integration patterns are included for developers building clients against these APIs.
 
 ## Project Structure
 The API is organized into routers grouped by functional domains:
@@ -55,6 +63,7 @@ The API is organized into routers grouped by functional domains:
 - Administration: document management, user management, audit logs, stats, human review queue, settings, and corpus statistics
 - Observability: feedback submission and admin feedback listing, plus cost statistics
 - Security: provider URL validation, connection testing, and content filtering
+- User Account Management: profile settings, password changes, and usage statistics
 - Health and security: health check endpoint, CORS, secure headers, and request body size limits
 
 ```mermaid
@@ -71,11 +80,16 @@ H["config.py<br/>Settings"]
 I["security/url_validator.py<br/>SSRF protection"]
 J["security/upload_validator.py<br/>File validation"]
 K["services/provider_clients.py<br/>OpenAI/Ollama clients"]
+L["api/settings_routes.py<br/>/settings (admin-only)"]
+M["api/account_routes.py<br/>/account/* (user-only)"]
+N["auth/password_policy.py<br/>Password validation"]
 end
 A --> B
 A --> C
 A --> D
 A --> E
+A --> L
+A --> M
 B --> F
 C --> F
 D --> F
@@ -85,6 +99,7 @@ D --> J
 D --> K
 A --> G
 A --> H
+M --> N
 ```
 
 **Diagram sources**
@@ -93,12 +108,15 @@ A --> H
 - [chat_routes.py:28-244](file://safe4ai-pilot/app/api/chat_routes.py#L28-L244)
 - [admin_routes.py:39-539](file://safe4ai-pilot/app/api/admin_routes.py#L39-L539)
 - [observability_routes.py:16-56](file://safe4ai-pilot/app/api/observability_routes.py#L16-L56)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
 - [db/models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
 - [url_validator.py:26-56](file://safe4ai-pilot/app/security/url_validator.py#L26-L56)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [provider_clients.py:52-239](file://safe4ai-pilot/app/services/provider_clients.py#L52-L239)
+- [account_routes.py:1-142](file://safe4ai-pilot/app/api/account_routes.py#L1-L142)
+- [password_policy.py:1-18](file://safe4ai-pilot/app/auth/password_policy.py#L1-L18)
 
 **Section sources**
 - [main.py:63-101](file://safe4ai-pilot/app/main.py#L63-L101)
@@ -110,6 +128,7 @@ A --> H
 - Administrative endpoints: document lifecycle, user management, audit logs, stats, human review queue, settings, and corpus statistics
 - Observability endpoints: feedback submission and admin feedback listing, cost statistics
 - Security endpoints: provider URL validation, connection testing, and content filtering
+- User Account Management endpoints: profile settings, password changes, and usage statistics
 - Health and security: health check, CORS, secure headers, request body size limits
 
 **Section sources**
@@ -120,7 +139,7 @@ A --> H
 - [main.py:118-147](file://safe4ai-pilot/app/main.py#L118-L147)
 
 ## Architecture Overview
-The FastAPI application initializes middleware, builds the AI graph once during startup, and exposes routers for auth, chat, admin, and observability. Authentication relies on cookies carrying signed JWTs. Rate limiting is enforced via SlowAPI. CORS and secure headers are configured globally. The system now includes comprehensive security measures including SSRF protection, input validation, output filtering, and content filtering for document chunks.
+The FastAPI application initializes middleware, builds the AI graph once during startup, and exposes routers for auth, chat, admin, observability, settings, and account management. Authentication relies on cookies carrying signed JWTs. Rate limiting is enforced via SlowAPI. CORS and secure headers are configured globally. The system now includes comprehensive security measures including SSRF protection, input validation, output filtering, and content filtering for document chunks. User account management operates independently from admin settings with separate authentication requirements.
 
 ```mermaid
 sequenceDiagram
@@ -132,6 +151,7 @@ participant Chat as "Chat Router (/chat)"
 participant Security as "Security Layer"
 participant Provider as "Provider Client"
 participant Admin as "Admin Router (/admin)"
+participant Account as "Account Router (/account)"
 Client->>Auth : POST /auth/login {email,password}
 Auth->>DB : Lookup user
 Auth->>Auth : Verify password, enforce lockout
@@ -147,6 +167,13 @@ Chat-->>Client : JSON {answer,citations,session_id,trace_id}
 Client->>Admin : GET /admin/corpus-stats (with cookie)
 Admin->>DB : Count documents and chunks
 Admin-->>Client : {docCount, chunkCount}
+Client->>Account : GET /account/settings (with cookie)
+Account->>DB : Query user profile and usage stats
+Account-->>Client : {profile, security, usage, knowledgeBase}
+Client->>Account : POST /account/change-password (with cookie)
+Account->>DB : Verify current password, validate new password
+Account->>DB : Update password hash, set token_valid_after
+Account-->>Client : {message : "Password changed..."}
 Client->>Admin : POST /settings/provider/test (with cookie)
 Admin->>Security : Validate provider URL
 Security->>Security : SSRF protection check
@@ -161,6 +188,7 @@ Admin-->>Client : {"status" : "ok"} or error
 - [admin_routes.py:117-175](file://safe4ai-pilot/app/api/admin_routes.py#L117-L175)
 - [url_validator.py:26-56](file://safe4ai-pilot/app/security/url_validator.py#L26-L56)
 - [provider_clients.py:52-239](file://safe4ai-pilot/app/services/provider_clients.py#L52-L239)
+- [account_routes.py:33-141](file://safe4ai-pilot/app/api/account_routes.py#L33-L141)
 
 ## Detailed Component Analysis
 
@@ -244,6 +272,45 @@ Client integration patterns:
 - [frontend/client.ts:3-15](file://safe4ai-pilot/frontend/src/api/client.ts#L3-L15)
 - [input_guard.py:26-48](file://safe4ai-pilot/app/security/input_guard.py#L26-L48)
 - [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
+
+### User Account Management Endpoints
+- Base path: /account
+- Authentication: requires access_token cookie (get_current_user, not require_role)
+- Rate limiting: per endpoint (varies by operation)
+- Purpose: Provide user-facing functionality for profile management, password changes, and usage statistics
+
+Endpoints:
+- GET /account/settings
+  - Response: Comprehensive account settings including profile, security, usage, and knowledge base statistics
+  - Status codes: 200, 401 Unauthorized (not authenticated)
+  - Notes: Returns only current-user data, filters usage statistics by current user ID, excludes sensitive admin-only information
+
+- POST /account/change-password
+  - Request: { currentPassword: string, newPassword: string }
+  - Response: { message: "Password changed. Please sign in again with your new password." }
+  - Status codes: 200, 401 Unauthorized (incorrect current password), 422 Unprocessable Entity (weak/new password validation), 403 Forbidden (SSO-only mode)
+  - Notes: Validates current password, enforces password strength requirements, updates password hash, sets token_valid_after for immediate logout
+
+Request/response schemas:
+- ChangePasswordRequest: { currentPassword: string, newPassword: string }
+- AccountSettingsResponse: {
+  - profile: { id: string, email: string, role: string, isActive: boolean, createdAt: string|null }
+  - security: { sessionHours: number, ssoOnly: boolean, passwordChangeAllowed: boolean }
+  - usage: { questions7d: number, questions30d: number, lastActivityAt: string|null, feedbackPositive: number, feedbackNegative: number }
+  - knowledgeBase: { docCount: number, chunkCount: number, failedCount: number, inProgressCount: number }
+}
+
+Security and validation:
+- Password strength: minimum 12 characters with uppercase, lowercase, digit, and special character
+- SSO compatibility: password changes disabled when SSO-only mode is enabled
+- Token invalidation: updates token_valid_after to force immediate re-authentication
+
+**Updated** Added comprehensive user account management functionality with independent authentication from admin settings
+
+**Section sources**
+- [account_routes.py:33-141](file://safe4ai-pilot/app/api/account_routes.py#L33-L141)
+- [password_policy.py:6-17](file://safe4ai-pilot/app/auth/password_policy.py#L6-L17)
+- [test_account.py:87-255](file://safe4ai-pilot/tests/test_account.py#L87-L255)
 
 ### Administrative Endpoints
 - Base path: /admin
@@ -392,6 +459,8 @@ Key dependencies and relationships:
 - admin routes depend on middleware for role enforcement, DB models for CRUD operations, and security validators for input validation
 - observability routes depend on CostTracker and FeedbackStore for analytics and feedback persistence
 - security modules provide URL validation, input guarding, output filtering, and content filtering
+- account routes depend on middleware for user authentication and DB for profile/usage queries
+- password policy module provides password validation logic
 - All endpoints rely on SQLAlchemy sessions and Pydantic models for request/response validation
 
 ```mermaid
@@ -400,14 +469,18 @@ M["main.py"] --> AR["auth/router.py"]
 M --> CR["api/chat_routes.py"]
 M --> AdR["api/admin_routes.py"]
 M --> OR["api/observability_routes.py"]
+M --> SR["api/settings_routes.py"]
+M --> AC["api/account_routes.py"]
 AR --> MW["auth/middleware.py"]
 CR --> MW
 AdR --> MW
 OR --> MW
+AC --> MW
 AR --> DBM["db/models.py"]
 CR --> DBM
 AdR --> DBM
 OR --> DBM
+AC --> DBM
 AdR --> UV["security/url_validator.py"]
 AdR --> UPL["security/upload_validator.py"]
 CR --> IG["security/input_guard.py"]
@@ -415,6 +488,7 @@ CR --> OF["security/output_filter.py"]
 CR --> CF["security/content_filter.py"]
 AdR --> PC["services/provider_clients.py"]
 M --> CFG["config.py"]
+AC --> PP["auth/password_policy.py"]
 ```
 
 **Diagram sources**
@@ -423,6 +497,7 @@ M --> CFG["config.py"]
 - [chat_routes.py:28-244](file://safe4ai-pilot/app/api/chat_routes.py#L28-L244)
 - [admin_routes.py:39-539](file://safe4ai-pilot/app/api/admin_routes.py#L39-L539)
 - [observability_routes.py:16-56](file://safe4ai-pilot/app/api/observability_routes.py#L16-L56)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
 - [db/models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
@@ -432,6 +507,8 @@ M --> CFG["config.py"]
 - [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
 - [content_filter.py:24-63](file://safe4ai-pilot/app/security/content_filter.py#L24-L63)
 - [provider_clients.py:52-239](file://safe4ai-pilot/app/services/provider_clients.py#L52-L239)
+- [account_routes.py:1-142](file://safe4ai-pilot/app/api/account_routes.py#L1-L142)
+- [password_policy.py:1-18](file://safe4ai-pilot/app/auth/password_policy.py#L1-L18)
 
 **Section sources**
 - [main.py:63-101](file://safe4ai-pilot/app/main.py#L63-L101)
@@ -439,6 +516,7 @@ M --> CFG["config.py"]
 - [chat_routes.py:28-244](file://safe4ai-pilot/app/api/chat_routes.py#L28-L244)
 - [admin_routes.py:39-539](file://safe4ai-pilot/app/api/admin_routes.py#L39-L539)
 - [observability_routes.py:16-56](file://safe4ai-pilot/app/api/observability_routes.py#L16-L56)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
 - [middleware.py:51-82](file://safe4ai-pilot/app/auth/middleware.py#L51-L82)
 - [db/models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
@@ -451,6 +529,7 @@ M --> CFG["config.py"]
 - Pre-warming: Ollama model is warmed up on startup to reduce first-query latency
 - Caching: settings live metadata cached for 15 seconds to reduce provider API calls
 - Model listing: provider models fetched once and cached to avoid repeated network calls
+- Account settings caching: 30-second cache for user profile and usage statistics
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -468,6 +547,10 @@ Common issues and resolutions:
 - Provider configuration:
   - 422 Unprocessable Entity: invalid provider URL or API key; check SSRF protection and credentials
   - 503 Service Unavailable: provider connection failed; verify network connectivity and endpoint accessibility
+- Account management:
+  - 403 Forbidden: password changes disabled when SSO-only mode is enabled
+  - 422 Unprocessable Entity: new password fails strength validation; minimum 12 characters with mixed case, digit, and special character
+  - 401 Unauthorized: incorrect current password; verify credential accuracy
 - Rate limiting:
   - Exceeding limits results in 429; reduce request frequency or adjust limits
 - CORS and cookies:
@@ -477,10 +560,11 @@ Common issues and resolutions:
 - [auth.py:39-124](file://safe4ai-pilot/app/auth/router.py#L39-L124)
 - [chat_routes.py:109-244](file://safe4ai-pilot/app/api/chat_routes.py#L109-L244)
 - [admin_routes.py:63-539](file://safe4ai-pilot/app/api/admin_routes.py#L63-L539)
+- [test_account.py:153-255](file://safe4ai-pilot/tests/test_account.py#L153-L255)
 - [main.py:69-95](file://safe4ai-pilot/app/main.py#L69-L95)
 
 ## Conclusion
-The API provides a comprehensive set of endpoints for authentication, chat, administration, observability, and security, with robust security measures including SSRF protection, input validation, output filtering, and content filtering. The enhanced administrative functionality now includes provider model listing capabilities and corpus statistics endpoints. Clients should integrate with the provided schemas and handle SSE events for streaming chat. Administrators can manage documents, users, audit logs, and provider configurations with built-in security validations. The security endpoints ensure safe provider integration while maintaining system integrity.
+The API provides a comprehensive set of endpoints for authentication, chat, administration, observability, security, and user account management, with robust security measures including SSRF protection, input validation, output filtering, and content filtering. The enhanced functionality now includes independent user account management endpoints (/account/settings and /account/change-password) that operate separately from admin-only settings. Users can manage their profiles, change passwords with strong validation, and view their usage statistics, while administrators retain full control over system configuration and document management. Clients should integrate with the provided schemas and handle SSE events for streaming chat. The security endpoints ensure safe provider integration while maintaining system integrity across both user-facing and administrative interfaces.
 
 ## Appendices
 
@@ -506,6 +590,15 @@ The API provides a comprehensive set of endpoints for authentication, chat, admi
   - POST /chat/stream
     - Response: SSE events (step, token, cite, done)
     - Status codes: 200, 401, 422, 503, 500
+
+- Account Management
+  - GET /account/settings
+    - Response: { profile, security, usage, knowledgeBase }
+    - Status codes: 200, 401
+  - POST /account/change-password
+    - Request: { currentPassword, newPassword }
+    - Response: { message: "Password changed. Please sign in again with your new password." }
+    - Status codes: 200, 401, 422, 403
 
 - Admin
   - POST /admin/documents/upload
@@ -603,26 +696,33 @@ The API provides a comprehensive set of endpoints for authentication, chat, admi
 - [input_guard.py:26-48](file://safe4ai-pilot/app/security/input_guard.py#L26-L48)
 - [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
 - [content_filter.py:24-63](file://safe4ai-pilot/app/security/content_filter.py#L24-L63)
+- [test_account.py:87-255](file://safe4ai-pilot/tests/test_account.py#L87-L255)
 
 ### Client Implementation Guidelines
 - Use the provided frontend API modules as references:
   - Authentication: [frontend/auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
   - Chat streaming: [frontend/chat.ts](file://safe4ai-pilot/frontend/src/api/chat.ts)
   - Generic client: [frontend/client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
+  - Account management: [frontend/settings.ts](file://safe4ai-pilot/frontend/src/api/settings.ts)
+  - Account endpoints: [frontend/account.ts](file://safe4ai-pilot/frontend/src/api/account.ts)
 - Ensure credentials: include and Content-Type: application/json for all authenticated requests
 - For streaming, parse SSE events and handle errors gracefully
 - Respect rate limits and implement retries with exponential backoff
 - Implement security validation for provider configurations before deployment
 - Handle corpus statistics for UI optimization and user experience
+- For account management, implement proper password validation and error handling
 
 **Section sources**
 - [frontend/auth.ts:10-16](file://safe4ai-pilot/frontend/src/api/auth.ts#L10-L16)
 - [frontend/chat.ts:21-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L76)
 - [frontend/client.ts:3-15](file://safe4ai-pilot/frontend/src/api/client.ts#L3-L15)
+- [frontend/settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
+- [frontend/account.ts:36-43](file://safe4ai-pilot/frontend/src/api/account.ts#L36-L43)
+- [test_account.py:87-255](file://safe4ai-pilot/tests/test_account.py#L87-L255)
 
 ### Security and CORS Policies
 - Authentication: JWT in HTTP-only cookie with SameSite strict and secure flag based on settings.enforce_https
-- Authorization: Role-based access control enforced via require_role("admin")
+- Authorization: Role-based access control enforced via require_role("admin") for admin endpoints, user authentication (get_current_user) for account endpoints
 - CORS: Origins from settings.allowed_origins_list, credentials allowed, limited methods and headers
 - Secure headers: applied to all responses
 - Body size limits: enforced via middleware using settings.max_upload_size_mb
@@ -630,6 +730,8 @@ The API provides a comprehensive set of endpoints for authentication, chat, admi
 - Input validation: comprehensive sanitization and injection pattern detection
 - Output filtering: PII detection and content quality assurance
 - Content filtering: automatic removal of PII-containing document chunks
+- Password security: minimum 12 characters with mixed case, digit, and special character requirements
+- SSO compatibility: password changes disabled when SSO-only mode is enabled
 
 **Section sources**
 - [auth.py:96-103](file://safe4ai-pilot/app/auth/router.py#L96-L103)
@@ -642,3 +744,4 @@ The API provides a comprehensive set of endpoints for authentication, chat, admi
 - [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
 - [content_filter.py:24-63](file://safe4ai-pilot/app/security/content_filter.py#L24-L63)
 - [test_security_audit.py:75-200](file://safe4ai-pilot/tests/test_security_audit.py#L75-L200)
+- [test_account.py:153-255](file://safe4ai-pilot/tests/test_account.py#L153-L255)

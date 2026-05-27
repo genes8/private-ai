@@ -9,6 +9,7 @@
 - [FeedbackPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/FeedbackPage.tsx)
 - [UsersPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx)
 - [SettingsPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx)
+- [App.tsx](file://safe4ai-pilot/frontend/src/App.tsx)
 - [AdminAudit.tsx](file://design/components/AdminAudit.tsx)
 - [AdminDocs.tsx](file://design/components/AdminDocs.tsx)
 - [AdminFeedback.tsx](file://design/components/AdminFeedback.tsx)
@@ -34,11 +35,10 @@
 
 ## Update Summary
 **Changes Made**
-- Removed misleading 'Indexing healthy' card from admin sidebar as it was determined to be misleading
-- Updated admin layout to reflect current UI structure without hardcoded document sources section
-- Maintained backend informational source for corpus health monitoring
-- Enhanced navigation patterns with improved feedback badge display
-- Refined real-time data visualization through Sparkline charts
+- Added documentation for the new 'Back to chat' navigation option in the admin sidebar
+- Enhanced AdminLayout documentation to include seamless navigation between admin and chat interfaces
+- Updated navigation patterns to reflect the new back-to-chat functionality
+- Maintained existing admin functionality while documenting the improved user experience
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -56,7 +56,7 @@
 ## Introduction
 This document describes the enhanced admin dashboard system for the private·ai platform. The system now includes comprehensive administrative interfaces covering monitoring, document management, activity auditing, feedback administration, user management, and system configuration. The dashboard features six core pages: OverviewPage for system monitoring, DocumentsPage for document management, ActivityPage for audit trails, FeedbackPage for user feedback analysis, UsersPage for team administration, and SettingsPage for system configuration. The system leverages a consistent admin layout with navigation patterns, real-time data visualization through Sparkline charts, and robust API integration for all administrative functions.
 
-**Updated** Removed misleading 'Indexing healthy' card from admin sidebar and refined admin layout to reflect current UI structure while maintaining backend corpus health monitoring capabilities.
+**Updated** Added the new 'Back to chat' navigation option that creates seamless navigation between the admin interface and the main chat interface, improving user workflow efficiency and reducing context switching overhead.
 
 ## Project Structure
 The admin dashboard has been significantly enhanced with new components and pages. The system now includes both frontend-based admin pages and design system components that provide comprehensive administrative capabilities.
@@ -71,6 +71,9 @@ AP["ActivityPage.tsx"]
 FP["FeedbackPage.tsx"]
 UP["UsersPage.tsx"]
 SP["SettingsPage.tsx"]
+end
+subgraph "Application Routing"
+APP["App.tsx"]
 end
 subgraph "Design System Components"
 DA["AdminAudit.tsx"]
@@ -102,6 +105,7 @@ AL --> FP
 AL --> AP
 AL --> DP
 AL --> OP
+APP --> AL
 SP --> SET
 UP --> CLI
 FP --> FB
@@ -113,6 +117,7 @@ OP --> ST
 **Diagram sources**
 - [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
 - [SettingsPage.tsx:186-184](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L186-L184)
+- [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 - [AdminAudit.tsx:5-278](file://design/components/AdminAudit.tsx#L5-L278)
 - [AdminDocs.tsx:5-238](file://design/components/AdminDocs.tsx#L5-L238)
 - [AdminFeedback.tsx:5-215](file://design/components/AdminFeedback.tsx#L5-L215)
@@ -122,11 +127,12 @@ OP --> ST
 **Section sources**
 - [AdminLayout.tsx:10-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L10-L19)
 - [SettingsPage.tsx:176-184](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L176-L184)
+- [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 
 ## Core Components
-The admin dashboard now encompasses six comprehensive pages with distinct responsibilities:
+The admin dashboard now encompasses six comprehensive pages with distinct responsibilities, enhanced by seamless navigation between admin and chat interfaces:
 
-**AdminLayout**: Enhanced with Settings navigation and improved feedback badge display
+**AdminLayout**: Enhanced with Settings navigation, improved feedback badge display, and the new 'Back to chat' navigation option
 **OverviewPage**: System monitoring and analytics with real-time metrics
 **DocumentsPage**: Document lifecycle management with upload, indexing, and inspection
 **ActivityPage**: Comprehensive audit trail with filtering and export capabilities
@@ -147,46 +153,44 @@ The admin dashboard now encompasses six comprehensive pages with distinct respon
 - FeedbackListItem: Feedback item presentation
 - ActivityEvent: Audit event display
 
+**Enhanced Navigation Features**:
+- **Back to chat**: Dedicated navigation option in admin sidebar for seamless interface switching
+- **Improved feedback integration**: Dynamic negative feedback badge display
+- **Active route highlighting**: Visual indicators for current navigation state
+- **Enhanced user session management**: Integrated logout functionality
+
 **Section sources**
 - [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
 - [SettingsPage.tsx:176-378](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L176-L378)
 - [AdminAudit.tsx:52-278](file://design/components/AdminAudit.tsx#L52-L278)
 - [AdminDocs.tsx:27-238](file://design/components/AdminDocs.tsx#L27-238)
-- [AdminFeedback.tsx:29-215](file://design/components/AdminFeedback.tsx#L29-L215)
+- [AdminFeedback.tsx:29-215](file://design/components/AdminFeedback.tsx#L29-215)
 - [AdminStats.tsx:44-258](file://design/components/AdminStats.tsx#L44-L258)
 
 ## Architecture Overview
-The enhanced admin architecture follows a modular pattern with clear separation of concerns across six specialized pages, each leveraging shared components and APIs:
+The enhanced admin architecture follows a modular pattern with clear separation of concerns across six specialized pages, each leveraging shared components and APIs. The new 'Back to chat' navigation creates seamless integration between admin and chat interfaces.
 
 ```mermaid
 sequenceDiagram
 participant Admin as "Admin User"
 participant Layout as "AdminLayout"
-participant Page as "Admin Page"
-participant Hook as "React Query Hook"
-participant API as "Admin API"
-participant Backend as "Admin Routes"
-Admin->>Layout : Navigate to /admin/*
-Layout->>Layout : Update active route
-Layout->>Page : Render selected page
-Page->>Hook : Execute data query
-Hook->>API : apiFetch with authentication
-API->>Backend : HTTP request with credentials
-Backend-->>API : JSON response
-API-->>Hook : Processed data
-Hook-->>Page : {data, isLoading, mutate}
-Page-->>Admin : Render with updates
+participant Chat as "Chat Interface"
+participant Router as "React Router"
+Admin->>Layout : Click "Back to chat"
+Layout->>Router : Navigate to "/chat"
+Router->>Chat : Render ChatPage
+Chat-->>Admin : Display chat interface
+Note over Admin,Chat : Seamless navigation between admin and chat
 ```
 
 **Diagram sources**
-- [AdminLayout.tsx:25-36](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L25-L36)
-- [SettingsPage.tsx:189-193](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L189-L193)
-- [UsersPage.tsx:277-299](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx#L277-L299)
+- [AdminLayout.tsx:81-89](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L81-L89)
+- [App.tsx:41-48](file://safe4ai-pilot/frontend/src/App.tsx#L41-L48)
 
 ## Detailed Component Analysis
 
-### Enhanced AdminLayout
-The AdminLayout now includes comprehensive navigation for all six admin pages with improved feedback integration and active route detection.
+### Enhanced AdminLayout with Back-to-Chat Navigation
+The AdminLayout now includes comprehensive navigation for all six admin pages with improved feedback integration, active route detection, and the new 'Back to chat' navigation option.
 
 **Navigation Structure**:
 - Overview: System monitoring and analytics
@@ -195,12 +199,15 @@ The AdminLayout now includes comprehensive navigation for all six admin pages wi
 - Feedback: User feedback analysis
 - Users: Team management and administration
 - Settings: System configuration and controls
+- **Back to chat**: Seamless navigation back to main chat interface
 
 **Enhanced Features**:
 - Dynamic feedback badge display showing negative feedback count
 - Active route highlighting with visual indicators
 - Improved index health monitoring
 - Enhanced user session management
+- **New**: Dedicated 'Back to chat' navigation option with arrow icon
+- **New**: Consistent navigation pattern across admin and chat interfaces
 
 ```mermaid
 flowchart TD
@@ -209,16 +216,50 @@ GetRoute --> FindNav["Match against NAV array"]
 FindNav --> SetActive["Set active navigation item"]
 SetActive --> RenderNav["Render 6-item navigation"]
 RenderNav --> FeedbackBadge["Display negative feedback count"]
-FeedbackBadge --> RenderContent["Render page content"]
-RenderContent --> End(["Complete"])
+FeedbackBadge --> BackToChat["Render 'Back to chat' option"]
+BackToChat --> ChatNav["Navigate to '/chat'"]
+ChatNav --> End(["Complete"])
 ```
 
 **Diagram sources**
 - [AdminLayout.tsx:36-72](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L36-L72)
+- [AdminLayout.tsx:81-89](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L81-L89)
 
 **Section sources**
 - [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
 - [AdminLayout.tsx:25-36](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L25-L36)
+
+### Application Routing Integration
+The application routing system provides seamless navigation between admin and chat interfaces through the RequireAdmin wrapper and dedicated routes.
+
+**Routing Structure**:
+- `/chat`: Main chat interface accessible to authenticated users
+- `/admin`: Admin interface restricted to admin users
+- `/admin/*`: All admin sub-pages with automatic redirection to overview
+
+**Enhanced Features**:
+- **RequireAdmin wrapper**: Redirects non-admin users to chat interface
+- **Automatic admin redirection**: Redirects admin users to `/admin/overview`
+- **Consistent navigation patterns**: Both admin and chat interfaces use similar navigation approaches
+
+```mermaid
+flowchart TD
+User["User Access"] --> CheckAuth["Check Authentication"]
+CheckAuth --> IsAdmin{"Is Admin?"}
+IsAdmin --> |Yes| AdminRoute["/admin/*"]
+IsAdmin --> |No| ChatRoute["/chat"]
+AdminRoute --> AutoRedirect["Auto redirect to /admin/overview"]
+ChatRoute --> ChatInterface["Render Chat Interface"]
+AutoRedirect --> OverviewPage["Render OverviewPage"]
+```
+
+**Diagram sources**
+- [App.tsx:29-34](file://safe4ai-pilot/frontend/src/App.tsx#L29-L34)
+- [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
+
+**Section sources**
+- [App.tsx:29-34](file://safe4ai-pilot/frontend/src/App.tsx#L29-L34)
+- [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 
 ### SettingsPage - Redesigned Configuration Management
 The SettingsPage provides complete system configuration with redesigned mode selector cards and context-specific model management.
@@ -616,16 +657,18 @@ HealthCard --> HealthStatus["Indexing Healthy"]
 - [AdminShell.tsx:1-119](file://design/components/AdminShell.tsx#L1-L119)
 
 ## Dependency Analysis
-The enhanced admin system maintains clean dependency relationships with additional components and APIs supporting the expanded functionality.
+The enhanced admin system maintains clean dependency relationships with additional components and APIs supporting the expanded functionality, including the new navigation integration.
 
 ```mermaid
 graph LR
-AL["AdminLayout.tsx"] --> SP["SettingsPage.tsx"]
+AL["AdminLayout.tsx"] --> APP["App.tsx"]
+AL --> SP["SettingsPage.tsx"]
 AL --> UP["UsersPage.tsx"]
 AL --> FP["FeedbackPage.tsx"]
 AL --> AP["ActivityPage.tsx"]
 AL --> DP["DocumentsPage.tsx"]
 AL --> OP["OverviewPage.tsx"]
+APP --> AL
 SP --> SET["settings.ts"]
 UP --> CLI["client.ts"]
 FP --> FB["feedback.ts"]
@@ -652,16 +695,18 @@ AR --> OP
 - [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
 - [SettingsPage.tsx:16-17](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L16-L17)
 - [UsersPage.tsx:14-17](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx#L14-L17)
+- [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 - [admin_routes.py:56-56](file://safe4ai-pilot/app/api/admin_routes.py#L56-L56)
 
 **Section sources**
 - [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
 - [SettingsPage.tsx:16-17](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L16-L17)
 - [UsersPage.tsx:14-17](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx#L14-L17)
+- [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 - [admin_routes.py:56-56](file://safe4ai-pilot/app/api/admin_routes.py#L56-L56)
 
 ## Performance Considerations
-The enhanced admin system implements optimized data fetching strategies and efficient rendering patterns:
+The enhanced admin system implements optimized data fetching strategies and efficient rendering patterns, including the new navigation features.
 
 **Optimized Refresh Patterns**:
 - SettingsPage: Configuration changes propagate within 30 seconds
@@ -672,6 +717,7 @@ The enhanced admin system implements optimized data fetching strategies and effi
 - OverviewPage: System metrics refresh every 60 seconds
 - **New**: Mode selector cards with instant visual feedback
 - **New**: Context-specific model dropdowns with cached model lists
+- **New**: Back-to-chat navigation with instant routing
 
 **Efficient Rendering**:
 - Virtualized scrolling for large datasets
@@ -681,6 +727,7 @@ The enhanced admin system implements optimized data fetching strategies and effi
 - Efficient state management with React Query
 - **New**: Instant mode card selection without form submission
 - **New**: Context-aware model dropdown rendering
+- **New**: Seamless navigation without page reloads
 
 **Network Optimization**:
 - Shared API client with authentication
@@ -689,9 +736,10 @@ The enhanced admin system implements optimized data fetching strategies and effi
 - Conditional revalidation based on user actions
 - **New**: Provider connectivity testing with timeout handling
 - **New**: Custom model validation with debounce
+- **New**: Client-side navigation optimization
 
 ## Troubleshooting Guide
-Enhanced troubleshooting procedures for the expanded admin functionality:
+Enhanced troubleshooting procedures for the expanded admin functionality, including navigation-related issues.
 
 **Settings Management Issues**:
 - Configuration changes not applying: Verify settings API connectivity and authentication
@@ -699,6 +747,12 @@ Enhanced troubleshooting procedures for the expanded admin functionality:
 - Source connection issues: Validate S3/GDrive credentials and permissions
 - **New**: Mode selector card interaction failures: Check browser compatibility and JavaScript
 - **New**: Context-specific model dropdown issues: Verify provider connectivity and model availability
+
+**Navigation Issues**:
+- **Back to chat not working**: Verify React Router configuration and navigation links
+- **Admin navigation failures**: Check RequireAdmin wrapper and authentication state
+- **Route redirection problems**: Validate App.tsx routing configuration
+- **Navigation state issues**: Ensure proper useLocation hook usage
 
 **Provider Configuration Problems**:
 - **API Key Validation Errors**: Verify API key format and provider type compatibility
@@ -725,16 +779,19 @@ Enhanced troubleshooting procedures for the expanded admin functionality:
 **Section sources**
 - [SettingsPage.tsx:360-366](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L360-L366)
 - [UsersPage.tsx:430-436](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx#L430-L436)
+- [AdminLayout.tsx:81-89](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L81-L89)
+- [App.tsx:29-34](file://safe4ai-pilot/frontend/src/App.tsx#L29-L34)
 - [admin_routes.py:1074-1080](file://safe4ai-pilot/app/api/admin_routes.py#L1074-L1080)
 
 ## Security Considerations
-The enhanced admin system implements comprehensive security measures across all administrative functions:
+The enhanced admin system implements comprehensive security measures across all administrative functions, including navigation security.
 
 **Access Control**:
 - Role-based permissions (admin, pilot_user)
 - Session management with configurable expiration
 - Two-factor authentication support
 - IP whitelisting and device trust
+- **New**: Navigation security with RequireAdmin wrapper preventing unauthorized access
 
 **Data Protection**:
 - Audit logging for all administrative actions
@@ -743,6 +800,7 @@ The enhanced admin system implements comprehensive security measures across all 
 - Secure password generation and transmission
 - **New**: API key masking and secure handling in UI
 - **New**: Provider configuration validation without exposing secrets
+- **New**: Secure navigation between admin and chat interfaces
 
 **API Security**:
 - JWT token authentication with refresh cycles
@@ -751,6 +809,7 @@ The enhanced admin system implements comprehensive security measures across all 
 - Input validation and sanitization
 - **New**: Provider API key validation and secure transmission
 - **New**: Custom model validation and sanitization
+- **New**: Navigation endpoint security validation
 
 **Compliance**:
 - Audit retention policies (30-365 days configurable)
@@ -764,15 +823,22 @@ The enhanced admin system implements comprehensive security measures across all 
 - **New**: Provider connectivity testing with controlled requests
 - **New**: Configuration change audit logging
 - **New**: Custom model identifier validation
+- **New**: Navigation security enforcement
 
 ## Practical Extensions
-The enhanced admin system provides numerous opportunities for customization and extension:
+The enhanced admin system provides numerous opportunities for customization and extension, including navigation enhancements.
 
 **Adding New Administrative Pages**:
 - Create new page component following AdminLayout pattern
 - Implement dedicated API endpoints for data management
 - Add navigation items to AdminLayout NAV array
 - Integrate with existing authentication and authorization
+
+**Enhancing Navigation Features**:
+- **New**: Add additional navigation shortcuts between admin and chat
+- **New**: Implement breadcrumb navigation for complex admin workflows
+- **New**: Add keyboard shortcuts for quick navigation
+- **New**: Create navigation history and favorites functionality
 
 **Enhancing Configuration Management**:
 - Add new configuration categories to SettingsPage
@@ -793,6 +859,7 @@ The enhanced admin system provides numerous opportunities for customization and 
 - Add bulk operations for user management
 - Create user onboarding workflows
 - Add team collaboration features
+- **New**: Enhance navigation UX with progress indicators and tooltips
 
 **Enhancing Provider Management**:
 - **New**: Add support for additional provider types (Azure, Anthropic, etc.)
@@ -804,4 +871,4 @@ The enhanced admin system provides numerous opportunities for customization and 
 ## Conclusion
 The enhanced admin dashboard provides comprehensive administrative capabilities through six specialized pages, each designed for specific management tasks. The system combines modern React patterns with robust backend integration, offering real-time monitoring, detailed analytics, and complete configuration management. With enhanced security measures, efficient data management, and extensible architecture, the admin system supports both current operational needs and future growth requirements. The modular design ensures maintainability while the comprehensive feature set addresses all aspects of system administration and monitoring.
 
-**Updated** The removal of the misleading 'Indexing healthy' card from the admin sidebar improves the accuracy of system monitoring while maintaining backend corpus health monitoring capabilities. The enhanced admin layout with improved navigation patterns and real-time data visualization provides administrators with reliable and actionable insights into system performance and document indexing status.
+**Updated** The addition of the 'Back to chat' navigation option creates seamless navigation between the admin interface and the main chat interface, improving user workflow efficiency and reducing context switching overhead. This enhancement maintains the accuracy of system monitoring while providing administrators with convenient access to both administrative and chat functionalities. The enhanced admin layout with improved navigation patterns and real-time data visualization provides administrators with reliable and actionable insights into system performance and document indexing status.

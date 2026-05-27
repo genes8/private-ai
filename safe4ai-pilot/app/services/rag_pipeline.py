@@ -16,7 +16,7 @@ from app.agents.llm_caller import call_llm
 from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
 from app.db.models import Document, DocumentChunk, IngestionStatus
-from app.models import Citation, RankedChunk
+from app.models import NO_ANSWER, Citation, RankedChunk
 from app.security.content_filter import ContentFilter
 from app.services import document_parser
 from app.services.provider_clients import ChatClient, EmbeddingClient, VisionClient
@@ -27,7 +27,7 @@ _CHUNK_SIZE = 800
 _CHUNK_OVERLAP = 150
 _EMBED_BATCH = 100
 _MIN_RERANK_SCORE = 0.45
-_NO_ANSWER = "I don't have enough information in the provided documents to answer this question."
+_NO_ANSWER = NO_ANSWER  # module alias — keeps internal references unchanged
 
 
 class RagPipeline:
@@ -247,67 +247,6 @@ class RagPipeline:
                         fallback_body: dict[str, Any] = fallback_resp.json()
                         results.append(fallback_body["embedding"])
         return results
-
-    async def _ocr_page(self, image_path: str) -> tuple[str, str]:
-        """Returns (text, confidence) where confidence is 'high'|'medium'|'low'."""
-        with open(image_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-
-        extract_prompt = (
-            "Extract all text from this document page exactly as it appears. "
-            "Preserve structure, headers, tables, and lists. "
-            "Return only the extracted text."
-        )
-        quality_prompt = (
-            "Rate your confidence in the text extraction: high/medium/low. "
-            'Return JSON {"confidence": "...", "reason": "..."}.'
-        )
-
-        if self._vision_client is not None and hasattr(self._vision_client, "describe_image"):
-            text = await self._vision_client.describe_image(extract_prompt, b64)  # type: ignore[union-attr]
-            quality_raw = await self._vision_client.describe_image(quality_prompt, b64)  # type: ignore[union-attr]
-            try:
-                quality_data: dict[str, Any] = json.loads(quality_raw)
-                confidence: str = quality_data.get("confidence", "low")
-            except (json.JSONDecodeError, AttributeError):
-                confidence = "low"
-            return text, confidence
-
-        if not self._vision_model:
-            raise ValueError("vision_model must be set when vision_client is not provided")
-        async with httpx.AsyncClient() as client:
-            extract_resp = await client.post(
-                f"{self._ollama_url}/api/generate",
-                json={
-                    "model": self._vision_model,
-                    "prompt": extract_prompt,
-                    "images": [b64],
-                    "stream": False,
-                },
-                timeout=120.0,
-            )
-            extract_resp.raise_for_status()
-            text = extract_resp.json().get("response", "")
-
-            quality_resp = await client.post(
-                f"{self._ollama_url}/api/generate",
-                json={
-                    "model": self._vision_model,
-                    "prompt": quality_prompt,
-                    "images": [b64],
-                    "stream": False,
-                },
-                timeout=60.0,
-            )
-            quality_resp.raise_for_status()
-            quality_raw = quality_resp.json().get("response", "{}")
-            try:
-                quality_data = json.loads(quality_raw)
-                confidence = quality_data.get("confidence", "low")
-            except (json.JSONDecodeError, AttributeError):
-                confidence = "low"
-
-        return text, confidence
 
     async def _generate(self, prompt: str) -> str:
         """Generate an answer via the configured LLM."""

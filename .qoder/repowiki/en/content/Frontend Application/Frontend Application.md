@@ -18,19 +18,24 @@
 - [OverviewPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx)
 - [UsersPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx)
 - [AdminLayout.tsx](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx)
+- [SettingsPage.tsx](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx)
+- [SettingsPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx)
 - [auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
 - [chat.ts](file://safe4ai-pilot/frontend/src/api/chat.ts)
+- [account.ts](file://safe4ai-pilot/frontend/src/api/account.ts)
+- [settings.ts](file://safe4ai-pilot/frontend/src/api/settings.ts)
 - [AnswerBlock.tsx](file://safe4ai-pilot/frontend/src/components/chat/AnswerBlock.tsx)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Complete redesign of admin dashboard with comprehensive monitoring and management capabilities
-- Enhanced chat interface with advanced streaming capabilities and citation management
-- New design system integration with custom token-driven theming
-- Improved component architecture following React Query patterns
-- Added comprehensive admin pages for activity monitoring, document management, feedback review, and user administration
-- Enhanced error handling and loading states throughout the application
+- Added comprehensive user settings frontend implementation with dedicated SettingsPage.tsx component
+- Integrated account API client for user account management and password changes
+- Implemented authenticated /settings route with RequireAuth guard
+- Added password change form validation with comprehensive security requirements
+- Integrated TanStack Query for data fetching and state management in settings
+- Enhanced routing with proper navigation integration for user settings
+- Added usage statistics and knowledge base monitoring in user settings
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -41,21 +46,22 @@
 6. [Design System Implementation](#design-system-implementation)
 7. [Admin Dashboard Features](#admin-dashboard-features)
 8. [Enhanced Chat Interface](#enhanced-chat-interface)
-9. [Dependency Analysis](#dependency-analysis)
-10. [Performance Considerations](#performance-considerations)
-11. [Troubleshooting Guide](#troubleshooting-guide)
-12. [Conclusion](#conclusion)
-13. [Appendices](#appendices)
+9. [User Settings Implementation](#user-settings-implementation)
+10. [Dependency Analysis](#dependency-analysis)
+11. [Performance Considerations](#performance-considerations)
+12. [Troubleshooting Guide](#troubleshooting-guide)
+13. [Conclusion](#conclusion)
+14. [Appendices](#appendices)
 
 ## Introduction
-This document describes the frontend application for a React TypeScript single-page application built with modern web tooling. The application features a complete frontend overhaul with a new design system integration, comprehensive admin dashboard implementation, enhanced chat interface with streaming capabilities, and improved component architecture following React Query patterns. It focuses on component architecture, routing, state management, design system via Tailwind CSS, API integration patterns, error handling, and loading states. The application includes system monitoring and user management capabilities, along with an advanced AI chat interface featuring real-time streaming and citation management.
+This document describes the frontend application for a React TypeScript single-page application built with modern web tooling. The application features a complete frontend overhaul with a new design system integration, comprehensive admin dashboard implementation, enhanced chat interface with streaming capabilities, and improved component architecture following React Query patterns. It focuses on component architecture, routing, state management, design system via Tailwind CSS, API integration patterns, error handling, and loading states. The application includes system monitoring and user management capabilities, along with an advanced AI chat interface featuring real-time streaming and citation management, plus comprehensive user settings management.
 
 ## Project Structure
-The frontend is organized around a clear separation of concerns with enhanced admin capabilities:
-- Pages: top-level routes and page containers including comprehensive admin sections
+The frontend is organized around a clear separation of concerns with enhanced admin capabilities and user settings:
+- Pages: top-level routes and page containers including comprehensive admin sections and user settings
 - Components: reusable UI primitives and composite widgets with enhanced chat and admin components
 - Hooks: domain-specific state/logic extracted from components using React Query patterns
-- API: typed client functions for backend integration
+- API: typed client functions for backend integration including account and settings management
 - Styles: Tailwind CSS configuration with custom design tokens
 
 ```mermaid
@@ -68,6 +74,7 @@ subgraph "Routing & Guards"
 R1["/login"]
 R2["/chat"]
 R3["/admin/*"]
+R4["/settings"]
 RA["RequireAuth"]
 RD["RequireAdmin"]
 end
@@ -78,6 +85,11 @@ DP["DocumentsPage.tsx"]
 FP["FeedbackPage.tsx"]
 UP["UsersPage.tsx"]
 ACT["ActivityPage.tsx"]
+ASP["Admin SettingsPage.tsx"]
+end
+subgraph "User Settings"
+USP["User SettingsPage.tsx"]
+ACCT["Account API Client"]
 end
 subgraph "Chat Interface"
 CP["ChatPage.tsx"]
@@ -91,6 +103,8 @@ subgraph "Hooks & API"
 HA["useAuth.ts"]
 CHAT["chat.ts"]
 AUTH["auth.ts"]
+ACC["account.ts"]
+SET["settings.ts"]
 end
 subgraph "Design System"
 TW["tailwind.config.ts"]
@@ -101,6 +115,7 @@ A --> RA
 A --> RD
 RA --> R1
 RA --> R2
+RA --> R4
 RD --> R3
 R3 --> AP
 AP --> OP
@@ -108,6 +123,7 @@ AP --> DP
 AP --> FP
 AP --> UP
 AP --> ACT
+AP --> ASP
 R2 --> CP
 CP --> HC
 CP --> AB
@@ -115,27 +131,30 @@ CP --> COMP
 CP --> MB
 CP --> SP
 CP --> HC
+R4 --> USP
+USP --> ACCT
 M --> TW
 TW --> TOKENS
 ```
 
 **Diagram sources**
 - [main.tsx:1-33](file://safe4ai-pilot/frontend/src/main.tsx#L1-L33)
-- [App.tsx:1-110](file://safe4ai-pilot/frontend/src/App.tsx#L1-L110)
+- [App.tsx:1-121](file://safe4ai-pilot/frontend/src/App.tsx#L1-L121)
 - [AdminLayout.tsx:1-200](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L1-L200)
 - [ChatPage.tsx:1-217](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L1-L217)
+- [SettingsPage.tsx:1-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L274)
 - [useAuth.ts:1-36](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L36)
 - [useChat.ts:1-114](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L114)
 - [tailwind.config.ts:1-44](file://safe4ai-pilot/frontend/tailwind.config.ts#L1-L44)
 
 **Section sources**
 - [main.tsx:1-33](file://safe4ai-pilot/frontend/src/main.tsx#L1-L33)
-- [App.tsx:1-110](file://safe4ai-pilot/frontend/src/App.tsx#L1-L110)
+- [App.tsx:1-121](file://safe4ai-pilot/frontend/src/App.tsx#L1-L121)
 
 ## Core Components
 - Advanced routing and guards:
-  - Public route for login and protected routes for chat and admin with role-based access control
-  - Authentication guard blocks unauthenticated users from chat
+  - Public route for login and protected routes for chat, admin, and user settings with role-based access control
+  - Authentication guard blocks unauthenticated users from chat and settings
   - Admin guard blocks non-admin users from admin routes
   - Loading states during authentication transitions
 - Global providers with enhanced error handling:
@@ -152,6 +171,7 @@ Practical examples:
 - Extend the design system by adding new tokens to the Tailwind theme configuration and using them in components
 - Add new admin pages by creating files under pages/admin, importing them in App routing, and protecting with RequireAdmin
 - Implement new chat features by extending the useChat hook with additional streaming capabilities
+- Add new user settings by extending the SettingsPage component and account API client
 
 **Section sources**
 - [App.tsx:20-32](file://safe4ai-pilot/frontend/src/App.tsx#L20-L32)
@@ -160,9 +180,9 @@ Practical examples:
 
 ## Architecture Overview
 The application follows a sophisticated layered architecture with enhanced state management:
-- Presentation layer: React components and pages with comprehensive admin and chat interfaces
-- Domain logic: hooks encapsulating stateful logic for auth, chat, and admin operations using React Query
-- Data access: API modules with proper error handling and streaming support
+- Presentation layer: React components and pages with comprehensive admin and chat interfaces, plus user settings management
+- Domain logic: hooks encapsulating stateful logic for auth, chat, admin operations, and account management using React Query
+- Data access: API modules with proper error handling, streaming support, and comprehensive account settings
 - State management: React Query for caching, invalidation, background updates, and optimistic UI
 - Routing: React Router with advanced route-level guards and loading states
 - Design system: Token-driven theming with consistent visual language across all components
@@ -170,7 +190,7 @@ The application follows a sophisticated layered architecture with enhanced state
 ```mermaid
 graph TB
 UI["React Components/Pages"] --> HOOKS["Enhanced Custom Hooks"]
-HOOKS --> API["API Modules with Streaming"]
+HOOKS --> API["API Modules with Streaming & Account Management"]
 HOOKS --> QUERY["@tanstack/react-query"]
 UI --> ROUTER["Advanced React Router"]
 UI --> THEME["Token-Driven Tailwind Theme"]
@@ -186,6 +206,8 @@ CACHE --> RETRY["Intelligent Retry Logic"]
 - [main.tsx:1-33](file://safe4ai-pilot/frontend/src/main.tsx#L1-L33)
 - [useAuth.ts:1-36](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L36)
 - [useChat.ts:1-114](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L114)
+- [account.ts:1-44](file://safe4ai-pilot/frontend/src/api/account.ts#L1-L44)
+- [settings.ts:1-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L1-L103)
 - [tailwind.config.ts:40-43](file://safe4ai-pilot/frontend/tailwind.config.ts#L40-L43)
 
 ## Detailed Component Analysis
@@ -289,6 +311,7 @@ HC->>API : "Abort signal to streaming endpoint"
   - Chat streaming indicators with pulse animation
   - Admin page loading states with skeleton screens
   - Form submission states with loading indicators
+  - User settings loading states with detailed error handling
 - Comprehensive error management:
   - API error handling with proper error boundaries
   - Form validation errors with visual feedback
@@ -310,11 +333,13 @@ Refresh --> UI
 - [ErrorBoundary.tsx:13-42](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx#L13-L42)
 - [LoginPage.tsx:26-35](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx#L26-L35)
 - [ChatPage.tsx:85-114](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L85-L114)
+- [SettingsPage.tsx:145-153](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L145-L153)
 
 **Section sources**
 - [ErrorBoundary.tsx:1-43](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx#L1-L43)
 - [LoginPage.tsx:1-147](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx#L1-L147)
 - [ChatPage.tsx:1-217](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L1-L217)
+- [SettingsPage.tsx:1-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L274)
 
 ## Design System Implementation
 The application features a comprehensive design system with custom token-driven theming:
@@ -421,6 +446,67 @@ The chat interface features advanced streaming capabilities and comprehensive ci
 - [useChat.ts:1-114](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L114)
 - [AnswerBlock.tsx:1-114](file://safe4ai-pilot/frontend/src/components/chat/AnswerBlock.tsx#L1-L114)
 
+## User Settings Implementation
+
+### Authenticated Settings Route
+The application now includes a dedicated user settings route at `/settings` with comprehensive account management capabilities:
+- **Protected Route**: Requires authentication via RequireAuth guard
+- **Comprehensive Account Information**: Displays user profile, security settings, usage statistics, and knowledge base status
+- **Password Change Management**: Secure password modification with validation and error handling
+- **Usage Analytics**: Real-time metrics for questions, feedback, and last activity
+- **Knowledge Base Monitoring**: Status tracking for document indexing and chunk management
+
+### SettingsPage Component Architecture
+The SettingsPage component implements a sophisticated user settings interface with:
+- **Header Navigation**: Logo, back-to-chat navigation, and user avatar with sign-out
+- **Account Information Section**: Displays email, role, status, and creation date
+- **Security Management**: Session lifetime, password login status, and password change permissions
+- **Password Change Form**: Comprehensive validation with security requirements
+- **Usage Statistics**: 7-day and 30-day question counts, feedback metrics, and last activity
+- **Knowledge Base Status**: Document counts, chunk counts, failed indexing, and in-progress status
+
+### Password Change Validation
+The password change form implements strict validation requirements:
+- **Length Requirements**: Minimum 12 characters
+- **Character Complexity**: Must include uppercase, lowercase, digits, and special characters
+- **Password Matching**: New password and confirmation must match
+- **Real-time Validation**: Immediate feedback on validation errors
+- **Security Permissions**: Password changes are disabled when SSO-only mode is enabled
+
+### TanStack Query Integration
+The settings implementation leverages TanStack Query for robust state management:
+- **Account Settings Query**: Fetches and caches account information with 30-second stale time
+- **Password Mutation**: Handles password change requests with optimistic updates
+- **Error Handling**: Comprehensive error management with user-friendly messaging
+- **Loading States**: Proper loading indicators during data fetching and mutations
+- **Cache Invalidation**: Automatic cache clearing after successful password changes
+
+```mermaid
+sequenceDiagram
+participant U as "User"
+participant SP as "SettingsPage"
+participant QC as "React Query Client"
+participant API as "account.ts"
+U->>SP : "Enter new password"
+SP->>SP : "Validate password requirements"
+SP->>QC : "useMutation(changePassword)"
+QC->>API : "changePassword(currentPassword, newPassword)"
+API-->>QC : "Success response with message"
+QC-->>SP : "Optimistic update + cache clear"
+SP->>SP : "Display success message"
+SP->>SP : "Navigate to /login with replace"
+```
+
+**Diagram sources**
+- [SettingsPage.tsx:79-97](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L79-L97)
+- [account.ts:39-44](file://safe4ai-pilot/frontend/src/api/account.ts#L39-L44)
+- [useAuth.ts:16-20](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L16-L20)
+
+**Section sources**
+- [SettingsPage.tsx:1-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L274)
+- [account.ts:1-44](file://safe4ai-pilot/frontend/src/api/account.ts#L1-L44)
+- [App.tsx:108-115](file://safe4ai-pilot/frontend/src/App.tsx#L108-L115)
+
 ## Dependency Analysis
 - **Build and Toolchain**: Enhanced with comprehensive development workflow
   - Vite for dev server and production bundling with API proxy configuration
@@ -467,12 +553,15 @@ TW --> TOKENS["Custom Design Tokens"]
 - **Memory Management**: Proper cleanup of AbortControllers and event listeners
 - **Network Efficiency**: Intelligent retry logic with exponential backoff
 - **Rendering Performance**: Virtualized lists for large datasets in admin pages
+- **Settings Performance**: Optimized query caching for account settings and usage statistics
 
 ## Troubleshooting Guide
 Common issues and resolutions:
 - **Login failures**: Verify backend endpoint availability, check server errors, ensure React Query cache invalidation
 - **Chat streaming issues**: Confirm SSE endpoint reachability, validate CORS configuration, ensure AbortController usage
 - **Admin page access**: Verify user role is admin, check RequireAdmin guard implementation
+- **User settings access**: Verify authentication status, check RequireAuth guard for /settings route
+- **Password change failures**: Validate password complexity requirements, check security permissions, ensure network connectivity
 - **UI crashes**: Enhanced ErrorBoundary will present recovery interface with refresh option
 - **Performance issues**: Monitor React Query cache effectiveness, check for memory leaks in streaming components
 - **Design inconsistencies**: Verify Tailwind token usage, check for custom CSS conflicts
@@ -483,9 +572,10 @@ Common issues and resolutions:
 - [chat.ts:27-39](file://safe4ai-pilot/frontend/src/api/chat.ts#L27-L39)
 - [App.tsx:18-23](file://safe4ai-pilot/frontend/src/App.tsx#L18-L23)
 - [ErrorBoundary.tsx:20-22](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx#L20-L22)
+- [SettingsPage.tsx:25-33](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L25-L33)
 
 ## Conclusion
-The frontend application demonstrates a sophisticated, enterprise-grade implementation with comprehensive design system integration, advanced admin dashboard capabilities, and enhanced chat interface with streaming technologies. The application leverages modern React patterns with React Query for robust state management, implements a custom token-driven design system, and provides extensive monitoring and management features. The modular architecture supports easy extension and maintenance while delivering exceptional user experience across all interaction scenarios.
+The frontend application demonstrates a sophisticated, enterprise-grade implementation with comprehensive design system integration, advanced admin dashboard capabilities, enhanced chat interface with streaming technologies, and comprehensive user settings management. The application leverages modern React patterns with React Query for robust state management, implements a custom token-driven design system, provides extensive monitoring and management features, and includes secure user account management with comprehensive password validation. The modular architecture supports easy extension and maintenance while delivering exceptional user experience across all interaction scenarios.
 
 ## Appendices
 
@@ -493,22 +583,29 @@ The frontend application demonstrates a sophisticated, enterprise-grade implemen
 - **Centralized Client**: Shared fetch wrapper with comprehensive error handling and retry logic
 - **Streaming Support**: Advanced SSE-like streaming with proper event parsing and state management
 - **Admin APIs**: Comprehensive CRUD operations with proper authorization and audit logging
+- **Account Management**: User-specific account settings, password changes, and usage statistics
 - **Feedback Integration**: Real-time feedback submission with optimistic UI updates
+- **Settings Management**: Comprehensive application configuration with optimistic updates
 
 **Section sources**
 - [chat.ts:21-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L76)
 - [useChat.ts:93-100](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L93-L100)
+- [account.ts:36-44](file://safe4ai-pilot/frontend/src/api/account.ts#L36-L44)
+- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
 
 ### Extending Components and Adding Pages
 - **Admin Page Addition**: Create new admin page under pages/admin, import in App routing, protect with RequireAdmin
 - **Chat Feature Enhancement**: Extend useChat hook with additional streaming capabilities and state management
 - **Component Extension**: Add new components to components/chat or components/admin with proper TypeScript interfaces
 - **API Integration**: Define API functions in src/api with proper error handling and integrate via hooks
+- **User Settings Enhancement**: Extend SettingsPage component with additional account management features
+- **Route Addition**: Add new protected routes with appropriate guards in App.tsx routing configuration
 
 **Section sources**
-- [App.tsx:25-91](file://safe4ai-pilot/frontend/src/App.tsx#L25-L91)
+- [App.tsx:25-121](file://safe4ai-pilot/frontend/src/App.tsx#L25-L121)
 - [useAuth.ts:8-12](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L8-L12)
 - [useChat.ts:17-103](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L17-L103)
+- [SettingsPage.tsx:53-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L53-L274)
 
 ### Build Process, Development Workflow, and Deployment
 - **Development Environment**: Vite dev server with API proxy configuration for seamless backend integration
@@ -525,3 +622,5 @@ The frontend application demonstrates a sophisticated, enterprise-grade implemen
 - **Accessibility Compliance**: Proper ARIA attributes, keyboard navigation, and screen reader support
 - **Cross-Browser Testing**: Modern browser support with graceful degradation for older browsers
 - **Performance Optimization**: Optimized loading strategies and efficient resource utilization
+- **Form Accessibility**: Comprehensive form validation with accessible error messaging
+- **Navigation Accessibility**: Clear focus states and keyboard navigation for all interactive elements

@@ -6,6 +6,7 @@ Separate from main.py so app composition stays free of schema repair logic.
 """
 from __future__ import annotations
 
+import os
 from secrets import token_urlsafe
 
 import structlog
@@ -15,12 +16,13 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import SessionLocal, engine
+from app.db.models import DELETED_USER_ID
 
 logger = structlog.get_logger(__name__)
 
 _QDRANT_COLLECTION = "documents"
 _QDRANT_VECTOR_SIZE = 768
-_DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
+_DELETED_USER_ID = DELETED_USER_ID  # alias kept so call-sites below are unchanged
 _DELETED_USER_EMAIL = "deleted@redacted.local"
 
 
@@ -31,6 +33,7 @@ def run_startup_migrations() -> None:
     _ensure_document_foreign_keys()
     _ensure_agentrun_fk()
     _ensure_deleted_user()
+    _ensure_tier_config()
     _ensure_qdrant_collection()
     _ensure_semantic_cache_dimension()
     _warn_default_credentials()
@@ -119,6 +122,47 @@ def _ensure_agentrun_fk() -> None:
                 conn.execute(text(statement))
     except Exception as exc:
         logger.warning("agentrun_fk_ensure_failed", error=str(exc))
+
+
+def _ensure_tier_config() -> None:
+    """Seed Evaluation tier defaults on a completely fresh deployment.
+
+    Safety rules:
+    - If ANY tier key already exists in app_config, skip entirely to avoid
+      locking an existing deployment that already has more than 5 users.
+    - Set ``SAFE4AI_TIER_CONFIG_SKIP=1`` to disable seeding for dev
+      deployments that intentionally want no enforcement.
+
+    Seeded values (Evaluation tier):
+        tier=evaluation, max_seats=5, monthly_query_limit=5000
+        tier_expires_at is intentionally NOT seeded (no expiry by default).
+    """
+    if os.environ.get("SAFE4AI_TIER_CONFIG_SKIP", "").lower() in {"1", "true", "yes"}:
+        logger.info("tier_config_seed_skipped", reason="SAFE4AI_TIER_CONFIG_SKIP is set")
+        return
+
+    _TIER_KEYS = frozenset({"tier", "max_seats", "monthly_query_limit", "tier_expires_at"})
+
+    try:
+        from app.services.app_config_store import load_app_config, upsert_app_config
+
+        with SessionLocal() as db:
+            existing = load_app_config(db)
+            if any(k in existing for k in _TIER_KEYS):
+                return  # already configured — never overwrite
+            upsert_app_config(
+                db,
+                {"tier": "evaluation", "max_seats": 5, "monthly_query_limit": 5000},
+                commit=True,
+            )
+        logger.info(
+            "tier_config_seeded",
+            tier="evaluation",
+            max_seats=5,
+            monthly_query_limit=5000,
+        )
+    except Exception as exc:
+        logger.warning("tier_config_seed_failed", error=str(exc))
 
 
 def _ensure_qdrant_collection() -> None:

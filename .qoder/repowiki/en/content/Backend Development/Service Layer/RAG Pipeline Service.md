@@ -17,7 +17,18 @@
 - [db/models.py](file://safe4ai-pilot/app/db/models.py)
 - [templates.py](file://safe4ai-pilot/app/prompts/templates.py)
 - [StreamingPipeline.tsx](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx)
+- [ingestion_service.py](file://safe4ai-pilot/app/services/ingestion_service.py)
+- [settings_service.py](file://safe4ai-pilot/app/services/settings_service.py)
+- [app_config_store.py](file://safe4ai-pilot/app/services/app_config_store.py)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Updated PII redaction implementation section to reflect new approach of processing all chunks and applying redaction rather than filtering them out
+- Added documentation for enhanced logging with audit capabilities
+- Updated security guards section to include new redact_pii configuration option
+- Enhanced content filtering documentation with new redaction methods and logging
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -33,6 +44,8 @@
 
 ## Introduction
 This document describes the Retrieval-Augmented Generation (RAG) pipeline service responsible for orchestrating hybrid search, retrieval augmentation, reranking, and answer synthesis. It explains how queries are decomposed, how multi-modal retrieval integrates dense vector search with sparse BM25 ranking, and how the system ensures safety and quality through content filtering, input/output guards, and adaptive routing. The document also covers streaming response generation, citation management, and source attribution, along with practical configuration, optimization tips, and troubleshooting guidance.
+
+**Updated** The pipeline now implements an enhanced PII redaction approach during document ingestion that processes all chunks and applies redaction to sensitive content rather than filtering them out, with comprehensive logging for audit purposes.
 
 ## Project Structure
 The RAG pipeline spans backend services, components, agents, and frontend UI. The most relevant parts for this documentation are:
@@ -51,6 +64,7 @@ UI["StreamingPipeline.tsx"]
 end
 subgraph "API Layer"
 Routes["chat_routes.py"]
+Settings["settings_routes.py"]
 end
 subgraph "Orchestration"
 Graph["graph.py"]
@@ -60,14 +74,17 @@ subgraph "Components"
 Retriever["hybrid_retriever.py"]
 Rerank["reranker.py"]
 Decomposer["query_decomposer.py"]
-end
-subgraph "Safety & Guards"
+End
+subgraph "Security & Guards"
 InGuard["input_guard.py"]
 CFilter["content_filter.py"]
 OutFilter["output_filter.py"]
 end
 subgraph "Services"
 RAG["rag_pipeline.py"]
+Ingest["ingestion_service.py"]
+SettingsSvc["settings_service.py"]
+AppCfg["app_config_store.py"]
 end
 subgraph "Models & Config"
 Models["models.py"]
@@ -77,6 +94,8 @@ TPL["templates.py"]
 end
 UI --> Routes
 Routes --> Graph
+Settings --> SettingsSvc
+SettingsSvc --> AppCfg
 Graph --> Retriever
 Graph --> Rerank
 Graph --> Decomposer
@@ -89,6 +108,7 @@ RAG --> Retriever
 RAG --> Rerank
 RAG --> CFG
 RAG --> DB
+Ingest --> RAG
 Models -.-> Routes
 TPL -.-> Graph
 ```
@@ -100,44 +120,50 @@ TPL -.-> Graph
 - [reranker.py:1-36](file://safe4ai-pilot/app/components/reranker.py#L1-L36)
 - [query_decomposer.py:1-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L1-L41)
 - [input_guard.py:1-49](file://safe4ai-pilot/app/security/input_guard.py#L1-L49)
-- [content_filter.py:1-64](file://safe4ai-pilot/app/security/content_filter.py#L1-L64)
+- [content_filter.py:1-73](file://safe4ai-pilot/app/security/content_filter.py#L1-L73)
 - [output_filter.py:1-61](file://safe4ai-pilot/app/security/output_filter.py#L1-L61)
-- [rag_pipeline.py:1-313](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L313)
+- [rag_pipeline.py:1-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L413)
 - [conversation.py:1-117](file://safe4ai-pilot/app/services/conversation.py#L1-L117)
-- [models.py:1-95](file://safe4ai-pilot/app/models.py#L1-L95)
+- [models.py:1-102](file://safe4ai-pilot/app/models.py#L1-L102)
 - [db/models.py:1-182](file://safe4ai-pilot/app/db/models.py#L1-L182)
 - [config.py:1-48](file://safe4ai-pilot/app/config.py#L1-L48)
 - [templates.py:1-81](file://safe4ai-pilot/app/prompts/templates.py#L1-L81)
 - [StreamingPipeline.tsx:1-30](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L1-L30)
+- [ingestion_service.py:1-167](file://safe4ai-pilot/app/services/ingestion_service.py#L1-L167)
+- [settings_service.py:1-415](file://safe4ai-pilot/app/services/settings_service.py#L1-L415)
+- [app_config_store.py:1-119](file://safe4ai-pilot/app/services/app_config_store.py#L1-L119)
+- [settings_routes.py:190-354](file://safe4ai-pilot/app/api/settings_routes.py#L190-L354)
 
 **Section sources**
 - [chat_routes.py:1-251](file://safe4ai-pilot/app/api/chat_routes.py#L1-L251)
 - [graph.py:1-352](file://safe4ai-pilot/app/agents/graph.py#L1-L352)
-- [rag_pipeline.py:1-313](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L313)
+- [rag_pipeline.py:1-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L413)
 
 ## Core Components
 - HybridRetriever: performs dense vector search against Qdrant and sparse BM25 scoring, then fuses results via Reciprocal Rank Fusion (RRF).
 - Reranker: cross-encodes query-chunk pairs to refine relevance scores.
 - RagPipeline: orchestrates ingestion (PDF/docx/xlsx/text), OCR for low-confidence pages, chunking, embedding, upsert to Qdrant, and query-time retrieval and generation.
 - QueryDecomposer: splits complex questions into simpler sub-queries.
-- Safety Guards: InputGuard (sanitization and injection checks), ContentFilter (PII removal), OutputFilter (PII hallucination and length checks).
+- Safety Guards: InputGuard (sanitization and injection checks), ContentFilter (PII redaction and removal), OutputFilter (PII hallucination and length checks).
 - Graph Orchestration: LangGraph StateGraph implementing intake → rewrite → retrieve → grade → decompose/generate → output_filter → quality_gate → respond/fallback.
 - API and Streaming: FastAPI endpoints supporting blocking and streaming responses with step events and token streaming.
 - Conversation Management: Session persistence and optional summarization.
 - Models and Configuration: Typed state, citations, database models, and runtime settings.
 
+**Updated** The ContentFilter now implements an enhanced PII redaction approach that processes all chunks and applies redaction to sensitive content rather than filtering them out, with comprehensive logging for audit purposes.
+
 **Section sources**
 - [hybrid_retriever.py:14-145](file://safe4ai-pilot/app/components/hybrid_retriever.py#L14-L145)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
-- [rag_pipeline.py:34-313](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L313)
+- [rag_pipeline.py:34-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L413)
 - [query_decomposer.py:10-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L10-L41)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
-- [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
+- [content_filter.py:25-73](file://safe4ai-pilot/app/security/content_filter.py#L25-L73)
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
 - [graph.py:43-352](file://safe4ai-pilot/app/agents/graph.py#L43-L352)
 - [chat_routes.py:156-251](file://safe4ai-pilot/app/api/chat_routes.py#L156-L251)
 - [conversation.py:26-117](file://safe4ai-pilot/app/services/conversation.py#L26-L117)
-- [models.py:13-95](file://safe4ai-pilot/app/models.py#L13-L95)
+- [models.py:13-102](file://safe4ai-pilot/app/models.py#L13-L102)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 
 ## Architecture Overview
@@ -206,7 +232,7 @@ API-->>FE : "SSE : step, token, cite, done"
 - [hybrid_retriever.py:57-145](file://safe4ai-pilot/app/components/hybrid_retriever.py#L57-L145)
 - [reranker.py:15-36](file://safe4ai-pilot/app/components/reranker.py#L15-L36)
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
-- [content_filter.py:29-64](file://safe4ai-pilot/app/security/content_filter.py#L29-L64)
+- [content_filter.py:29-73](file://safe4ai-pilot/app/security/content_filter.py#L29-L73)
 - [output_filter.py:32-61](file://safe4ai-pilot/app/security/output_filter.py#L32-L61)
 
 ## Detailed Component Analysis
@@ -264,11 +290,14 @@ Handles ingestion and query-time orchestration:
 - Ingestion supports PDF, DOCX, XLSX, and text. PDFs use OCR when text density is low; chunks are embedded in batches and upserted to Qdrant; BM25 index is updated.
 - Query-time retrieval uses HybridRetriever, followed by Reranker, then answer synthesis via a prompt with context and citations.
 
+**Updated** The ingestion process now implements enhanced PII redaction: all chunks are processed and sensitive content is redacted with [REDACTED] markers rather than being filtered out entirely. The system logs each redaction event with detailed audit information including document ID and page number.
+
 ```mermaid
 sequenceDiagram
 participant SVC as "RagPipeline"
 participant OCR as "_ocr_page()"
 participant EMB as "_embed_batch()"
+participant CF as "ContentFilter"
 participant QD as "QdrantClient"
 participant DB as "SQLAlchemy"
 SVC->>SVC : "ingest(file_path, doc_id, ...)"
@@ -280,6 +309,14 @@ else DOCX/XLSX/Text
 SVC->>SVC : "load native text"
 end
 SVC->>SVC : "RecursiveCharacterTextSplitter"
+SVC->>SVC : "Process all chunks for PII"
+SVC->>CF : "is_pii(chunk.content)?"
+CF-->>SVC : "True/False"
+alt contains PII
+SVC->>CF : "redact(chunk.content)"
+CF-->>SVC : "redacted text"
+SVC->>SVC : "log pii_redacted_in_chunk"
+end
 SVC->>EMB : "batch embeddings"
 EMB-->>SVC : "[embedding vectors]"
 SVC->>QD : "upsert(points)"
@@ -289,13 +326,11 @@ SVC-->>SVC : "indexing complete"
 ```
 
 **Diagram sources**
-- [rag_pipeline.py:62-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L62-L150)
-- [rag_pipeline.py:187-201](file://safe4ai-pilot/app/services/rag_pipeline.py#L187-L201)
-- [rag_pipeline.py:203-249](file://safe4ai-pilot/app/services/rag_pipeline.py#L203-L249)
-- [rag_pipeline.py:265-295](file://safe4ai-pilot/app/services/rag_pipeline.py#L265-L295)
+- [rag_pipeline.py:94-189](file://safe4ai-pilot/app/services/rag_pipeline.py#L94-L189)
+- [content_filter.py:24-73](file://safe4ai-pilot/app/security/content_filter.py#L24-L73)
 
 **Section sources**
-- [rag_pipeline.py:34-313](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L313)
+- [rag_pipeline.py:34-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L413)
 
 ### Query Decomposition
 Splits a complex query into simpler sub-queries using a templated prompt and returns a list of strings.
@@ -362,8 +397,14 @@ SSE --> FE
 
 ### Security Guards and Content Filtering
 - InputGuard: strips HTML/control characters, enforces length limits, and detects prompt-injection patterns.
-- ContentFilter: removes chunks containing PII and blocks sections matching configured terms.
+- ContentFilter: **Enhanced** with new PII redaction approach that processes all chunks and applies redaction to sensitive content rather than filtering them out, with comprehensive logging for audit purposes.
 - OutputFilter: rejects answers containing PII not present in source chunks and logs suspiciously long outputs.
+
+**Updated** The ContentFilter now implements an enhanced PII redaction system that:
+- Processes all chunks regardless of PII presence
+- Applies redaction to sensitive content using [REDACTED] markers
+- Logs each redaction event with detailed audit information
+- Maintains backward compatibility with existing filtering functionality
 
 ```mermaid
 flowchart TD
@@ -371,19 +412,21 @@ In(["Input"]) --> IG["InputGuard.check()"]
 IG --> |allowed| Proceed["Proceed to retrieval"]
 IG --> |blocked| Fallback["Fallback"]
 Proceed --> CF["ContentFilter.filter_chunks()"]
-CF --> OF["OutputFilter.check(answer, chunks)"]
+CF --> Redact["Enhanced PII Redaction"]
+Redact --> Log["Audit Logging"]
+Log --> OF["OutputFilter.check(answer, chunks)"]
 OF --> |allowed| Respond["Respond"]
 OF --> |blocked| Fallback
 ```
 
 **Diagram sources**
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
-- [content_filter.py:29-64](file://safe4ai-pilot/app/security/content_filter.py#L29-L64)
+- [content_filter.py:29-73](file://safe4ai-pilot/app/security/content_filter.py#L29-L73)
 - [output_filter.py:32-61](file://safe4ai-pilot/app/security/output_filter.py#L32-L61)
 
 **Section sources**
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
-- [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
+- [content_filter.py:25-73](file://safe4ai-pilot/app/security/content_filter.py#L25-L73)
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
 
 ## Dependency Analysis
@@ -394,6 +437,8 @@ Key dependencies and relationships:
 - models.py defines shared state and data structures used across components.
 - config.py provides runtime settings for Ollama, Qdrant, and other services.
 - db/models.py defines persistence models for documents, chunks, sessions, and audit logs.
+
+**Updated** The ingestion_service now coordinates with the enhanced ContentFilter during document processing, and settings_service manages the new redact_pii configuration option.
 
 ```mermaid
 graph LR
@@ -410,6 +455,9 @@ RP --> RER
 RP --> DBM["db/models.py"]
 API["chat_routes.py"] --> GR
 API --> CONV["conversation.py"]
+INSG["ingestion_service.py"] --> RP
+SETTINGS["settings_service.py"] --> APPCFG["app_config_store.py"]
+SETTINGS --> SETTINGSRT["settings_routes.py"]
 MODELS["models.py"] --> API
 MODELS --> GR
 MODELS --> RP
@@ -421,7 +469,11 @@ MODELS --> RP
 - [chat_routes.py:126-133](file://safe4ai-pilot/app/api/chat_routes.py#L126-L133)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [db/models.py:1-182](file://safe4ai-pilot/app/db/models.py#L1-L182)
-- [models.py:13-95](file://safe4ai-pilot/app/models.py#L13-L95)
+- [models.py:13-102](file://safe4ai-pilot/app/models.py#L13-L102)
+- [ingestion_service.py:1-167](file://safe4ai-pilot/app/services/ingestion_service.py#L1-L167)
+- [settings_service.py:1-415](file://safe4ai-pilot/app/services/settings_service.py#L1-L415)
+- [app_config_store.py:1-119](file://safe4ai-pilot/app/services/app_config_store.py#L1-L119)
+- [settings_routes.py:190-354](file://safe4ai-pilot/app/api/settings_routes.py#L190-L354)
 
 **Section sources**
 - [graph.py:43-352](file://safe4ai-pilot/app/agents/graph.py#L43-L352)
@@ -429,7 +481,7 @@ MODELS --> RP
 - [chat_routes.py:126-133](file://safe4ai-pilot/app/api/chat_routes.py#L126-L133)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [db/models.py:1-182](file://safe4ai-pilot/app/db/models.py#L1-L182)
-- [models.py:13-95](file://safe4ai-pilot/app/models.py#L13-L95)
+- [models.py:13-102](file://safe4ai-pilot/app/models.py#L13-L102)
 
 ## Performance Considerations
 - Batch embeddings: RagPipeline batches embedding requests to reduce overhead.
@@ -440,15 +492,15 @@ MODELS --> RP
 - Streaming: Use streaming endpoints to improve perceived latency and UX.
 - Caching: Consider semantic caching for repeated queries (see semantic cache model).
 - Rate limiting: API endpoints apply rate limits to protect resources.
-
-[No sources needed since this section provides general guidance]
+- **Enhanced** PII redaction performance: The new redaction approach processes all chunks efficiently with minimal performance impact compared to filtering out sensitive content.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
 - No answer returned: Verify rerank score threshold and ensure sufficient relevant chunks are produced.
 - Poor retrieval quality: Increase rerank top-n, adjust HybridRetriever top_k, or review BM25 index updates.
 - OCR failures on PDFs: Confirm OCR model availability and increase OCR threshold for low-text pages.
-- PII leakage or hallucinations: Ensure ContentFilter and OutputFilter are active and properly configured.
+- **Updated** PII redaction issues: Check ContentFilter logs for "pii_redacted_in_chunk" entries to verify redaction is working correctly.
+- **Updated** Audit logging problems: Verify that redaction events are being logged with proper document IDs and page numbers.
 - Long answers: Investigate OutputFilter warnings and consider reducing context length or rerank top-n.
 - Session size exceeded: Truncate or summarize conversation history to keep state under the byte limit.
 - Streaming stalls: Check Ollama availability and timeouts; verify SSE headers and network connectivity.
@@ -460,20 +512,21 @@ Common issues and resolutions:
 - [output_filter.py:52-59](file://safe4ai-pilot/app/security/output_filter.py#L52-L59)
 
 ## Conclusion
-The RAG pipeline integrates hybrid retrieval, reranking, adaptive routing, and safety guards to deliver reliable, auditable, and secure answers. Its streaming interface and structured state enable transparent, user-friendly interactions. Proper tuning of chunking, rerank thresholds, and hybrid fusion yields robust performance, while guards ensure content safety and compliance.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The RAG pipeline integrates hybrid retrieval, reranking, adaptive routing, and safety guards to deliver reliable, auditable, and secure answers. Its streaming interface and structured state enable transparent, user-friendly interactions. The enhanced PII redaction approach ensures comprehensive content protection while maintaining system performance and audit capabilities. Proper tuning of chunking, rerank thresholds, and hybrid fusion yields robust performance, while guards ensure content safety and compliance.
 
 ## Appendices
 
 ### Practical Configuration Examples
 - Runtime settings: Configure Ollama URL/model, Qdrant URL, embedding model, and semantic cache threshold via environment variables.
+- **Updated** PII redaction configuration: Enable the redact_pii setting to activate the enhanced redaction approach during document ingestion.
 - Upload handling: Set maximum upload size and retention policies for audit logs and semantic cache.
 - Frontend integration: Use streaming endpoints to render step progress and answer tokens.
 
 **Section sources**
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [chat_routes.py:156-251](file://safe4ai-pilot/app/api/chat_routes.py#L156-L251)
+- [settings_routes.py:190-202](file://safe4ai-pilot/app/api/settings_routes.py#L190-L202)
+- [settings_service.py:349-351](file://safe4ai-pilot/app/services/settings_service.py#L349-L351)
 
 ### Data Model Overview
 ```mermaid
@@ -546,3 +599,16 @@ USERS ||--o{ HUMAN_REVIEW_QUEUE : "queues"
 
 **Diagram sources**
 - [db/models.py:52-182](file://safe4ai-pilot/app/db/models.py#L52-L182)
+
+### Enhanced PII Redaction Implementation Details
+**Updated** The new PII redaction system provides comprehensive content protection with the following features:
+
+- **Processing Approach**: All chunks are processed regardless of PII presence, ensuring no sensitive content is inadvertently filtered out
+- **Redaction Method**: Sensitive patterns are replaced with [REDACTED] markers while preserving surrounding content structure
+- **Audit Logging**: Each redaction event is logged with detailed information including document ID, page number, and timestamp
+- **Pattern Detection**: Supports detection of Social Security Numbers, credit card numbers, and passport numbers
+- **Backward Compatibility**: Maintains existing filtering functionality alongside the new redaction approach
+
+**Section sources**
+- [content_filter.py:13-73](file://safe4ai-pilot/app/security/content_filter.py#L13-L73)
+- [rag_pipeline.py:140-144](file://safe4ai-pilot/app/services/rag_pipeline.py#L140-L144)
