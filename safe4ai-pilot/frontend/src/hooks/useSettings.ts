@@ -32,8 +32,20 @@ export type SaveField =
   | "sessionHours"
   | "auditRetentionDays"
   | "redactPII"
+  | "blockedTerms"
+  | "oidcEnabled"
+  | "oidcIssuerUrl"
+  | "oidcClientId"
+  | "oidcClientSecret"
+  | "oidcRedirectUri"
+  | "oidcAllowedDomains"
+  | "oidcAutoProvision"
   | "dailyCeilingUsd"
   | "monthlyCeilingUsd"
+  | "tier"
+  | "maxSeats"
+  | "monthlyQueryLimit"
+  | "tierExpiresAt"
   | "providerType"
   | "providerBaseUrl"
   | "providerApiKey"
@@ -48,7 +60,7 @@ export type SaveField =
 
 export const DEFAULT_PROVIDER: AppSettings["provider"] = {
   type: "ollama",
-  baseUrl: "http://localhost:11434",
+  baseUrl: import.meta.env.VITE_OLLAMA_URL ?? "http://localhost:11434",
   apiKeyConfigured: false,
   chatModel: "",
   embeddingModel: "",
@@ -115,11 +127,43 @@ function applyDiff(current: AppSettings, diff: PatchableSettings): AppSettings {
       sessionHours: diff.sessionHours ?? current.security.sessionHours,
       auditRetentionDays: diff.auditRetentionDays ?? current.security.auditRetentionDays,
       redactPII: diff.redactPII ?? current.security.redactPII,
+      blockedTerms: diff.blockedTerms ?? current.security.blockedTerms,
+      oidc: {
+        ...current.security.oidc,
+        enabled: diff.oidcEnabled ?? current.security.oidc.enabled,
+        issuerUrl: diff.oidcIssuerUrl ?? current.security.oidc.issuerUrl,
+        clientId: diff.oidcClientId ?? current.security.oidc.clientId,
+        clientSecretConfigured:
+          diff.oidcClientSecret !== undefined
+            ? Boolean(diff.oidcClientSecret)
+            : current.security.oidc.clientSecretConfigured,
+        redirectUri: diff.oidcRedirectUri ?? current.security.oidc.redirectUri,
+        allowedDomains: diff.oidcAllowedDomains ?? current.security.oidc.allowedDomains,
+        autoProvision: diff.oidcAutoProvision ?? current.security.oidc.autoProvision,
+        configured:
+          (diff.oidcEnabled ?? current.security.oidc.enabled) &&
+          Boolean(diff.oidcIssuerUrl ?? current.security.oidc.issuerUrl) &&
+          Boolean(diff.oidcClientId ?? current.security.oidc.clientId) &&
+          Boolean(
+            diff.oidcClientSecret !== undefined
+              ? diff.oidcClientSecret
+              : current.security.oidc.clientSecretConfigured,
+          ) &&
+          Boolean(diff.oidcRedirectUri ?? current.security.oidc.redirectUri),
+      },
     },
     cost: {
       ...current.cost,
       dailyCeilingUsd: diff.dailyCeilingUsd ?? current.cost.dailyCeilingUsd,
       monthlyCeilingUsd: diff.monthlyCeilingUsd ?? current.cost.monthlyCeilingUsd,
+    },
+    tier: {
+      ...current.tier,
+      name: diff.tier ?? current.tier.name,
+      maxSeats: diff.maxSeats ?? current.tier.maxSeats,
+      monthlyQueryLimit: diff.monthlyQueryLimit ?? current.tier.monthlyQueryLimit,
+      tierExpiresAt:
+        diff.tierExpiresAt !== undefined ? diff.tierExpiresAt || null : current.tier.tierExpiresAt,
     },
   };
 }
@@ -132,7 +176,10 @@ export interface UseSettingsReturn {
   isError: boolean;
   error: Error | null;
   provider: AppSettings["provider"];
-  set: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  set: (
+    key: keyof AppSettings | "embeddingSource",
+    value: AppSettings[keyof AppSettings] | EmbeddingSource,
+  ) => void;
   queueSave: (diff: PatchableSettings) => void;
   isSavingField: (field: string) => boolean;
   isSaving: boolean;
@@ -158,7 +205,10 @@ export function useSettings(): UseSettingsReturn {
     retry: 1,
   });
 
-  const save = useMutation({ mutationFn: patchSettings });
+  const save = useMutation({
+    mutationFn: patchSettings,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+  });
 
   const isSavingField = (field: string) => savingFields.includes(field as SaveField);
 
@@ -189,17 +239,16 @@ export function useSettings(): UseSettingsReturn {
           console.error("settings_save_failed", err);
           setSaveErrorText(err instanceof Error ? err.message : "Failed to save changes");
           await qc.invalidateQueries({ queryKey: ["settings"] });
-          qc.setQueryData<AppSettings>(["settings"], (current) => {
-            if (!current) return current;
-            return applyDiff(current, unsavedDiffRef.current);
-          });
           setSavingFields([]);
           throw err;
         }
       });
   };
 
-  const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+  const set = (
+    key: keyof AppSettings | "embeddingSource",
+    value: AppSettings[keyof AppSettings] | EmbeddingSource,
+  ) => {
     if (!s) return;
     const diff: PatchableSettings = {};
     if (key === "generationModel" && value !== s.generationModel)
@@ -229,6 +278,19 @@ export function useSettings(): UseSettingsReturn {
       if (sec.auditRetentionDays !== s.security.auditRetentionDays)
         diff.auditRetentionDays = sec.auditRetentionDays;
       if (sec.redactPII !== s.security.redactPII) diff.redactPII = sec.redactPII;
+      if (sec.blockedTerms.join("\n") !== s.security.blockedTerms.join("\n"))
+        diff.blockedTerms = sec.blockedTerms;
+      if (sec.oidc.enabled !== s.security.oidc.enabled) diff.oidcEnabled = sec.oidc.enabled;
+      if (sec.oidc.issuerUrl !== s.security.oidc.issuerUrl)
+        diff.oidcIssuerUrl = sec.oidc.issuerUrl;
+      if (sec.oidc.clientId !== s.security.oidc.clientId)
+        diff.oidcClientId = sec.oidc.clientId;
+      if (sec.oidc.redirectUri !== s.security.oidc.redirectUri)
+        diff.oidcRedirectUri = sec.oidc.redirectUri;
+      if (sec.oidc.allowedDomains.join("\n") !== s.security.oidc.allowedDomains.join("\n"))
+        diff.oidcAllowedDomains = sec.oidc.allowedDomains;
+      if (sec.oidc.autoProvision !== s.security.oidc.autoProvision)
+        diff.oidcAutoProvision = sec.oidc.autoProvision;
     }
     if (key === "cost") {
       const cost = value as AppSettings["cost"];
@@ -236,6 +298,15 @@ export function useSettings(): UseSettingsReturn {
         diff.dailyCeilingUsd = cost.dailyCeilingUsd;
       if (cost.monthlyCeilingUsd !== s.cost.monthlyCeilingUsd)
         diff.monthlyCeilingUsd = cost.monthlyCeilingUsd;
+    }
+    if (key === "tier") {
+      const tier = value as AppSettings["tier"];
+      if (tier.name !== s.tier.name) diff.tier = tier.name;
+      if (tier.maxSeats !== s.tier.maxSeats) diff.maxSeats = tier.maxSeats;
+      if (tier.monthlyQueryLimit !== s.tier.monthlyQueryLimit)
+        diff.monthlyQueryLimit = tier.monthlyQueryLimit;
+      if (tier.tierExpiresAt !== s.tier.tierExpiresAt)
+        diff.tierExpiresAt = tier.tierExpiresAt ?? "";
     }
     if (key === "provider") {
       const p = value as AppSettings["provider"];
@@ -249,6 +320,8 @@ export function useSettings(): UseSettingsReturn {
     }
     if (key === "sseDoneMode" && value !== s.sseDoneMode)
       diff.sseDoneMode = value as AppSettings["sseDoneMode"];
+    if (key === "embeddingSource" && value !== s.provider.embeddingSource)
+      diff.embeddingSource = value as AppSettings["provider"]["embeddingSource"];
     if (Object.keys(diff).length > 0) queueSave(diff);
   };
 

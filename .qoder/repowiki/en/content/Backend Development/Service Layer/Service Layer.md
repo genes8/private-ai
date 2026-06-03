@@ -29,13 +29,11 @@
 
 ## Update Summary
 **Changes Made**
-- Added five new dedicated service modules for improved separation of concerns: cost_service.py, document_service.py, user_service.py, stats_service.py, and settings_service.py
-- Enhanced cost management with dedicated cost tracking and ceiling enforcement functionality
-- Expanded document lifecycle management with Qdrant cleanup and BM25 pruning capabilities
-- Introduced user lifecycle services for ghost user creation and deactivation cascading
-- Added shared statistics aggregation for corpus metrics
-- Implemented comprehensive settings patch business logic with three-stage validation pipeline
-- Improved testability and modularity through dedicated service boundaries
+- Updated Provider Clients section to reflect major optimization with persistent httpx.AsyncClient instances in OllamaProvider
+- Enhanced resource management documentation for improved connection pooling patterns
+- Updated lifecycle management section to include proper aclose() method usage
+- Revised performance considerations to highlight connection pooling benefits
+- Updated troubleshooting guide with new resource management considerations
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -52,7 +50,7 @@
 ## Introduction
 This document describes the service layer responsible for business logic orchestration, chat session management, document ingestion, retrieval-augmented generation (RAG), and semantic caching. The service layer has been expanded with dedicated services for cost management, document lifecycle, user management, statistics, and settings, improving separation of concerns and testability. It explains how services integrate with external systems (Ollama, Qdrant) and internal components (HybridRetriever, Reranker), and it provides practical examples of service composition, dependency injection, lifecycle management, and error handling.
 
-**Updated** The service layer now includes five new dedicated service modules that enhance separation of concerns and improve testability: cost_service for cost tracking and ceiling enforcement, document_service for document lifecycle management, user_service for user lifecycle operations, stats_service for shared statistics aggregation, and settings_service for comprehensive settings management with three-stage validation pipeline.
+**Updated** The service layer now includes a major optimization in provider clients with persistent httpx.AsyncClient instances that significantly improve connection pooling and resource management efficiency. Both OpenAICompatibleProvider and OllamaProvider now maintain a single httpx.AsyncClient for the lifetime of the instance, requiring proper lifecycle management through the aclose() method.
 
 ## Project Structure
 The service layer is organized around seven primary services:
@@ -60,7 +58,7 @@ The service layer is organized around seven primary services:
 - Ingestion service: orchestrates document processing, OCR, embedding generation, and indexing.
 - RAG pipeline service: coordinates retrieval, reranking, and response generation with pluggable provider support.
 - Semantic cache service: optimizes queries by storing and reusing similar answers.
-- Provider clients: pluggable interface for different inference providers (OpenAI-compatible, Ollama) with enhanced message format handling.
+- Provider clients: pluggable interface for different inference providers (OpenAI-compatible, Ollama) with enhanced message format handling and persistent connection management.
 - Chat finalizer: transactional persistence service for chat completions with usage tracking and atomic commit operations.
 - **New** Cost service: dedicated cost tracking and ceiling enforcement for chat requests with usage estimation and provider integration.
 - **New** Document service: document lifecycle helpers for Qdrant cleanup and BM25 index pruning.
@@ -149,7 +147,7 @@ CFG --> SETT
 - [ingestion_service.py:1-167](file://safe4ai-pilot/app/services/ingestion_service.py#L1-L167)
 - [rag_pipeline.py:1-345](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L345)
 - [semantic_cache.py:1-104](file://safe4ai-pilot/app/services/semantic_cache.py#L1-L104)
-- [provider_clients.py:1-239](file://safe4ai-pilot/app/services/provider_clients.py#L1-L239)
+- [provider_clients.py:1-247](file://safe4ai-pilot/app/services/provider_clients.py#L1-L247)
 - [chat_finalizer.py:1-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L1-L71)
 - [runtime_config.py:1-172](file://safe4ai-pilot/app/services/runtime_config.py#L1-L172)
 - [cost_service.py:1-104](file://safe4ai-pilot/app/services/cost_service.py#L1-L104)
@@ -173,7 +171,7 @@ CFG --> SETT
 - Ingestion orchestration: Runs document ingestion as a background task, updates statuses, and recovers stuck jobs using pluggable providers.
 - RagPipeline: Handles file parsing, chunking, embedding, upsert to Qdrant, BM25 index updates, retrieval, reranking, and generation with provider pluggability.
 - SemanticCache: Embeds queries, performs similarity lookup, stores responses and citations, invalidates entries by document.
-- ProviderClients: Enhanced pluggable interface supporting OpenAI-compatible APIs and Ollama with standardized usage tracking, content coercion, and multimodal capabilities.
+- ProviderClients: Enhanced pluggable interface supporting OpenAI-compatible APIs and Ollama with standardized usage tracking, content coercion, and multimodal capabilities. **Updated** Now features persistent httpx.AsyncClient instances for improved connection pooling and resource management.
 - ChatFinalizer: Transactional service that persists chat completions, audit logs, and cost records in a single atomic operation, eliminating nested transactions and ensuring data consistency.
 - **New** CostService: Dedicated cost tracking and ceiling enforcement with usage estimation, provider integration, and exception handling for cost management.
 - **New** DocumentService: Document lifecycle helpers for Qdrant cleanup and BM25 index pruning with best-effort operations and logging.
@@ -186,7 +184,7 @@ CFG --> SETT
 - [ingestion_service.py:23-167](file://safe4ai-pilot/app/services/ingestion_service.py#L23-L167)
 - [rag_pipeline.py:34-345](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L345)
 - [semantic_cache.py:14-104](file://safe4ai-pilot/app/services/semantic_cache.py#L14-L104)
-- [provider_clients.py:24-239](file://safe4ai-pilot/app/services/provider_clients.py#L24-L239)
+- [provider_clients.py:24-247](file://safe4ai-pilot/app/services/provider_clients.py#L24-L247)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
 - [cost_service.py:20-104](file://safe4ai-pilot/app/services/cost_service.py#L20-L104)
 - [document_service.py:17-40](file://safe4ai-pilot/app/services/document_service.py#L17-L40)
@@ -197,7 +195,7 @@ CFG --> SETT
 ## Architecture Overview
 The system initializes shared components at startup, wires them into the FastAPI application state, and exposes chat endpoints that drive a state machine (LangGraph) composed of nodes for intake, rewrite, retrieve, grade, decompose, generate, and output filtering. Services are injected via constructor parameters and configured centrally with support for multiple inference providers. The new dedicated services provide focused business logic with clear separation of concerns.
 
-**Updated** The architecture now includes five new dedicated service modules that enhance separation of concerns and improve testability. The cost service provides centralized cost management, document service handles lifecycle operations, user service manages user lifecycle, stats service offers shared aggregations, and settings service implements comprehensive configuration management with three-stage validation.
+**Updated** The architecture now includes five new dedicated service modules that enhance separation of concerns and improve testability. The cost service provides centralized cost management, document service handles lifecycle operations, user service manages user lifecycle, stats service offers shared aggregations, and settings service implements comprehensive configuration management with three-stage validation. The provider clients now feature persistent connection management for improved performance.
 
 ```mermaid
 sequenceDiagram
@@ -231,7 +229,7 @@ API-->>Client : response
 - [chat_routes.py:115-251](file://safe4ai-pilot/app/api/chat_routes.py#L115-L251)
 - [conversation.py:26-122](file://safe4ai-pilot/app/services/conversation.py#L26-L122)
 - [rag_pipeline.py:172-202](file://safe4ai-pilot/app/services/rag_pipeline.py#L172-L202)
-- [provider_clients.py:52-239](file://safe4ai-pilot/app/services/provider_clients.py#L52-L239)
+- [provider_clients.py:52-247](file://safe4ai-pilot/app/services/provider_clients.py#L52-L247)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
 - [hybrid_retriever.py:57-145](file://safe4ai-pilot/app/components/hybrid_retriever.py#L57-L145)
 - [reranker.py:15-36](file://safe4ai-pilot/app/components/reranker.py#L15-L36)
@@ -344,7 +342,7 @@ Key behaviors:
 - Enforce minimum rerank score to avoid low-confidence answers.
 - Supports both OpenAI-compatible and Ollama providers through ChatClient interface.
 
-**Updated** The RAG pipeline now accepts a provider_client parameter that implements the ChatClient, EmbeddingClient, or VisionClient protocols, enabling seamless switching between different inference providers while maintaining consistent behavior. Enhanced provider clients support standardized message format handling and content coercion for robust response processing.
+**Updated** The RAG pipeline now accepts a provider_client parameter that implements the ChatClient, EmbeddingClient, or VisionClient protocols, enabling seamless switching between different inference providers while maintaining consistent behavior. Enhanced provider clients support standardized message format handling, content coercion for robust response processing, and persistent connection management for improved performance.
 
 ```mermaid
 classDiagram
@@ -371,6 +369,7 @@ class ProviderClient {
 +embed_query(query) list[float]
 +embed_documents(texts) list[list[float]]
 +describe_image(prompt, image_b64) str
++aclose() void
 }
 class OpenAICompatibleProvider {
 +chat(system_prompt, user_prompt) ChatResult
@@ -378,6 +377,7 @@ class OpenAICompatibleProvider {
 +embed_documents(texts) list[list[float]]
 +describe_image(prompt, image_b64) str
 +_coerce_content(value) str
++aclose() void
 }
 class OllamaProvider {
 +chat(system_prompt, user_prompt) ChatResult
@@ -385,6 +385,7 @@ class OllamaProvider {
 +embed_documents(texts) list[list[float]]
 +describe_image(prompt, image_b64) str
 +chat_raw(prompt, timeout, client) str
++aclose() void
 }
 RagPipeline --> HybridRetriever : "uses"
 RagPipeline --> Reranker : "uses"
@@ -398,18 +399,19 @@ OllamaProvider --> ProviderClient : "implements"
 - [hybrid_retriever.py:14-145](file://safe4ai-pilot/app/components/hybrid_retriever.py#L14-L145)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
 - [provider_clients.py:24-35](file://safe4ai-pilot/app/services/provider_clients.py#L24-L35)
-- [provider_clients.py:52-239](file://safe4ai-pilot/app/services/provider_clients.py#L52-L239)
+- [provider_clients.py:52-247](file://safe4ai-pilot/app/services/provider_clients.py#L52-L247)
 
 Practical examples:
 - Dependency injection: Constructed with retriever, reranker, provider_client, and settings.
 - External integrations: Calls provider clients for embeddings and generation; Qdrant for vector storage.
 - Error handling: Sets document status to failed for empty content; guards against low OCR confidence.
 - Provider pluggability: Supports OpenAI-compatible and Ollama providers through unified interface.
+- Connection management: Both providers maintain persistent httpx.AsyncClient instances for improved performance.
 
 **Section sources**
 - [rag_pipeline.py:77-345](file://safe4ai-pilot/app/services/rag_pipeline.py#L77-L345)
 - [test_rag_pipeline.py:48-264](file://safe4ai-pilot/tests/test_rag_pipeline.py#L48-L264)
-- [provider_clients.py:52-239](file://safe4ai-pilot/app/services/provider_clients.py#L52-L239)
+- [provider_clients.py:52-247](file://safe4ai-pilot/app/services/provider_clients.py#L52-L247)
 
 ### Provider Clients
 Responsibilities:
@@ -419,6 +421,7 @@ Responsibilities:
 - Handle provider-specific differences in API responses.
 - Implement content coercion for structured payloads.
 - Support multimodal image description with base64-encoded images.
+- **Updated** Manage persistent httpx.AsyncClient instances for connection pooling and resource efficiency.
 
 Key behaviors:
 - Define Protocol interfaces for ChatClient, EmbeddingClient, and VisionClient.
@@ -427,8 +430,10 @@ Key behaviors:
 - Provide fallback mechanisms for different provider capabilities.
 - Implement standardized message format handling with content coercion.
 - Enable multimodal capabilities with base64-encoded image processing.
+- **Updated** Maintain single httpx.AsyncClient instance for lifetime of provider for improved connection pooling.
+- **Updated** Require aclose() method to properly release connection pool resources.
 
-**Updated** The provider clients module introduces a comprehensive pluggable architecture with enhanced message format handling, content coercion for structured payloads, and advanced multimodal capabilities. The OpenAICompatibleProvider now includes sophisticated content coercion that extracts text from structured responses, while the OllamaProvider has been updated to use the modern /api/chat endpoint with proper system prompt handling.
+**Updated** The provider clients module introduces a comprehensive pluggable architecture with enhanced message format handling, content coercion for structured payloads, and advanced multimodal capabilities. Both OpenAICompatibleProvider and OllamaProvider now maintain persistent httpx.AsyncClient instances for the lifetime of the provider instance, significantly improving connection pooling efficiency and reducing resource overhead. The OllamaProvider includes sophisticated connection management with proper resource cleanup through the aclose() method.
 
 ```mermaid
 classDiagram
@@ -445,15 +450,18 @@ class ChatResult {
 class ChatClient {
 <<interface>>
 +chat(system_prompt, user_prompt) ChatResult
++aclose() void
 }
 class EmbeddingClient {
 <<interface>>
 +embed_query(query) list[float]
 +embed_documents(texts) list[list[float]]
++aclose() void
 }
 class VisionClient {
 <<interface>>
 +describe_image(prompt, image_b64) str
++aclose() void
 }
 class OpenAICompatibleProvider {
 +chat(system_prompt, user_prompt) ChatResult
@@ -461,6 +469,7 @@ class OpenAICompatibleProvider {
 +embed_documents(texts) list[list[float]]
 +describe_image(prompt, image_b64) str
 +_coerce_content(value) str
++aclose() void
 }
 class OllamaProvider {
 +chat(system_prompt, user_prompt) ChatResult
@@ -468,6 +477,7 @@ class OllamaProvider {
 +embed_documents(texts) list[list[float]]
 +describe_image(prompt, image_b64) str
 +chat_raw(prompt, timeout, client) str
++aclose() void
 }
 ChatClient <|.. OpenAICompatibleProvider
 ChatClient <|.. OllamaProvider
@@ -480,20 +490,21 @@ VisionClient <|.. OllamaProvider
 **Diagram sources**
 - [provider_clients.py:10-35](file://safe4ai-pilot/app/services/provider_clients.py#L10-L35)
 - [provider_clients.py:24-35](file://safe4ai-pilot/app/services/provider_clients.py#L24-L35)
-- [provider_clients.py:52-239](file://safe4ai-pilot/app/services/provider_clients.py#L52-L239)
+- [provider_clients.py:52-247](file://safe4ai-pilot/app/services/provider_clients.py#L52-L247)
 
 Practical examples:
 - Interface usage: Both OpenAICompatibleProvider and OllamaProvider implement the same protocols.
 - Usage extraction: _usage_from_openai() handles different provider usage field names.
 - Content coercion: _coerce_content() extracts text from structured responses for robust processing.
 - Multimodal capabilities: describe_image() supports base64-encoded image processing with standardized payload formats.
-- Fallback implementations: OllamaProvider includes legacy API support for embeddings.
+- **Updated** Connection pooling: Both providers maintain persistent httpx.AsyncClient instances for improved performance.
+- **Updated** Resource management: Providers must be closed with aclose() to release connection pools.
 - Configuration: RuntimeConfig.build_provider() selects the appropriate provider based on settings.
 
 **Section sources**
-- [provider_clients.py:1-239](file://safe4ai-pilot/app/services/provider_clients.py#L1-L239)
+- [provider_clients.py:1-247](file://safe4ai-pilot/app/services/provider_clients.py#L1-L247)
 - [runtime_config.py:132-172](file://safe4ai-pilot/app/services/runtime_config.py#L132-L172)
-- [test_provider_clients.py:10-50](file://safe4ai-pilot/tests/test_provider_clients.py#L10-L50)
+- [test_provider_clients.py:10-80](file://safe4ai-pilot/tests/test_provider_clients.py#L10-L80)
 
 ### Chat Finalizer
 Responsibilities:
@@ -806,11 +817,11 @@ Practical examples:
 - Shared models: PrivateAIState and related models unify state across services.
 - Database models: Sessions, Documents, DocumentChunks, SemanticCache, Jobs define persistence contracts.
 - Component coupling: RagPipeline depends on HybridRetriever and Reranker; ConversationManager depends on DB models and prompts; SemanticCache depends on Postgres vector extension.
-- Provider architecture: Enhanced pluggable provider system allows switching between OpenAI-compatible APIs and Ollama deployments with standardized message format handling.
+- Provider architecture: Enhanced pluggable provider system allows switching between OpenAI-compatible APIs and Ollama deployments with standardized message format handling and persistent connection management.
 - **New** Dedicated service dependencies: CostService depends on ProviderUsage and CostTracker; DocumentService depends on QdrantClient; UserService depends on SQLAlchemy ORM models; StatsService depends on Document and DocumentChunk models; SettingsService depends on provider settings and runtime configuration.
 - **New** Cross-service integration: SettingsService integrates with CostTracker for live cost statistics; UserService integrates with AuditLog and AgentRun models; DocumentService integrates with HybridRetriever for BM25 pruning.
 
-**Updated** The dependency structure now includes five new dedicated service modules with focused responsibilities and clear integration points. The cost service integrates with provider clients and cost tracking, document service integrates with Qdrant and HybridRetriever, user service integrates with audit and session models, stats service provides shared aggregations, and settings service integrates with provider settings and runtime configuration.
+**Updated** The dependency structure now includes five new dedicated service modules with focused responsibilities and clear integration points. The cost service integrates with provider clients and cost tracking, document service integrates with Qdrant and HybridRetriever, user service integrates with audit and session models, stats service provides shared aggregations, and settings service integrates with provider settings and runtime configuration. The provider clients now feature persistent connection management dependencies.
 
 ```mermaid
 graph LR
@@ -857,7 +868,7 @@ STATS --> DBM
 - [conversation.py:13-18](file://safe4ai-pilot/app/services/conversation.py#L13-L18)
 - [rag_pipeline.py:20-53](file://safe4ai-pilot/app/services/rag_pipeline.py#L20-L53)
 - [semantic_cache.py:15-25](file://safe4ai-pilot/app/services/semantic_cache.py#L15-L25)
-- [provider_clients.py:1-239](file://safe4ai-pilot/app/services/provider_clients.py#L1-L239)
+- [provider_clients.py:1-247](file://safe4ai-pilot/app/services/provider_clients.py#L1-L247)
 - [chat_finalizer.py:1-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L1-L71)
 - [runtime_config.py:1-172](file://safe4ai-pilot/app/services/runtime_config.py#L1-L172)
 - [cost_service.py:13-15](file://safe4ai-pilot/app/services/cost_service.py#L13-L15)
@@ -877,12 +888,14 @@ STATS --> DBM
 - Semantic cache: Reduces repeated work for similar queries; tune threshold to balance latency and accuracy.
 - Session size limits: ConversationManager prevents oversized state serialization.
 - Provider efficiency: Enhanced pluggable providers allow selecting optimal inference backends.
+- **New** Persistent connections: Both OpenAICompatibleProvider and OllamaProvider maintain httpx.AsyncClient instances for the lifetime of the provider, significantly improving connection pooling efficiency.
+- **New** Resource management: Proper aclose() method usage ensures connection pools are released when providers are discarded.
 - **New** Cost estimation: CostService uses efficient token estimation algorithms to avoid expensive provider calls.
 - **New** Live caching: SettingsService caches provider models and statistics to reduce external API calls.
 - **New** Best-effort operations: DocumentService and StatsService use defensive programming to prevent failures from blocking operations.
 - **New** Atomic operations: ChatFinalizer ensures all related records are updated consistently through single commit transactions.
 
-**Updated** Performance improvements include dedicated cost estimation algorithms, live metadata caching for provider models and statistics, defensive programming in document and stats services, and atomic transaction operations for enhanced data consistency. The new services leverage efficient algorithms and caching strategies to minimize external dependencies and database operations.
+**Updated** Performance improvements include dedicated cost estimation algorithms, live metadata caching for provider models and statistics, defensive programming in document and stats services, atomic transaction operations for enhanced data consistency, and persistent connection management in provider clients. The new persistent connection pattern significantly reduces connection overhead and improves resource utilization across all provider operations.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -895,13 +908,15 @@ Common issues and resolutions:
 - Semantic cache misses: Increase threshold or populate cache with representative queries.
 - Provider configuration errors: Check runtime configuration for correct provider settings.
 - Usage tracking issues: Verify provider supports usage reporting for accurate cost tracking.
+- **New** Connection pool exhaustion: Ensure providers are properly closed with aclose() method to release connection pools.
+- **New** Resource leaks: Monitor provider lifecycle to prevent httpx.AsyncClient instances from accumulating.
 - **New** Cost ceiling exceeded: CostCeilingExceeded raised when daily/monthly limits reached; check configuration and usage patterns.
 - **New** Document cleanup failures: Qdrant deletion and BM25 pruning use best-effort operations; check external service connectivity.
 - **New** User deactivation issues: Cascade operations require manual database commit; ensure proper transaction handling.
 - **New** Settings validation errors: Three-stage pipeline provides detailed field validation errors; check provider availability and model configurations.
 - **New** Settings probe failures: Provider probing handles external service unavailability; verify network connectivity and credentials.
 
-**Updated** Additional troubleshooting guidance for the five new dedicated services, including cost ceiling management, document lifecycle operations, user deactivation procedures, settings validation, and provider probing. Each service includes specific error handling patterns and recovery strategies.
+**Updated** Additional troubleshooting guidance for the five new dedicated services, including persistent connection management for provider clients, resource leak prevention, and proper lifecycle management. The new persistent connection pattern requires careful attention to provider disposal to prevent connection pool exhaustion and resource leaks.
 
 **Section sources**
 - [conversation.py:44-70](file://safe4ai-pilot/app/services/conversation.py#L44-L70)
@@ -916,24 +931,24 @@ Common issues and resolutions:
 - [settings_service.py:179-259](file://safe4ai-pilot/app/services/settings_service.py#L179-L259)
 
 ## Conclusion
-The service layer cleanly separates concerns across conversation management, ingestion, RAG orchestration, semantic caching, provider management, and dedicated business services. It integrates external systems via well-defined interfaces, centralizes configuration, and ensures robust error handling and lifecycle management. The modular design enables easy testing, extension, and deployment alongside FastAPI and LangGraph. The enhanced pluggable provider architecture with standardized message format handling, content coercion, and multimodal capabilities significantly improves flexibility, reliability, and performance across all chat operations.
+The service layer cleanly separates concerns across conversation management, ingestion, RAG orchestration, semantic caching, provider management, and dedicated business services. It integrates external systems via well-defined interfaces, centralizes configuration, and ensures robust error handling and lifecycle management. The modular design enables easy testing, extension, and deployment alongside FastAPI and LangGraph. The enhanced pluggable provider architecture with standardized message format handling, content coercion, and persistent connection management significantly improves flexibility, reliability, and performance across all chat operations.
 
-**Updated** The enhanced service layer now provides a robust foundation for multiple inference providers with comprehensive message format handling, content coercion for structured payloads, and advanced multimodal capabilities while maintaining consistent performance and reliability. The addition of five new dedicated services (cost management, document lifecycle, user management, statistics, and settings) significantly improves separation of concerns, testability, and maintainability. The enhanced pluggable provider architecture with standardized message format handling, content coercion, and multimodal capabilities significantly improves flexibility, reliability, and performance across all chat operations.
+**Updated** The enhanced service layer now provides a robust foundation for multiple inference providers with comprehensive message format handling, content coercion for structured payloads, and advanced multimodal capabilities while maintaining consistent performance and reliability. The addition of five new dedicated services (cost management, document lifecycle, user management, statistics, and settings) significantly improves separation of concerns, testability, and maintainability. The major optimization with persistent httpx.AsyncClient instances in provider clients dramatically improves connection pooling efficiency and resource management, while the enhanced pluggable provider architecture with standardized message format handling, content coercion, and persistent connection management significantly improves flexibility, reliability, and performance across all chat operations.
 
 ## Appendices
 
 ### Service Composition Examples
 - Chat endpoint composes ConversationManager, LangGraph, and RagPipeline to produce streaming or blocking responses with improved transactional persistence.
-- Ingestion service composes RagPipeline with HybridRetriever and Reranker to process documents asynchronously using enhanced pluggable providers.
+- Ingestion service composes RagPipeline with HybridRetriever and Reranker to process documents asynchronously using enhanced pluggable providers with persistent connections.
 - SemanticCache wraps provider clients and embedding operations to accelerate query resolution.
-- Enhanced provider clients enable seamless switching between OpenAI-compatible APIs and local Ollama deployments with standardized message format handling.
+- Enhanced provider clients enable seamless switching between OpenAI-compatible APIs and local Ollama deployments with standardized message format handling and persistent connection management.
 - **New** Cost service integrates with chat finalization to enforce usage limits and track expenses.
 - **New** Document service provides cleanup operations for document lifecycle management.
 - **New** User service enables user deactivation with comprehensive cascade operations.
 - **New** Stats service offers shared aggregations for system monitoring and reporting.
 - **New** Settings service implements comprehensive configuration management with three-stage validation.
 
-**Updated** Service composition now includes five new dedicated services with focused responsibilities and clear integration points. The cost service enhances chat operations with usage tracking, document service supports document lifecycle operations, user service enables user management workflows, stats service provides shared analytics, and settings service implements comprehensive configuration management.
+**Updated** Service composition now includes five new dedicated services with focused responsibilities and clear integration points. The cost service enhances chat operations with usage tracking, document service supports document lifecycle operations, user service enables user management workflows, stats service provides shared analytics, and settings service implements comprehensive configuration management. The provider clients now feature persistent connection management for improved performance across all service compositions.
 
 **Section sources**
 - [chat_routes.py:115-251](file://safe4ai-pilot/app/api/chat_routes.py#L115-L251)
@@ -948,14 +963,15 @@ The service layer cleanly separates concerns across conversation management, ing
 - [settings_service.py:46-611](file://safe4ai-pilot/app/services/settings_service.py#L46-L611)
 
 ### Dependency Injection Patterns
-- Constructor injection: RagPipeline, SemanticCache, HybridRetriever accept required dependencies (URLs, models, sessions, enhanced provider clients).
+- Constructor injection: RagPipeline, SemanticCache, HybridRetriever accept required dependencies (URLs, models, sessions, enhanced provider clients with persistent connections).
 - Application state: FastAPI lifespan builds and stores shared instances (HybridRetriever, Reranker, LangGraph, Enhanced ProviderClient) for reuse.
-- Provider configuration: RuntimeConfig.build_provider() creates appropriate provider instances based on configuration with enhanced capabilities.
+- Provider configuration: RuntimeConfig.build_provider() creates appropriate provider instances based on configuration with enhanced capabilities and persistent connection management.
 - **New** Service composition: Dedicated services are instantiated with specific dependencies and integrated through constructor injection.
 - **New** Cross-service dependencies: SettingsService depends on CostTracker for live statistics; UserService depends on audit models; DocumentService depends on HybridRetriever.
 - **New** Configuration injection: Services receive configuration through constructor parameters or centralized configuration loading.
+- **New** Resource management: Provider clients are managed with proper lifecycle through aclose() method calls.
 
-**Updated** Dependency injection patterns now include five new dedicated services with focused constructor parameters and clear dependency relationships. The new services follow consistent patterns with centralized configuration loading and cross-service integration through constructor injection.
+**Updated** Dependency injection patterns now include five new dedicated services with focused constructor parameters and clear dependency relationships. The new services follow consistent patterns with centralized configuration loading, cross-service integration through constructor injection, and proper resource management for persistent provider connections.
 
 **Section sources**
 - [rag_pipeline.py:34-75](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L75)
@@ -971,25 +987,26 @@ The service layer cleanly separates concerns across conversation management, ing
 
 ### Service Lifecycle and Resource Cleanup
 - ConversationManager: Per-request session creation and persistence; asynchronous summarization does not block.
-- Ingestion service: Owns DB session; commits or rolls back on completion; closes session in finally; uses enhanced provider clients for embeddings.
-- RAG pipeline: Manages temporary files for OCR; relies on enhanced provider clients for embeddings and generation with standardized message format handling; updates BM25 index after ingestion.
+- Ingestion service: Owns DB session; commits or rolls back on completion; closes session in finally; uses enhanced provider clients for embeddings with persistent connections.
+- RAG pipeline: Manages temporary files for OCR; relies on enhanced provider clients for embeddings and generation with standardized message format handling and persistent connection management; updates BM25 index after ingestion.
 - Semantic cache: Performs embedding and SQL operations within controlled scopes; increments hit counters atomically.
-- Enhanced provider clients: Manage HTTP connections and handle provider-specific API differences with content coercion and multimodal capabilities.
+- Enhanced provider clients: Manage persistent HTTP connections and handle provider-specific API differences with content coercion and multimodal capabilities. **Updated** Both providers maintain httpx.AsyncClient instances for the lifetime of the provider and require aclose() method for proper resource cleanup.
 - **New** Cost service: Stateless service with database session injection; uses CostTracker for cost calculations and statistics.
 - **New** Document service: Stateless service with QdrantClient instantiation; provides cleanup operations with proper error handling.
 - **New** User service: Database session dependent service with comprehensive cascade operations; requires manual transaction commit.
 - **New** Stats service: Stateless service with SQLAlchemy aggregation queries; returns dictionary results for UI consumption.
 - **New** Settings service: Stateless service with live metadata caching; manages thread-safe cache access with locks.
 - **New** Transaction management: ChatFinalizer ensures atomic persistence through single commit transactions; UserService requires manual commit after cascade operations.
+- **New** Resource lifecycle: Provider clients must be explicitly closed with aclose() method to release persistent connection pools.
 
-**Updated** Service lifecycle management now includes five new dedicated services with clear resource management patterns. The new services follow consistent patterns with database session injection, external service instantiation, and proper error handling. The settings service includes thread-safe caching mechanisms, while user service requires explicit transaction management for cascade operations.
+**Updated** Service lifecycle management now includes five new dedicated services with clear resource management patterns. The new services follow consistent patterns with database session injection, external service instantiation, proper error handling, and persistent connection management. The settings service includes thread-safe caching mechanisms, while user service requires explicit transaction management for cascade operations. The provider clients now feature persistent connection management with mandatory resource cleanup through the aclose() method.
 
 **Section sources**
 - [conversation.py:75-122](file://safe4ai-pilot/app/services/conversation.py#L75-L122)
 - [ingestion_service.py:33-167](file://safe4ai-pilot/app/services/ingestion_service.py#L33-L167)
 - [rag_pipeline.py:187-345](file://safe4ai-pilot/app/services/rag_pipeline.py#L187-L345)
 - [semantic_cache.py:41-104](file://safe4ai-pilot/app/services/semantic_cache.py#L41-L104)
-- [provider_clients.py:52-239](file://safe4ai-pilot/app/services/provider_clients.py#L52-L239)
+- [provider_clients.py:52-247](file://safe4ai-pilot/app/services/provider_clients.py#L52-L247)
 - [chat_finalizer.py:31-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L31-L71)
 - [cost_service.py:13-15](file://safe4ai-pilot/app/services/cost_service.py#L13-L15)
 - [document_service.py:10-11](file://safe4ai-pilot/app/services/document_service.py#L10-L11)

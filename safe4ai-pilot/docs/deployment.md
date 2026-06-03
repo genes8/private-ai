@@ -20,10 +20,17 @@ Minimum practical pilot machine:
   models are swapped; 16 GB+ VRAM is preferred for smoother operation.
 - **CPU-only path:** 28 GB RAM minimum. Expect local generation to be roughly
   5-10x slower; Qwen 3.5 9B Q4 should be treated as an interactive-demo fallback,
-  not a high-throughput production setting.
+not a high-throughput production setting.
 
-`OLLAMA_KEEP_ALIVE=24h` is set in `docker-compose.yml` to keep the chat model warm
-between requests. The app also pre-warms Ollama on startup by calling
+Settings responses include a small per-process live metadata cache for values
+such as model lists and daily cost. In multi-worker deployments, each worker can
+serve its own cached live metadata for up to 60 seconds; persisted settings are
+still read from PostgreSQL on each request. Use a single app worker for strict
+operator-console consistency, or replace the cache with a shared store in larger
+deployments.
+
+`OLLAMA_KEEP_ALIVE=24h` is set in `docker-compose.ollama.yml` to keep the chat model warm
+between requests when the local Ollama overlay is enabled. The app also pre-warms Ollama on startup by calling
 `/api/generate` with an empty prompt.
 
 ## Compose startup
@@ -36,10 +43,10 @@ between requests. The app also pre-warms Ollama on startup by calling
 
    Then set `SECRET_KEY` in `.env` to a strong random 64-character hex string.
 
-2. Start the stack:
+2. Start the stack. For the local Ollama profile, include the Ollama overlay:
 
    ```bash
-   docker compose up --build
+   docker compose -f docker-compose.yml -f docker-compose.ollama.yml up --build
    ```
 
 3. Wait for `ollama-init` to finish pulling:
@@ -106,6 +113,15 @@ detect-secrets scan --baseline .secrets.baseline
 
 `pip-audit` is intentionally part of CI. If it fails, update vulnerable pins or
 record a time-limited vulnerability exception before accepting the risk.
+
+## Air-gapped deployments
+
+Use `docs/air-gap-runbook.md` for mirrored image/model export, offline import,
+no-outbound checks, and the static verifier:
+
+```bash
+python scripts/verify_airgap_package.py
+```
 
 ## Backup and deletion process
 

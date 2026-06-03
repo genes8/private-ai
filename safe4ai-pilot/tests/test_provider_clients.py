@@ -77,3 +77,35 @@ async def test_ollama_provider_chat_handles_null_message_with_response_fallback(
         result = await provider.chat("", "hello")
 
     assert result.content == "fallback text"
+
+
+@pytest.mark.asyncio
+async def test_ollama_embed_documents_does_not_fallback_on_model_error() -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/api/embed":
+            return httpx.Response(
+                400,
+                json={"error": "model not found"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"embedding": [1.0, 2.0]},
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OllamaProvider(
+            base_url="http://ollama.test",
+            chat_model="qwen",
+            embedding_model="missing-model",
+            vision_model="vision",
+            client=client,
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            await provider.embed_documents(["hello"])
+
+    assert seen_paths == ["/api/embed"]

@@ -9,10 +9,18 @@
 - [config.py](file://safe4ai-pilot/app/config.py)
 - [__init__.py](file://safe4ai-pilot/app/db/__init__.py)
 - [runtime_config.py](file://safe4ai-pilot/app/services/runtime_config.py)
+- [app_config_store.py](file://safe4ai-pilot/app/services/app_config_store.py)
 - [migrate.py](file://safe4ai-pilot/scripts/migrate.py)
 - [alembic.ini](file://safe4ai-pilot/alembic.ini)
 - [test_startup_schema.py](file://safe4ai-pilot/tests/test_startup_schema.py)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added documentation for the new `_ensure_tier_config()` function that provides automatic tier configuration seeding
+- Updated the startup migration flow to include tier configuration management
+- Enhanced troubleshooting guidance with tier configuration scenarios
+- Added new section covering tier configuration safety rules and environment variable controls
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -26,7 +34,7 @@
 9. [Conclusion](#conclusion)
 
 ## Introduction
-This document explains the Startup Schema Management system in the Safe4AI Private AI pilot application. It covers how the application ensures database schema integrity and readiness at startup, including PostgreSQL schema creation, vector extension activation, Qdrant collection provisioning, foreign key adjustments, and security checks. It also describes the separation between traditional Alembic migrations and runtime schema fixes, and how these mechanisms work together to maintain a robust and resilient system.
+This document explains the Startup Schema Management system in the Safe4AI Private AI pilot application. It covers how the application ensures database schema integrity and readiness at startup, including PostgreSQL schema creation, vector extension activation, Qdrant collection provisioning, foreign key adjustments, security checks, and enhanced startup configuration management with automatic tier configuration seeding for fresh deployments. The system now includes intelligent tier configuration management that automatically sets evaluation tier defaults while avoiding conflicts with existing configurations.
 
 ## Project Structure
 The schema management spans several modules:
@@ -34,6 +42,7 @@ The schema management spans several modules:
 - Database models and SQLAlchemy base
 - Alembic migration environment
 - Runtime configuration for embedding dimensions
+- Application configuration store with tier management
 - Tests validating startup behavior
 
 ```mermaid
@@ -43,11 +52,12 @@ A --> C["db/models.py<br/>SQLAlchemy declarative models"]
 A --> D["db/__init__.py<br/>Engine and session factory"]
 B --> E["services/runtime_config.py<br/>Embedding dimension mapping"]
 B --> F["config.py<br/>Settings and environment"]
-G["db/migrations/env.py<br/>Alembic environment"] --> C
-H["scripts/migrate.py<br/>Migration runner"] --> G
-I["alembic.ini<br/>Alembic configuration"] --> G
-J["tests/test_startup_schema.py<br/>Startup behavior tests"] --> A
-J --> B
+B --> G["services/app_config_store.py<br/>Tier configuration management"]
+H["db/migrations/env.py<br/>Alembic environment"] --> C
+I["scripts/migrate.py<br/>Migration runner"] --> H
+J["alembic.ini<br/>Alembic configuration"] --> H
+K["tests/test_startup_schema.py<br/>Startup behavior tests"] --> A
+K --> B
 ```
 
 **Diagram sources**
@@ -56,6 +66,7 @@ J --> B
 - [models.py:1-210](file://safe4ai-pilot/app/db/models.py#L1-L210)
 - [__init__.py:1-22](file://safe4ai-pilot/app/db/__init__.py#L1-L22)
 - [runtime_config.py:22-35](file://safe4ai-pilot/app/services/runtime_config.py#L22-L35)
+- [app_config_store.py:15-32](file://safe4ai-pilot/app/services/app_config_store.py#L15-L32)
 - [config.py:7-51](file://safe4ai-pilot/app/config.py#L7-L51)
 - [env.py:1-51](file://safe4ai-pilot/app/db/migrations/env.py#L1-L51)
 - [migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
@@ -68,6 +79,7 @@ J --> B
 - [models.py:1-210](file://safe4ai-pilot/app/db/models.py#L1-L210)
 - [__init__.py:1-22](file://safe4ai-pilot/app/db/__init__.py#L1-L22)
 - [runtime_config.py:22-35](file://safe4ai-pilot/app/services/runtime_config.py#L22-L35)
+- [app_config_store.py:15-32](file://safe4ai-pilot/app/services/app_config_store.py#L15-L32)
 - [config.py:7-51](file://safe4ai-pilot/app/config.py#L7-L51)
 - [env.py:1-51](file://safe4ai-pilot/app/db/migrations/env.py#L1-L51)
 - [migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
@@ -75,21 +87,23 @@ J --> B
 - [test_startup_schema.py:10-26](file://safe4ai-pilot/tests/test_startup_schema.py#L10-L26)
 
 ## Core Components
-- Startup migrations orchestrator: Executes additive DDL and data validations on every boot to handle rolling upgrades without full Alembic migrations.
+- Startup migrations orchestrator: Executes additive DDL and data validations on every boot to handle rolling upgrades without full Alembic migrations, including automatic tier configuration seeding.
 - Database models: Define tables, columns, enums, and relationships used by SQLAlchemy.
 - Alembic environment: Configures migration targets and database connectivity.
 - Runtime configuration: Provides embedding model dimension mapping for vector collections.
-- Application lifecycle: Ensures PostgreSQL vector extension, creates schema, runs startup migrations, and initializes runtime components.
+- Application configuration store: Manages tier configuration keys (tier, max_seats, monthly_query_limit, tier_expires_at) with encryption and type coercion.
+- Application lifecycle: Ensures PostgreSQL vector extension, creates schema, runs startup migrations, initializes runtime components, and manages tier configuration.
 
 **Section sources**
 - [startup_migrations.py:27-37](file://safe4ai-pilot/app/startup_migrations.py#L27-L37)
 - [models.py:52-210](file://safe4ai-pilot/app/db/models.py#L52-L210)
 - [env.py:16-18](file://safe4ai-pilot/app/db/migrations/env.py#L16-L18)
 - [runtime_config.py:22-35](file://safe4ai-pilot/app/services/runtime_config.py#L22-L35)
+- [app_config_store.py:15-32](file://safe4ai-pilot/app/services/app_config_store.py#L15-L32)
 - [main.py:35-55](file://safe4ai-pilot/app/main.py#L35-L55)
 
 ## Architecture Overview
-The startup process follows a strict order to guarantee schema readiness and operational safety:
+The startup process follows a strict order to guarantee schema readiness, operational safety, and proper tier configuration:
 1. Activate PostgreSQL vector extension
 2. Create all tables defined by SQLAlchemy models
 3. Run startup migrations for additive schema fixes and data integrity
@@ -109,6 +123,7 @@ Lifespan->>Engine : "Execute CREATE EXTENSION vector"
 Lifespan->>DB : "Create all tables from models"
 Lifespan->>Migr : "run_startup_migrations()"
 Migr->>DB : "Add columns, adjust FKs, insert defaults"
+Migr->>DB : "Seed tier configuration for fresh deployments"
 Migr->>Qdrant : "Ensure collection exists with correct dimension"
 Lifespan->>App : "Initialize runtime components"
 Lifespan-->>App : "Yield to serve requests"
@@ -121,12 +136,13 @@ Lifespan-->>App : "Yield to serve requests"
 
 ## Detailed Component Analysis
 
-### Startup Migrations Orchestrator
+### Enhanced Startup Migrations Orchestrator
 Responsibilities:
 - Add missing columns to existing tables
 - Adjust foreign keys and defaults for referential integrity
 - Ensure a sentinel deleted user record exists
 - Provision Qdrant collection with correct vector dimension
+- **Seed tier configuration for fresh deployments while avoiding conflicts**
 - Warn or fail on default credentials depending on HTTPS enforcement
 - Validate semantic cache dimension compatibility
 
@@ -135,6 +151,7 @@ Key behaviors:
 - Uses transactional connections to ensure atomicity per statement group
 - Logs warnings instead of failing for non-critical issues
 - Enforces strict failure when vector dimension mismatches existing collection
+- **Intelligently seeds evaluation tier defaults only for completely fresh deployments**
 
 ```mermaid
 flowchart TD
@@ -143,7 +160,8 @@ DocsCols --> UserCols["_ensure_user_columns()"]
 UserCols --> DocFKs["_ensure_document_foreign_keys()"]
 DocFKs --> AgentFK["_ensure_agentrun_fk()"]
 AgentFK --> DeletedUser["_ensure_deleted_user()"]
-DeletedUser --> QdrantCheck["_ensure_qdrant_collection()"]
+DeletedUser --> TierConfig["_ensure_tier_config()"]
+TierConfig --> QdrantCheck["_ensure_qdrant_collection()"]
 QdrantCheck --> CacheDim["_ensure_semantic_cache_dimension()"]
 CacheDim --> Credentials["_warn_default_credentials()"]
 Credentials --> End(["Ready"])
@@ -155,9 +173,10 @@ Credentials --> End(["Ready"])
 - [startup_migrations.py:65-80](file://safe4ai-pilot/app/startup_migrations.py#L65-L80)
 - [startup_migrations.py:107-122](file://safe4ai-pilot/app/startup_migrations.py#L107-L122)
 - [startup_migrations.py:82-105](file://safe4ai-pilot/app/startup_migrations.py#L82-L105)
-- [startup_migrations.py:124-175](file://safe4ai-pilot/app/startup_migrations.py#L124-L175)
-- [startup_migrations.py:177-195](file://safe4ai-pilot/app/startup_migrations.py#L177-L195)
-- [startup_migrations.py:197-224](file://safe4ai-pilot/app/startup_migrations.py#L197-L224)
+- [startup_migrations.py:127-165](file://safe4ai-pilot/app/startup_migrations.py#L127-L165)
+- [startup_migrations.py:168-219](file://safe4ai-pilot/app/startup_migrations.py#L168-L219)
+- [startup_migrations.py:221-238](file://safe4ai-pilot/app/startup_migrations.py#L221-L238)
+- [startup_migrations.py:241-268](file://safe4ai-pilot/app/startup_migrations.py#L241-L268)
 
 **Section sources**
 - [startup_migrations.py:27-37](file://safe4ai-pilot/app/startup_migrations.py#L27-L37)
@@ -165,9 +184,54 @@ Credentials --> End(["Ready"])
 - [startup_migrations.py:65-80](file://safe4ai-pilot/app/startup_migrations.py#L65-L80)
 - [startup_migrations.py:82-105](file://safe4ai-pilot/app/startup_migrations.py#L82-L105)
 - [startup_migrations.py:107-122](file://safe4ai-pilot/app/startup_migrations.py#L107-L122)
-- [startup_migrations.py:124-175](file://safe4ai-pilot/app/startup_migrations.py#L124-L175)
-- [startup_migrations.py:177-195](file://safe4ai-pilot/app/startup_migrations.py#L177-L195)
-- [startup_migrations.py:197-224](file://safe4ai-pilot/app/startup_migrations.py#L197-L224)
+- [startup_migrations.py:127-165](file://safe4ai-pilot/app/startup_migrations.py#L127-L165)
+- [startup_migrations.py:168-219](file://safe4ai-pilot/app/startup_migrations.py#L168-L219)
+- [startup_migrations.py:221-238](file://safe4ai-pilot/app/startup_migrations.py#L221-L238)
+- [startup_migrations.py:241-268](file://safe4ai-pilot/app/startup_migrations.py#L241-L268)
+
+### Tier Configuration Management System
+The `_ensure_tier_config()` function provides intelligent tier configuration seeding for fresh deployments:
+
+**Safety Rules:**
+- **Never overwrites existing tier configuration** - Checks for any existing tier keys before seeding
+- **Environment variable control** - Supports `SAFE4AI_TIER_CONFIG_SKIP=1` to disable seeding for development
+- **Comprehensive key coverage** - Seeds all four tier-related keys: tier, max_seats, monthly_query_limit, tier_expires_at
+
+**Seeded Values (Evaluation tier):**
+- `tier=evaluation` - Sets evaluation tier as default
+- `max_seats=5` - Maximum 5 seats for evaluation
+- `monthly_query_limit=5000` - 5,000 queries per month
+- `tier_expires_at` - Not seeded (no expiry by default)
+
+**Implementation Details:**
+- Uses `load_app_config()` to detect existing configuration
+- Prevents conflicts with deployments that already have more than 5 users
+- Commits configuration changes atomically
+- Logs detailed information about seeding actions
+
+```mermaid
+flowchart TD
+Start(["_ensure_tier_config()"]) --> CheckEnv{"SAFE4AI_TIER_CONFIG_SKIP set?"}
+CheckEnv --> |Yes| Skip["Skip seeding"]
+CheckEnv --> |No| LoadConfig["load_app_config()"]
+LoadConfig --> CheckKeys{"Any tier keys exist?"}
+CheckKeys --> |Yes| Return["Return without changes"]
+CheckKeys --> |No| SeedConfig["Upsert tier configuration"]
+SeedConfig --> Commit["Commit to database"]
+Commit --> Log["Log seeding success"]
+Log --> End(["Complete"])
+```
+
+**Diagram sources**
+- [startup_migrations.py:127-165](file://safe4ai-pilot/app/startup_migrations.py#L127-L165)
+- [app_config_store.py:82-102](file://safe4ai-pilot/app/services/app_config_store.py#L82-L102)
+- [app_config_store.py:105-124](file://safe4ai-pilot/app/services/app_config_store.py#L105-L124)
+
+**Section sources**
+- [startup_migrations.py:127-165](file://safe4ai-pilot/app/startup_migrations.py#L127-L165)
+- [app_config_store.py:15-32](file://safe4ai-pilot/app/services/app_config_store.py#L15-L32)
+- [app_config_store.py:82-102](file://safe4ai-pilot/app/services/app_config_store.py#L82-L102)
+- [app_config_store.py:105-124](file://safe4ai-pilot/app/services/app_config_store.py#L105-L124)
 
 ### Database Models and Relationships
 The SQLAlchemy models define the canonical schema. Notable elements:
@@ -178,6 +242,7 @@ The SQLAlchemy models define the canonical schema. Notable elements:
 - Semantic cache with fixed 768-dimension vector column
 - Agent runs linked to sessions with cascade delete
 - Audit logs, ingestion jobs, human review queue, and application config
+- **Tier configuration keys (tier, max_seats, monthly_query_limit, tier_expires_at)** stored in AppConfig table
 
 ```mermaid
 classDiagram
@@ -243,7 +308,7 @@ class AuditLog {
 +String session_id
 +DateTime timestamp
 +String action_type
-+String query_text
++Text query_text
 +JSON response_metadata
 +Integer latency_ms
 +String model_used
@@ -347,18 +412,18 @@ Expected --> |Unknown| Fallback["Fallback to 768"]
 **Diagram sources**
 - [runtime_config.py:96-152](file://safe4ai-pilot/app/services/runtime_config.py#L96-L152)
 - [runtime_config.py:32-34](file://safe4ai-pilot/app/services/runtime_config.py#L32-L34)
-- [startup_migrations.py:133-175](file://safe4ai-pilot/app/startup_migrations.py#L133-L175)
+- [startup_migrations.py:177-219](file://safe4ai-pilot/app/startup_migrations.py#L177-L219)
 
 **Section sources**
 - [runtime_config.py:22-35](file://safe4ai-pilot/app/services/runtime_config.py#L22-L35)
 - [runtime_config.py:96-152](file://safe4ai-pilot/app/services/runtime_config.py#L96-L152)
-- [startup_migrations.py:133-175](file://safe4ai-pilot/app/startup_migrations.py#L133-L175)
+- [startup_migrations.py:177-219](file://safe4ai-pilot/app/startup_migrations.py#L177-L219)
 
 ### Application Lifecycle and Startup Order
 The FastAPI lifespan manager enforces a deterministic startup sequence:
 1. Create the vector extension in PostgreSQL
 2. Create all tables defined by SQLAlchemy models
-3. Run startup migrations for additive fixes
+3. Run startup migrations for additive fixes (including tier configuration seeding)
 4. Recover stuck ingestion jobs
 5. Build runtime components (retriever, reranker, graph)
 6. Warm provider and schedule cleanup
@@ -376,6 +441,7 @@ participant RT as "build_runtime_components"
 Lifespan->>Ext : "CREATE EXTENSION IF NOT EXISTS vector"
 Lifespan->>Meta : "Create tables"
 Lifespan->>SM : "Run startup migrations"
+SM->>SM : "_ensure_tier_config()"
 Lifespan->>Jobs : "Recover stuck jobs"
 Lifespan->>RT : "Build runtime components"
 ```
@@ -394,16 +460,19 @@ Lifespan->>RT : "Build runtime components"
   - Qdrant client for collection provisioning
   - Runtime configuration for embedding dimension resolution
   - Application settings for service URLs and enforcement flags
+  - **Application configuration store for tier configuration management**
 - Application startup depends on:
   - Database models for schema creation
   - Alembic environment for migration management
   - Runtime configuration for vector dimension mapping
+  - **App configuration store for tier configuration persistence**
 
 ```mermaid
 graph TB
 SM["startup_migrations.py"] --> DBInit["db/__init__.py<br/>engine, SessionLocal"]
 SM --> RC["services/runtime_config.py<br/>expected_vector_size"]
 SM --> CFG["config.py<br/>settings"]
+SM --> ACS["services/app_config_store.py<br/>load_app_config, upsert_app_config"]
 APP["main.py"] --> SM
 APP --> DBModels["db/models.py"]
 APP --> ALEnv["db/migrations/env.py"]
@@ -415,6 +484,7 @@ MIG["scripts/migrate.py"] --> ALEnv
 - [__init__.py:8-9](file://safe4ai-pilot/app/db/__init__.py#L8-L9)
 - [runtime_config.py:32-34](file://safe4ai-pilot/app/services/runtime_config.py#L32-L34)
 - [config.py:7-51](file://safe4ai-pilot/app/config.py#L7-L51)
+- [app_config_store.py:82-124](file://safe4ai-pilot/app/services/app_config_store.py#L82-L124)
 - [main.py:25-27](file://safe4ai-pilot/app/main.py#L25-L27)
 - [models.py:18](file://safe4ai-pilot/app/db/models.py#L18)
 - [env.py:6-18](file://safe4ai-pilot/app/db/migrations/env.py#L6-L18)
@@ -425,6 +495,7 @@ MIG["scripts/migrate.py"] --> ALEnv
 - [__init__.py:8-9](file://safe4ai-pilot/app/db/__init__.py#L8-L9)
 - [runtime_config.py:32-34](file://safe4ai-pilot/app/services/runtime_config.py#L32-L34)
 - [config.py:7-51](file://safe4ai-pilot/app/config.py#L7-L51)
+- [app_config_store.py:82-124](file://safe4ai-pilot/app/services/app_config_store.py#L82-L124)
 - [main.py:25-27](file://safe4ai-pilot/app/main.py#L25-L27)
 - [models.py:18](file://safe4ai-pilot/app/db/models.py#L18)
 - [env.py:6-18](file://safe4ai-pilot/app/db/migrations/env.py#L6-L18)
@@ -434,6 +505,7 @@ MIG["scripts/migrate.py"] --> ALEnv
 - Startup migrations execute additive DDL statements; batching within transactions minimizes overhead.
 - Qdrant collection creation is conditional and dimension-aware, avoiding unnecessary re-creations.
 - Runtime configuration caches known dimensions to avoid repeated lookups during startup.
+- **Tier configuration seeding is performed only once per fresh deployment and uses efficient database queries.**
 - Health checks for PostgreSQL and Qdrant are lightweight and avoid exposing sensitive details.
 
 ## Troubleshooting Guide
@@ -443,13 +515,16 @@ Common issues and resolutions:
 - Default credentials in use: Startup warns on default secrets; with HTTPS enforcement enabled, startup fails to prevent insecure operation.
 - Foreign key inconsistencies: Startup migrations normalize foreign keys and defaults to maintain referential integrity.
 - Semantic cache dimension mismatch: Startup migrations log a warning when the configured embedding model differs from the cache column dimension.
+- **Tier configuration conflicts: If any tier key already exists in app_config, seeding is skipped to avoid overwriting existing configurations.**
+- **Development environment seeding: Set `SAFE4AI_TIER_CONFIG_SKIP=1` to disable automatic seeding for development deployments.**
+- **Fresh deployment detection: Tier configuration is only seeded when no existing tier keys are found in the configuration store.**
 
 **Section sources**
-- [startup_migrations.py:124-175](file://safe4ai-pilot/app/startup_migrations.py#L124-L175)
-- [startup_migrations.py:197-224](file://safe4ai-pilot/app/startup_migrations.py#L197-L224)
-- [startup_migrations.py:177-195](file://safe4ai-pilot/app/startup_migrations.py#L177-L195)
+- [startup_migrations.py:127-165](file://safe4ai-pilot/app/startup_migrations.py#L127-L165)
+- [startup_migrations.py:168-219](file://safe4ai-pilot/app/startup_migrations.py#L168-L219)
+- [startup_migrations.py:241-268](file://safe4ai-pilot/app/startup_migrations.py#L241-L268)
 - [startup_migrations.py:65-80](file://safe4ai-pilot/app/startup_migrations.py#L65-L80)
 - [startup_migrations.py:107-122](file://safe4ai-pilot/app/startup_migrations.py#L107-L122)
 
 ## Conclusion
-The Startup Schema Management system combines SQLAlchemy model creation, PostgreSQL vector extension activation, and targeted runtime migrations to ensure schema readiness and integrity at every startup. By separating additive fixes from formal Alembic migrations and enforcing strict dimension checks for vector stores, the system remains robust across evolving configurations and deployment modes. Tests validate the startup order and critical behaviors, supporting reliable operations in development and production environments.
+The Startup Schema Management system combines SQLAlchemy model creation, PostgreSQL vector extension activation, targeted runtime migrations, and intelligent tier configuration management to ensure schema readiness and integrity at every startup. The enhanced system now includes automatic tier configuration seeding for fresh deployments while maintaining strict safety rules to avoid conflicts with existing configurations. By separating additive fixes from formal Alembic migrations and enforcing strict dimension checks for vector stores, the system remains robust across evolving configurations and deployment modes. The addition of environment variable controls allows for flexible deployment strategies, supporting both automated production deployments and manual development setups. Tests validate the startup order and critical behaviors, supporting reliable operations in development and production environments.

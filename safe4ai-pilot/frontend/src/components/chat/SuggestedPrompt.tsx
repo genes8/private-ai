@@ -10,6 +10,7 @@ interface Props {
 export default function SuggestedPrompt({ tag, icon, question, onSelect }: Props) {
   return (
     <button
+      type="button"
       onClick={onSelect}
       className="flex flex-col gap-1.5 rounded-xl border border-line bg-surface p-4 text-left hover:border-accent/30 transition-[border-color] duration-[120ms]"
     >

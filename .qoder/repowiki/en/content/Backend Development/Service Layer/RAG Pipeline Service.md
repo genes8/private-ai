@@ -25,10 +25,11 @@
 
 ## Update Summary
 **Changes Made**
-- Updated PII redaction implementation section to reflect new approach of processing all chunks and applying redaction rather than filtering them out
-- Added documentation for enhanced logging with audit capabilities
-- Updated security guards section to include new redact_pii configuration option
-- Enhanced content filtering documentation with new redaction methods and logging
+- Updated architecture documentation to reflect that all queries now flow through the LangGraph-based system instead of direct RagPipeline.query() calls
+- Removed references to direct query() method from RagPipeline class
+- Updated Core Components section to clarify that query processing is now graph-centric
+- Revised Architecture Overview to show the LangGraph StateGraph as the central orchestrator
+- Updated API and Streaming section to reflect the new graph-based query processing flow
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -43,17 +44,17 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document describes the Retrieval-Augmented Generation (RAG) pipeline service responsible for orchestrating hybrid search, retrieval augmentation, reranking, and answer synthesis. It explains how queries are decomposed, how multi-modal retrieval integrates dense vector search with sparse BM25 ranking, and how the system ensures safety and quality through content filtering, input/output guards, and adaptive routing. The document also covers streaming response generation, citation management, and source attribution, along with practical configuration, optimization tips, and troubleshooting guidance.
+This document describes the Retrieval-Augmented Generation (RAG) pipeline service responsible for orchestrating hybrid search, retrieval augmentation, reranking, and answer synthesis. The pipeline has evolved to use a LangGraph-based architecture where all queries flow through a stateful, streaming RAG orchestrated by a LangGraph StateGraph. Queries are decomposed, multi-modal retrieval integrates dense vector search with sparse BM25 ranking, and the system ensures safety and quality through content filtering, input/output guards, and adaptive routing. The document covers streaming response generation, citation management, and source attribution, along with practical configuration, optimization tips, and troubleshooting guidance.
 
-**Updated** The pipeline now implements an enhanced PII redaction approach during document ingestion that processes all chunks and applies redaction to sensitive content rather than filtering them out, with comprehensive logging for audit purposes.
+**Updated** The pipeline now implements a fully graph-centric query processing system where all queries are handled through the LangGraph StateGraph, eliminating direct RagPipeline.query() method calls and centralizing orchestration logic within the graph nodes.
 
 ## Project Structure
 The RAG pipeline spans backend services, components, agents, and frontend UI. The most relevant parts for this documentation are:
-- Services: ingestion and query orchestration
+- Services: ingestion and query orchestration through LangGraph
 - Components: hybrid retriever and reranker
 - Agents: query decomposition, adaptive routing, and graph orchestration
 - Security: input guard, content filter, and output filter
-- API: chat endpoints with streaming support
+- API: chat endpoints with streaming support using graph-based processing
 - Models and configuration: typed state, database models, and runtime settings
 - Frontend: streaming UI indicators
 
@@ -66,7 +67,7 @@ subgraph "API Layer"
 Routes["chat_routes.py"]
 Settings["settings_routes.py"]
 end
-subgraph "Orchestration"
+subgraph "Graph Orchestration"
 Graph["graph.py"]
 Conv["conversation.py"]
 end
@@ -79,7 +80,7 @@ subgraph "Security & Guards"
 InGuard["input_guard.py"]
 CFilter["content_filter.py"]
 OutFilter["output_filter.py"]
-end
+End
 subgraph "Services"
 RAG["rag_pipeline.py"]
 Ingest["ingestion_service.py"]
@@ -104,8 +105,6 @@ Graph --> CFilter
 Graph --> OutFilter
 Graph --> Conv
 Graph --> RAG
-RAG --> Retriever
-RAG --> Rerank
 RAG --> CFG
 RAG --> DB
 Ingest --> RAG
@@ -114,17 +113,17 @@ TPL -.-> Graph
 ```
 
 **Diagram sources**
-- [chat_routes.py:1-251](file://safe4ai-pilot/app/api/chat_routes.py#L1-L251)
-- [graph.py:1-352](file://safe4ai-pilot/app/agents/graph.py#L1-L352)
+- [chat_routes.py:1-361](file://safe4ai-pilot/app/api/chat_routes.py#L1-L361)
+- [graph.py:1-342](file://safe4ai-pilot/app/agents/graph.py#L1-L342)
 - [hybrid_retriever.py:1-145](file://safe4ai-pilot/app/components/hybrid_retriever.py#L1-L145)
 - [reranker.py:1-36](file://safe4ai-pilot/app/components/reranker.py#L1-L36)
 - [query_decomposer.py:1-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L1-L41)
 - [input_guard.py:1-49](file://safe4ai-pilot/app/security/input_guard.py#L1-L49)
 - [content_filter.py:1-73](file://safe4ai-pilot/app/security/content_filter.py#L1-L73)
 - [output_filter.py:1-61](file://safe4ai-pilot/app/security/output_filter.py#L1-L61)
-- [rag_pipeline.py:1-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L413)
-- [conversation.py:1-117](file://safe4ai-pilot/app/services/conversation.py#L1-L117)
-- [models.py:1-102](file://safe4ai-pilot/app/models.py#L1-L102)
+- [rag_pipeline.py:1-221](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L221)
+- [conversation.py:1-122](file://safe4ai-pilot/app/services/conversation.py#L1-L122)
+- [models.py:1-113](file://safe4ai-pilot/app/models.py#L1-L113)
 - [db/models.py:1-182](file://safe4ai-pilot/app/db/models.py#L1-L182)
 - [config.py:1-48](file://safe4ai-pilot/app/config.py#L1-L48)
 - [templates.py:1-81](file://safe4ai-pilot/app/prompts/templates.py#L1-L81)
@@ -135,39 +134,39 @@ TPL -.-> Graph
 - [settings_routes.py:190-354](file://safe4ai-pilot/app/api/settings_routes.py#L190-L354)
 
 **Section sources**
-- [chat_routes.py:1-251](file://safe4ai-pilot/app/api/chat_routes.py#L1-L251)
-- [graph.py:1-352](file://safe4ai-pilot/app/agents/graph.py#L1-L352)
-- [rag_pipeline.py:1-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L413)
+- [chat_routes.py:1-361](file://safe4ai-pilot/app/api/chat_routes.py#L1-L361)
+- [graph.py:1-342](file://safe4ai-pilot/app/agents/graph.py#L1-L342)
+- [rag_pipeline.py:1-221](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L221)
 
 ## Core Components
 - HybridRetriever: performs dense vector search against Qdrant and sparse BM25 scoring, then fuses results via Reciprocal Rank Fusion (RRF).
 - Reranker: cross-encodes query-chunk pairs to refine relevance scores.
-- RagPipeline: orchestrates ingestion (PDF/docx/xlsx/text), OCR for low-confidence pages, chunking, embedding, upsert to Qdrant, and query-time retrieval and generation.
-- QueryDecomposer: splits complex questions into simpler sub-queries.
+- RagPipeline: handles document ingestion (PDF/docx/xlsx/text), OCR for low-confidence pages, chunking, embedding, upsert to Qdrant, and provides underlying components for the graph-based query processing system.
+- QueryDecomposer: splits complex questions into simpler sub-queries for graph processing.
 - Safety Guards: InputGuard (sanitization and injection checks), ContentFilter (PII redaction and removal), OutputFilter (PII hallucination and length checks).
 - Graph Orchestration: LangGraph StateGraph implementing intake → rewrite → retrieve → grade → decompose/generate → output_filter → quality_gate → respond/fallback.
-- API and Streaming: FastAPI endpoints supporting blocking and streaming responses with step events and token streaming.
-- Conversation Management: Session persistence and optional summarization.
-- Models and Configuration: Typed state, citations, database models, and runtime settings.
+- API and Streaming: FastAPI endpoints supporting blocking and streaming responses with step events and token streaming through graph-based processing.
+- Conversation Management: Session persistence and optional summarization for graph state management.
+- Models and Configuration: Typed state, citations, database models, and runtime settings for graph orchestration.
 
-**Updated** The ContentFilter now implements an enhanced PII redaction approach that processes all chunks and applies redaction to sensitive content rather than filtering them out, with comprehensive logging for audit purposes.
+**Updated** The RagPipeline class now serves as a supporting service providing ingestion capabilities and underlying components for the graph-based query processing system, with all query processing handled centrally through the LangGraph StateGraph.
 
 **Section sources**
 - [hybrid_retriever.py:14-145](file://safe4ai-pilot/app/components/hybrid_retriever.py#L14-L145)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
-- [rag_pipeline.py:34-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L413)
+- [rag_pipeline.py:29-221](file://safe4ai-pilot/app/services/rag_pipeline.py#L29-L221)
 - [query_decomposer.py:10-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L10-L41)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 - [content_filter.py:25-73](file://safe4ai-pilot/app/security/content_filter.py#L25-L73)
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
-- [graph.py:43-352](file://safe4ai-pilot/app/agents/graph.py#L43-L352)
-- [chat_routes.py:156-251](file://safe4ai-pilot/app/api/chat_routes.py#L156-L251)
-- [conversation.py:26-117](file://safe4ai-pilot/app/services/conversation.py#L26-L117)
-- [models.py:13-102](file://safe4ai-pilot/app/models.py#L13-L102)
+- [graph.py:43-342](file://safe4ai-pilot/app/agents/graph.py#L43-L342)
+- [chat_routes.py:150-361](file://safe4ai-pilot/app/api/chat_routes.py#L150-L361)
+- [conversation.py:26-122](file://safe4ai-pilot/app/services/conversation.py#L26-L122)
+- [models.py:13-113](file://safe4ai-pilot/app/models.py#L13-L113)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 
 ## Architecture Overview
-The pipeline is a stateful, streaming RAG orchestrated by a LangGraph. It begins with input validation, optionally rewrites the query, retrieves candidate chunks via hybrid search, reranks them, grades relevance, and either synthesizes an answer or decomposes the query into sub-queries. A quality gate decides whether to respond, self-correct by retrieving again, or fall back. Streaming endpoints emit step progress and answer tokens.
+The pipeline is a stateful, streaming RAG orchestrated by a LangGraph StateGraph. All queries flow through this centralized graph system, which begins with input validation, optionally rewrites the query, retrieves candidate chunks via hybrid search, reranks them, grades relevance, and either synthesizes an answer or decomposes the query into sub-queries. A quality gate decides whether to respond, self-correct by retrieving again, or fall back. Streaming endpoints emit step progress and answer tokens.
 
 ```mermaid
 sequenceDiagram
@@ -227,8 +226,8 @@ API-->>FE : "SSE : step, token, cite, done"
 ```
 
 **Diagram sources**
-- [chat_routes.py:156-251](file://safe4ai-pilot/app/api/chat_routes.py#L156-L251)
-- [graph.py:56-352](file://safe4ai-pilot/app/agents/graph.py#L56-L352)
+- [chat_routes.py:224-361](file://safe4ai-pilot/app/api/chat_routes.py#L224-L361)
+- [graph.py:56-342](file://safe4ai-pilot/app/agents/graph.py#L56-L342)
 - [hybrid_retriever.py:57-145](file://safe4ai-pilot/app/components/hybrid_retriever.py#L57-L145)
 - [reranker.py:15-36](file://safe4ai-pilot/app/components/reranker.py#L15-L36)
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
@@ -286,11 +285,10 @@ TopN --> Out(["RankedChunk list"])
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
 
 ### RAG Pipeline Service
-Handles ingestion and query-time orchestration:
+Handles document ingestion and provides underlying components for the graph-based query processing system:
 - Ingestion supports PDF, DOCX, XLSX, and text. PDFs use OCR when text density is low; chunks are embedded in batches and upserted to Qdrant; BM25 index is updated.
-- Query-time retrieval uses HybridRetriever, followed by Reranker, then answer synthesis via a prompt with context and citations.
-
-**Updated** The ingestion process now implements enhanced PII redaction: all chunks are processed and sensitive content is redacted with [REDACTED] markers rather than being filtered out entirely. The system logs each redaction event with detailed audit information including document ID and page number.
+- Provides the HybridRetriever and Reranker instances used by the LangGraph system.
+- **Updated** The ingestion process now implements enhanced PII redaction: all chunks are processed and sensitive content is redacted with [REDACTED] markers rather than being filtered out entirely. The system logs each redaction event with detailed audit information including document ID and page number.
 
 ```mermaid
 sequenceDiagram
@@ -326,14 +324,14 @@ SVC-->>SVC : "indexing complete"
 ```
 
 **Diagram sources**
-- [rag_pipeline.py:94-189](file://safe4ai-pilot/app/services/rag_pipeline.py#L94-L189)
+- [rag_pipeline.py:81-175](file://safe4ai-pilot/app/services/rag_pipeline.py#L81-L175)
 - [content_filter.py:24-73](file://safe4ai-pilot/app/security/content_filter.py#L24-L73)
 
 **Section sources**
-- [rag_pipeline.py:34-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L413)
+- [rag_pipeline.py:29-221](file://safe4ai-pilot/app/services/rag_pipeline.py#L29-L221)
 
 ### Query Decomposition
-Splits a complex query into simpler sub-queries using a templated prompt and returns a list of strings.
+Splits a complex query into simpler sub-queries using a templated prompt and returns a list of strings for graph processing.
 
 ```mermaid
 sequenceDiagram
@@ -352,7 +350,7 @@ DEC-->>DEC : "validate and return up to N"
 - [query_decomposer.py:10-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L10-L41)
 
 ### Streaming Response Generation and UI
-The API streams step transitions and answer tokens, while the frontend renders a step-by-step indicator.
+The API streams step transitions and answer tokens through the LangGraph system, while the frontend renders a step-by-step indicator.
 
 ```mermaid
 sequenceDiagram
@@ -366,11 +364,11 @@ API-->>FE : "event : done (traceId, latency, model)"
 ```
 
 **Diagram sources**
-- [chat_routes.py:176-251](file://safe4ai-pilot/app/api/chat_routes.py#L176-L251)
+- [chat_routes.py:224-361](file://safe4ai-pilot/app/api/chat_routes.py#L224-L361)
 - [StreamingPipeline.tsx:13-30](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L13-L30)
 
 **Section sources**
-- [chat_routes.py:156-251](file://safe4ai-pilot/app/api/chat_routes.py#L156-L251)
+- [chat_routes.py:224-361](file://safe4ai-pilot/app/api/chat_routes.py#L224-L361)
 - [StreamingPipeline.tsx:1-30](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L1-L30)
 
 ### Citation Management and Source Attribution
@@ -432,13 +430,13 @@ OF --> |blocked| Fallback
 ## Dependency Analysis
 Key dependencies and relationships:
 - graph.py depends on HybridRetriever, Reranker, InputGuard, ContentFilter, OutputFilter, and query_decomposer.
-- rag_pipeline.py depends on HybridRetriever, Reranker, and integrates with Qdrant and SQLAlchemy.
-- chat_routes.py depends on graph.py and ConversationManager for session handling.
+- rag_pipeline.py depends on HybridRetriever, Reranker, and integrates with Qdrant and SQLAlchemy for ingestion.
+- chat_routes.py depends on graph.py and ConversationManager for session handling and graph execution.
 - models.py defines shared state and data structures used across components.
 - config.py provides runtime settings for Ollama, Qdrant, and other services.
 - db/models.py defines persistence models for documents, chunks, sessions, and audit logs.
 
-**Updated** The ingestion_service now coordinates with the enhanced ContentFilter during document processing, and settings_service manages the new redact_pii configuration option.
+**Updated** The ingestion_service now coordinates with the enhanced ContentFilter during document processing, and settings_service manages the new redact_pii configuration option. The chat_routes.py now directly uses the graph for all query processing instead of calling RagPipeline methods.
 
 ```mermaid
 graph LR
@@ -450,8 +448,6 @@ GR --> DEC["query_decomposer.py"]
 GR --> SEC1["input_guard.py"]
 GR --> SEC2["content_filter.py"]
 GR --> SEC3["output_filter.py"]
-RP --> RET
-RP --> RER
 RP --> DBM["db/models.py"]
 API["chat_routes.py"] --> GR
 API --> CONV["conversation.py"]
@@ -469,34 +465,35 @@ MODELS --> RP
 - [chat_routes.py:126-133](file://safe4ai-pilot/app/api/chat_routes.py#L126-L133)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [db/models.py:1-182](file://safe4ai-pilot/app/db/models.py#L1-L182)
-- [models.py:13-102](file://safe4ai-pilot/app/models.py#L13-L102)
+- [models.py:13-113](file://safe4ai-pilot/app/models.py#L13-L113)
 - [ingestion_service.py:1-167](file://safe4ai-pilot/app/services/ingestion_service.py#L1-L167)
 - [settings_service.py:1-415](file://safe4ai-pilot/app/services/settings_service.py#L1-L415)
 - [app_config_store.py:1-119](file://safe4ai-pilot/app/services/app_config_store.py#L1-L119)
 - [settings_routes.py:190-354](file://safe4ai-pilot/app/api/settings_routes.py#L190-L354)
 
 **Section sources**
-- [graph.py:43-352](file://safe4ai-pilot/app/agents/graph.py#L43-L352)
+- [graph.py:43-342](file://safe4ai-pilot/app/agents/graph.py#L43-L342)
 - [rag_pipeline.py:20-23](file://safe4ai-pilot/app/services/rag_pipeline.py#L20-L23)
 - [chat_routes.py:126-133](file://safe4ai-pilot/app/api/chat_routes.py#L126-L133)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [db/models.py:1-182](file://safe4ai-pilot/app/db/models.py#L1-L182)
-- [models.py:13-102](file://safe4ai-pilot/app/models.py#L13-L102)
+- [models.py:13-113](file://safe4ai-pilot/app/models.py#L13-L113)
 
 ## Performance Considerations
-- Batch embeddings: RagPipeline batches embedding requests to reduce overhead.
+- Batch embeddings: RagPipeline batches embedding requests to reduce overhead for ingestion.
 - Chunking strategy: Tune chunk size and overlap to balance recall and context length.
 - Hybrid search fusion: Adjust RRF k parameter to balance dense and sparse signals.
 - Reranking top-n: Limit rerank top-n to reduce generation cost.
 - OCR thresholds: Increase OCR trigger threshold to minimize OCR calls for high-text pages.
-- Streaming: Use streaming endpoints to improve perceived latency and UX.
+- Streaming: Use streaming endpoints to improve perceived latency and UX through graph-based processing.
 - Caching: Consider semantic caching for repeated queries (see semantic cache model).
 - Rate limiting: API endpoints apply rate limits to protect resources.
 - **Enhanced** PII redaction performance: The new redaction approach processes all chunks efficiently with minimal performance impact compared to filtering out sensitive content.
+- **Updated** Graph execution: The LangGraph system provides efficient state management and node execution, reducing overhead compared to direct method calls.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
-- No answer returned: Verify rerank score threshold and ensure sufficient relevant chunks are produced.
+- No answer returned: Verify rerank score threshold and ensure sufficient relevant chunks are produced through the graph system.
 - Poor retrieval quality: Increase rerank top-n, adjust HybridRetriever top_k, or review BM25 index updates.
 - OCR failures on PDFs: Confirm OCR model availability and increase OCR threshold for low-text pages.
 - **Updated** PII redaction issues: Check ContentFilter logs for "pii_redacted_in_chunk" entries to verify redaction is working correctly.
@@ -504,6 +501,7 @@ Common issues and resolutions:
 - Long answers: Investigate OutputFilter warnings and consider reducing context length or rerank top-n.
 - Session size exceeded: Truncate or summarize conversation history to keep state under the byte limit.
 - Streaming stalls: Check Ollama availability and timeouts; verify SSE headers and network connectivity.
+- **Updated** Graph execution failures: Check LangGraph node execution logs and verify that all graph nodes are properly initialized and accessible.
 
 **Section sources**
 - [rag_pipeline.py:160-161](file://safe4ai-pilot/app/services/rag_pipeline.py#L160-L161)
@@ -512,7 +510,7 @@ Common issues and resolutions:
 - [output_filter.py:52-59](file://safe4ai-pilot/app/security/output_filter.py#L52-L59)
 
 ## Conclusion
-The RAG pipeline integrates hybrid retrieval, reranking, adaptive routing, and safety guards to deliver reliable, auditable, and secure answers. Its streaming interface and structured state enable transparent, user-friendly interactions. The enhanced PII redaction approach ensures comprehensive content protection while maintaining system performance and audit capabilities. Proper tuning of chunking, rerank thresholds, and hybrid fusion yields robust performance, while guards ensure content safety and compliance.
+The RAG pipeline integrates hybrid retrieval, reranking, adaptive routing, and safety guards to deliver reliable, auditable, and secure answers through a centralized LangGraph system. The graph-based architecture enables transparent, user-friendly interactions with streaming interfaces and structured state management. The enhanced PII redaction approach ensures comprehensive content protection while maintaining system performance and audit capabilities. Proper tuning of chunking, rerank thresholds, and hybrid fusion yields robust performance, while guards ensure content safety and compliance. The elimination of direct query() methods in favor of graph-centric processing provides better maintainability and scalability.
 
 ## Appendices
 
@@ -520,11 +518,11 @@ The RAG pipeline integrates hybrid retrieval, reranking, adaptive routing, and s
 - Runtime settings: Configure Ollama URL/model, Qdrant URL, embedding model, and semantic cache threshold via environment variables.
 - **Updated** PII redaction configuration: Enable the redact_pii setting to activate the enhanced redaction approach during document ingestion.
 - Upload handling: Set maximum upload size and retention policies for audit logs and semantic cache.
-- Frontend integration: Use streaming endpoints to render step progress and answer tokens.
+- Frontend integration: Use streaming endpoints to render step progress and answer tokens through the graph system.
 
 **Section sources**
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
-- [chat_routes.py:156-251](file://safe4ai-pilot/app/api/chat_routes.py#L156-L251)
+- [chat_routes.py:224-361](file://safe4ai-pilot/app/api/chat_routes.py#L224-L361)
 - [settings_routes.py:190-202](file://safe4ai-pilot/app/api/settings_routes.py#L190-L202)
 - [settings_service.py:349-351](file://safe4ai-pilot/app/services/settings_service.py#L349-L351)
 
@@ -612,3 +610,36 @@ USERS ||--o{ HUMAN_REVIEW_QUEUE : "queues"
 **Section sources**
 - [content_filter.py:13-73](file://safe4ai-pilot/app/security/content_filter.py#L13-L73)
 - [rag_pipeline.py:140-144](file://safe4ai-pilot/app/services/rag_pipeline.py#L140-L144)
+
+### Graph-Based Query Processing Flow
+**Updated** The query processing flow now operates entirely through the LangGraph system:
+
+- **Initialization**: Chat routes create PrivateAIState with initial messages and session context
+- **Graph Execution**: The StateGraph processes queries through specialized nodes (intake, rewrite, retrieve, grade, decompose, generate, output_filter, quality_gate)
+- **State Management**: Each node updates the state with intermediate results and context
+- **Streaming**: Nodes emit step events and final results through SSE streaming
+- **Finalization**: Conversation manager persists state and final results
+
+```mermaid
+flowchart TD
+Init["PrivateAIState initialization"] --> Graph["LangGraph execution"]
+Graph --> Node1["intake_node"]
+Node1 --> Node2["rewrite_node"]
+Node2 --> Node3["retrieve_node"]
+Node3 --> Node4["grade_node"]
+Node4 --> Decision{"Relevant?"}
+Decision --> |Yes| Node5["generate_node"]
+Decision --> |No| Node6["decompose_node"]
+Node5 --> Node7["output_filter_node"]
+Node6 --> Node7
+Node7 --> Node8["quality_gate_node"]
+Node8 --> Response{"Decision"}
+Response --> |respond| Final["Final state"]
+Response --> |fallback| Final
+Response --> |retrieve| Node3
+```
+
+**Diagram sources**
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
+- [graph.py:43-342](file://safe4ai-pilot/app/agents/graph.py#L43-L342)
+- [models.py:59-113](file://safe4ai-pilot/app/models.py#L59-L113)

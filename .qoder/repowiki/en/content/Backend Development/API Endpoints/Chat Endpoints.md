@@ -22,11 +22,11 @@
 
 ## Update Summary
 **Changes Made**
-- Updated architecture overview to reflect centralized chat_finalizer approach
-- Revised post-processing flow to show finalize_chat_run() delegation
-- Added documentation for unified audit logging, cost recording, and session saving
-- Updated streaming endpoint to show async vs strict post-processing modes
-- Enhanced error handling documentation for centralized post-processing failures
+- Updated architecture overview to reflect centralized _prepare_chat_run preflight validation logic
+- Revised endpoint processing flows to show shared preflight validation through _prepare_chat_run
+- Added documentation for unified error handling and validation consistency
+- Updated streaming endpoint to show async vs strict post-processing modes with centralized finalization
+- Enhanced error handling documentation for centralized preflight validation failures
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -49,10 +49,10 @@ This document provides comprehensive API documentation for the chat endpoints th
 - PrivateAIState model, citation handling, and semantic caching
 - Rate limiting, input validation, and security measures
 - Client-side SSE handling, error recovery, and connection management
-- Centralized chat_finalizer for unified post-processing
+- Centralized preflight validation through _prepare_chat_run helper function
 
 ## Project Structure
-The chat endpoints are implemented in the backend FastAPI application and consumed by the React frontend. The evaluation suite uses the blocking endpoint for automated scoring. All post-processing operations are now centralized through the chat_finalizer service.
+The chat endpoints are implemented in the backend FastAPI application and consumed by the React frontend. The evaluation suite uses the blocking endpoint for automated scoring. All preflight validation operations are now centralized through the _prepare_chat_run helper function, eliminating code duplication between endpoints.
 
 ```mermaid
 graph TB
@@ -68,20 +68,22 @@ H["Auth Router<br/>router.py"]
 I["Semantic Cache<br/>semantic_cache.py"]
 J["DB Models<br/>db/models.py"]
 K["Cost Tracker<br/>cost_tracker.py"]
+L["_prepare_chat_run<br/>Centralized Preflight"]
 end
 subgraph "Frontend"
-L["SSE Client<br/>frontend/src/api/chat.ts"]
-M["React Hook<br/>frontend/src/hooks/useChat.ts"]
-N["UI Pipeline Steps<br/>frontend/src/components/chat/StreamingPipeline.tsx"]
+M["SSE Client<br/>frontend/src/api/chat.ts"]
+N["React Hook<br/>frontend/src/hooks/useChat.ts"]
+O["UI Pipeline Steps<br/>frontend/src/components/chat/StreamingPipeline.tsx"]
 end
 subgraph "Evaluation"
-O["Offline Evaluation<br/>evaluation/offline_eval.py"]
+P["Offline Evaluation<br/>evaluation/offline_eval.py"]
 end
-L --> A
-M --> L
+M --> A
 N --> M
-O --> A
+O --> N
+P --> A
 A --> B
+B --> L
 B --> C
 B --> D
 B --> E
@@ -94,7 +96,7 @@ E --> J
 ```
 
 **Diagram sources**
-- [chat_routes.py:26](file://safe4ai-pilot/app/api/chat_routes.py#L26)
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
 - [models.py:49-95](file://safe4ai-pilot/app/models.py#L49-L95)
 - [conversation.py:26-117](file://safe4ai-pilot/app/services/conversation.py#L26-L117)
@@ -110,18 +112,18 @@ E --> J
 - [offline_eval.py:121-134](file://safe4ai-pilot/evaluation/offline_eval.py#L121-L134)
 
 **Section sources**
-- [chat_routes.py:1-414](file://safe4ai-pilot/app/api/chat_routes.py#L1-L414)
+- [chat_routes.py:1-361](file://safe4ai-pilot/app/api/chat_routes.py#L1-L361)
 - [chat_finalizer.py:1-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L1-L71)
 - [models.py:1-95](file://safe4ai-pilot/app/models.py#L1-L95)
-- [conversation.py:1-117](file://safe4ai-pilot/app/services/conversation.py#L1-L117)
+- [conversation.py:1-122](file://safe4ai-pilot/app/services/conversation.py#L1-L122)
 - [input_guard.py:1-49](file://safe4ai-pilot/app/security/input_guard.py#L1-L49)
 - [middleware.py:1-83](file://safe4ai-pilot/app/auth/middleware.py#L1-L83)
 - [router.py:1-125](file://safe4ai-pilot/app/auth/router.py#L1-L125)
 - [semantic_cache.py:1-108](file://safe4ai-pilot/app/services/semantic_cache.py#L1-L108)
 - [models.py (db):1-182](file://safe4ai-pilot/app/db/models.py#L1-L182)
 - [cost_tracker.py:1-115](file://safe4ai-pilot/observability/cost_tracker.py#L1-L115)
-- [chat.ts:1-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L1-L76)
-- [useChat.ts:1-106](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L106)
+- [chat.ts:1-103](file://safe4ai-pilot/frontend/src/api/chat.ts#L1-L103)
+- [useChat.ts:1-131](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L131)
 - [StreamingPipeline.tsx:1-30](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L1-L30)
 - [offline_eval.py:1-244](file://safe4ai-pilot/evaluation/offline_eval.py#L1-L244)
 - [test_chat.py:1-271](file://safe4ai-pilot/tests/test_chat.py#L1-L271)
@@ -134,25 +136,26 @@ E --> J
 - Authentication middleware enforces JWT-based access and role checks.
 - Rate limiting is applied via SlowAPI decorators on endpoints.
 - InputGuard performs pre-processing and validation of user queries.
-- **Updated** chat_finalizer provides centralized post-processing with unified audit logging, cost recording, and session saving.
+- **Updated** _prepare_chat_run provides centralized preflight validation with unified error handling for both endpoints.
 
 **Section sources**
-- [chat_routes.py:26](file://safe4ai-pilot/app/api/chat_routes.py#L26)
-- [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
+- [chat_routes.py:51-73](file://safe4ai-pilot/app/api/chat_routes.py#L51-L73)
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
 - [models.py:49-95](file://safe4ai-pilot/app/models.py#L49-L95)
-- [conversation.py:26-117](file://safe4ai-pilot/app/services/conversation.py#L26-L117)
+- [conversation.py:26-122](file://safe4ai-pilot/app/services/conversation.py#L26-L122)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
 - [router.py:21-22](file://safe4ai-pilot/app/auth/router.py#L21-L22)
 
 ## Architecture Overview
-The chat system orchestrates authentication, session resolution, graph execution, and centralized post-processing through chat_finalizer. The SSE endpoint streams intermediate steps and final tokens, while the blocking endpoint returns a single aggregated response. Both endpoints now delegate all post-processing to the unified finalize_chat_run() function.
+The chat system orchestrates authentication, centralized preflight validation, session resolution, graph execution, and unified post-processing. The _prepare_chat_run helper function centralizes validation logic, eliminating code duplication between /chat and /chat/stream endpoints. The SSE endpoint streams intermediate steps and final tokens, while the blocking endpoint returns a single aggregated response. Both endpoints now share the same preflight validation logic.
 
 ```mermaid
 sequenceDiagram
 participant Client as "Client"
 participant Auth as "Auth Middleware"
 participant Routes as "Chat Routes"
+participant Preflight as "_prepare_chat_run"
 participant Conv as "ConversationManager"
 participant Graph as "LangGraph"
 participant Finalizer as "Chat Finalizer"
@@ -160,6 +163,9 @@ participant DB as "DB Sessions"
 Client->>Auth : "POST /chat or /chat/stream"
 Auth-->>Client : "401 if missing/invalid token"
 Auth->>Routes : "Authenticated request"
+Routes->>Preflight : "Validate question + quotas"
+Preflight->>Preflight : "Check tier expiry + cost ceiling + query quota"
+Preflight-->>Routes : "Validation passed or HTTPException"
 Routes->>Conv : "_resolve_session(body, user_id)"
 Conv->>DB : "load_session/new_session"
 DB-->>Conv : "PrivateAIState"
@@ -178,8 +184,9 @@ end
 ```
 
 **Diagram sources**
-- [chat_routes.py:238-257](file://safe4ai-pilot/app/api/chat_routes.py#L238-L257)
-- [chat_routes.py:366-404](file://safe4ai-pilot/app/api/chat_routes.py#L366-L404)
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
+- [chat_routes.py:170-216](file://safe4ai-pilot/app/api/chat_routes.py#L170-L216)
+- [chat_routes.py:224-360](file://safe4ai-pilot/app/api/chat_routes.py#L224-L360)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
 - [conversation.py:42-69](file://safe4ai-pilot/app/services/conversation.py#L42-L69)
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
@@ -210,9 +217,11 @@ Purpose: Provides a synchronous response suitable for evaluation scripts and tes
   - 500 Internal Server Error (graph invocation failure)
 
 **Updated Processing Logic:**
-- Validates question length and emptiness
-- Resolves or creates a session using ConversationManager
-- Builds run state with a fresh trace_id and initial message
+- **Centralized preflight validation via _prepare_chat_run()**
+  - Validates question length and emptiness
+  - Enforces tier expiry, cost ceiling, and query quota checks
+  - Resolves or creates a session using ConversationManager
+  - Builds run state with a fresh trace_id and initial message
 - Executes graph.ainvoke to obtain final state
 - Calculates usage and latency metrics
 - **Centralized post-processing via finalize_chat_run()**
@@ -226,12 +235,16 @@ Purpose: Provides a synchronous response suitable for evaluation scripts and tes
 sequenceDiagram
 participant Eval as "Offline Evaluation"
 participant Routes as "POST /chat"
+participant Preflight as "_prepare_chat_run"
 participant Graph as "LangGraph"
 participant Conv as "ConversationManager"
 participant Finalizer as "Chat Finalizer"
 Eval->>Routes : "POST /chat {question, session_id?, collection}"
-Routes->>Routes : "validate question"
-Routes->>Conv : "resolve/load session"
+Routes->>Preflight : "_prepare_chat_run(request, body, user, db)"
+Preflight->>Preflight : "validate question + quotas"
+Preflight->>Conv : "resolve/load session"
+Preflight->>Preflight : "build run_state with trace_id"
+Preflight-->>Routes : "session_id, run_state, graph"
 Routes->>Graph : "ainvoke(run_state)"
 Graph-->>Routes : "final PrivateAIState"
 Routes->>Routes : "calculate usage & latency"
@@ -243,12 +256,13 @@ Routes-->>Eval : "ChatResponse"
 
 **Diagram sources**
 - [offline_eval.py:121-134](file://safe4ai-pilot/evaluation/offline_eval.py#L121-L134)
-- [chat_routes.py:201-257](file://safe4ai-pilot/app/api/chat_routes.py#L201-L257)
+- [chat_routes.py:170-216](file://safe4ai-pilot/app/api/chat_routes.py#L170-L216)
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
 - [conversation.py:42-69](file://safe4ai-pilot/app/services/conversation.py#L42-L69)
 
 **Section sources**
-- [chat_routes.py:201-257](file://safe4ai-pilot/app/api/chat_routes.py#L201-L257)
+- [chat_routes.py:170-216](file://safe4ai-pilot/app/api/chat_routes.py#L170-L216)
 - [test_chat.py:80-122](file://safe4ai-pilot/tests/test_chat.py#L80-L122)
 - [offline_eval.py:121-134](file://safe4ai-pilot/evaluation/offline_eval.py#L121-L134)
 
@@ -280,12 +294,16 @@ Purpose: Streams real-time updates using Server-Sent Events for step transitions
 sequenceDiagram
 participant FE as "Frontend Client"
 participant Routes as "POST /chat/stream"
+participant Preflight as "_prepare_chat_run"
 participant Graph as "LangGraph"
 participant Conv as "ConversationManager"
 participant Finalizer as "Chat Finalizer"
 FE->>Routes : "POST /chat/stream"
-Routes->>Routes : "validate question"
-Routes->>Conv : "resolve/load session"
+Routes->>Preflight : "_prepare_chat_run(request, body, user, db)"
+Preflight->>Preflight : "validate question + quotas"
+Preflight->>Conv : "resolve/load session"
+Preflight->>Preflight : "build run_state with trace_id"
+Preflight-->>Routes : "session_id, run_state, graph"
 Routes->>Graph : "astream(run_state)"
 Graph-->>Routes : "node states"
 Routes-->>FE : "SSE step events"
@@ -298,17 +316,47 @@ Finalizer->>Finalizer : "post-processing completes asynchronously"
 ```
 
 **Diagram sources**
-- [chat_routes.py:265-414](file://safe4ai-pilot/app/api/chat_routes.py#L265-L414)
+- [chat_routes.py:224-360](file://safe4ai-pilot/app/api/chat_routes.py#L224-L360)
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
-- [chat.ts:21-75](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L75)
-- [useChat.ts:30-93](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L30-L93)
+- [chat.ts:21-103](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L103)
+- [useChat.ts:30-131](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L30-L131)
 
 **Section sources**
-- [chat_routes.py:265-414](file://safe4ai-pilot/app/api/chat_routes.py#L265-L414)
+- [chat_routes.py:224-360](file://safe4ai-pilot/app/api/chat_routes.py#L224-L360)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
-- [chat.ts:1-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L1-L76)
-- [useChat.ts:1-106](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L106)
+- [chat.ts:1-103](file://safe4ai-pilot/frontend/src/api/chat.ts#L1-L103)
+- [useChat.ts:1-131](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L131)
 - [StreamingPipeline.tsx:1-30](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L1-L30)
+
+### Centralized Preflight Validation with _prepare_chat_run
+**New Section** - The _prepare_chat_run helper function centralizes preflight validation logic for both chat endpoints.
+
+#### Functionality
+- **Unified Validation**: Validates question content, enforces tier expiry, cost ceiling, and query quota checks
+- **Error Consistency**: Raises HTTPException with standardized error codes for all validation failures
+- **Session Resolution**: Handles session loading/creation with proper ownership validation
+- **State Preparation**: Builds run state with fresh trace_id and initial message structure
+- **Graph Access**: Ensures AI pipeline graph is available before proceeding
+
+#### Validation Flow
+1. **Question Validation**: Checks for non-empty questions with proper stripping
+2. **Tier Validation**: Verifies user tier is active and not expired
+3. **Cost Validation**: Ensures daily/monthly cost ceilings are not exceeded
+4. **Quota Validation**: Confirms query quotas are within limits
+5. **Graph Availability**: Verifies AI pipeline graph is initialized
+6. **Session Management**: Loads existing session or creates new one with proper validation
+7. **Trace Generation**: Creates unique trace_id for observability
+
+#### Error Handling
+- **422 Unprocessable Entity**: Empty or invalid questions
+- **403 Forbidden**: Expired or invalid user tiers
+- **429 Too Many Requests**: Cost ceiling or quota exceeded
+- **503 Service Unavailable**: AI pipeline not ready
+- **404 Not Found**: Session not found or owned by another user
+
+**Section sources**
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
 
 ### Session Management and Conversation Persistence
 - Session Creation:
@@ -336,12 +384,12 @@ Save --> End(["End"])
 ```
 
 **Diagram sources**
-- [chat_routes.py:144-159](file://safe4ai-pilot/app/api/chat_routes.py#L144-L159)
+- [chat_routes.py:75-91](file://safe4ai-pilot/app/api/chat_routes.py#L75-L91)
 - [chat_finalizer.py:27-36](file://safe4ai-pilot/app/services/chat_finalizer.py#L27-L36)
 - [conversation.py:30-69](file://safe4ai-pilot/app/services/conversation.py#L30-L69)
 
 **Section sources**
-- [conversation.py:26-117](file://safe4ai-pilot/app/services/conversation.py#L26-L117)
+- [conversation.py:26-122](file://safe4ai-pilot/app/services/conversation.py#L26-L122)
 - [models.py (db):65-73](file://safe4ai-pilot/app/db/models.py#L65-L73)
 - [useChat.ts:76-82](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L76-L82)
 
@@ -422,7 +470,7 @@ RetrievedChunk <|-- RankedChunk
 - The blocking endpoint returns a citations array in ChatResponse.
 
 **Section sources**
-- [chat_routes.py:340-347](file://safe4ai-pilot/app/api/chat_routes.py#L340-L347)
+- [chat_routes.py:287-294](file://safe4ai-pilot/app/api/chat_routes.py#L287-L294)
 - [useChat.ts:72-75](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L72-L75)
 
 ### Caching Mechanisms
@@ -438,7 +486,7 @@ RetrievedChunk <|-- RankedChunk
 **Section sources**
 - [semantic_cache.py:14-108](file://safe4ai-pilot/app/services/semantic_cache.py#L14-L108)
 - [chat_routes.py:56](file://safe4ai-pilot/app/api/chat_routes.py#L56)
-- [chat_routes.py:400](file://safe4ai-pilot/app/api/chat_routes.py#L400)
+- [chat_routes.py:344-351](file://safe4ai-pilot/app/api/chat_routes.py#L344-L351)
 
 ### Rate Limiting, Input Validation, and Security
 - Rate Limiting:
@@ -457,13 +505,13 @@ RetrievedChunk <|-- RankedChunk
   - SSE responses set Cache-Control and X-Accel-Buffering headers
 
 **Section sources**
-- [chat_routes.py:200](file://safe4ai-pilot/app/api/chat_routes.py#L200)
-- [chat_routes.py:266](file://safe4ai-pilot/app/api/chat_routes.py#L266)
-- [chat_routes.py:123-124](file://safe4ai-pilot/app/api/chat_routes.py#L123-L124)
+- [chat_routes.py:170](file://safe4ai-pilot/app/api/chat_routes.py#L170)
+- [chat_routes.py:224](file://safe4ai-pilot/app/api/chat_routes.py#L224)
+- [chat_routes.py:135-136](file://safe4ai-pilot/app/api/chat_routes.py#L135-L136)
 - [input_guard.py:27-48](file://safe4ai-pilot/app/security/input_guard.py#L27-L48)
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
 - [router.py:39-105](file://safe4ai-pilot/app/auth/router.py#L39-L105)
-- [chat_routes.py:409-413](file://safe4ai-pilot/app/api/chat_routes.py#L409-L413)
+- [chat_routes.py:353-360](file://safe4ai-pilot/app/api/chat_routes.py#L353-L360)
 
 ### Client-Side SSE Handling, Error Recovery, and Connection Management
 - Parsing:
@@ -479,8 +527,8 @@ RetrievedChunk <|-- RankedChunk
   - Extracts latencyMs, cache, model, kRetrieved, and sessionId from done event
 
 **Section sources**
-- [chat.ts:21-75](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L75)
-- [useChat.ts:17-106](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L17-L106)
+- [chat.ts:21-103](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L103)
+- [useChat.ts:17-131](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L17-L131)
 - [StreamingPipeline.tsx:13-29](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L13-L29)
 
 ### Centralized Post-Processing with chat_finalizer
@@ -505,8 +553,8 @@ RetrievedChunk <|-- RankedChunk
 
 **Section sources**
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
-- [chat_routes.py:366-404](file://safe4ai-pilot/app/api/chat_routes.py#L366-L404)
-- [chat_routes.py:238-257](file://safe4ai-pilot/app/api/chat_routes.py#L238-L257)
+- [chat_routes.py:313-360](file://safe4ai-pilot/app/api/chat_routes.py#L313-L360)
+- [chat_routes.py:196-216](file://safe4ai-pilot/app/api/chat_routes.py#L196-L216)
 
 ## Dependency Analysis
 Key dependencies and their roles:
@@ -516,6 +564,7 @@ Key dependencies and their roles:
   - Auth middleware for user identity
   - Rate limiter for throttling
   - LangGraph for pipeline execution
+  - **Updated** _prepare_chat_run for centralized preflight validation
   - **Updated** chat_finalizer for centralized post-processing
 - Frontend depends on:
   - SSE client for streaming
@@ -529,6 +578,7 @@ CR --> CM["conversation.py"]
 CR --> AM["auth/middleware.py"]
 CR --> AR["auth/router.py"]
 CR --> SC["services/semantic_cache.py"]
+CR --> PF["_prepare_chat_run"]
 CR --> CF["services/chat_finalizer.py"]
 CR --> CT["observability/cost_tracker.py"]
 CM --> DBM["db/models.py"]
@@ -538,7 +588,7 @@ UI["frontend/src/components/chat/StreamingPipeline.tsx"] --> HC
 ```
 
 **Diagram sources**
-- [chat_routes.py:26](file://safe4ai-pilot/app/api/chat_routes.py#L26)
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
 - [models.py:1-95](file://safe4ai-pilot/app/models.py#L1-L95)
 - [conversation.py:1-17](file://safe4ai-pilot/app/services/conversation.py#L1-L17)
@@ -552,7 +602,7 @@ UI["frontend/src/components/chat/StreamingPipeline.tsx"] --> HC
 - [StreamingPipeline.tsx:1-3](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L1-L3)
 
 **Section sources**
-- [chat_routes.py:1-414](file://safe4ai-pilot/app/api/chat_routes.py#L1-L414)
+- [chat_routes.py:1-361](file://safe4ai-pilot/app/api/chat_routes.py#L1-L361)
 - [chat_finalizer.py:1-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L1-L71)
 - [conversation.py:1-17](file://safe4ai-pilot/app/services/conversation.py#L1-L17)
 - [models.py (db):65-73](file://safe4ai-pilot/app/db/models.py#L65-L73)
@@ -569,8 +619,11 @@ UI["frontend/src/components/chat/StreamingPipeline.tsx"] --> HC
   - Semantic cache reduces repeated embedding work and improves latency
 - Rate Limiting:
   - Prevents abuse; tune thresholds according to infrastructure capacity
-- **Updated Post-Processing Performance**:
-  - **Async mode**: Streaming responses are not delayed by post-processing operations
+- **Updated Pre-flight Validation Performance**:
+  - **Centralized validation**: Eliminates code duplication and reduces maintenance overhead
+  - **Consistent error handling**: Standardized HTTPException responses across endpoints
+  - **Early termination**: Validation failures short-circuit expensive graph operations
+  - **Async post-processing**: Streaming responses are not delayed by post-processing operations
   - **Strict mode**: Post-processing occurs synchronously, ensuring immediate audit/cost recording
   - **Single transaction**: Reduces database overhead and ensures consistency
 
@@ -580,10 +633,17 @@ Common issues and resolutions:
   - Ensure a valid JWT cookie is present and not expired
 - 422 Unprocessable Entity:
   - Verify question is non-empty and under 2048 characters
+  - **Updated**: Check _prepare_chat_run validation for empty questions
 - 503 Service Unavailable:
   - Confirm the AI pipeline graph is initialized on the application state
+  - **Updated**: Verify _prepare_chat_run graph availability check
 - 500 Internal Server Error:
   - Inspect server logs for graph invocation failures
+- **Updated Pre-flight Validation Issues**:
+  - **Tier expiry failures**: Check load_app_config and check_tier_expiry in _prepare_chat_run
+  - **Cost ceiling failures**: Verify CostCeilingExceeded exception handling
+  - **Quota failures**: Review check_query_quota and TierExpired exceptions
+  - **Session ownership**: Ensure user_id matches session owner
 - **Updated Post-Processing Issues**:
   - **Async mode failures**: Check background task execution and database connectivity
   - **Strict mode failures**: Review finalize_chat_run() transaction logs
@@ -594,15 +654,15 @@ Common issues and resolutions:
   - Large session state may exceed limits; truncate or summarize messages before saving
 
 **Section sources**
-- [chat_routes.py:123-124](file://safe4ai-pilot/app/api/chat_routes.py#L123-L124)
-- [chat_routes.py:127-129](file://safe4ai-pilot/app/api/chat_routes.py#L127-L129)
-- [chat_routes.py:137-139](file://safe4ai-pilot/app/api/chat_routes.py#L137-L139)
+- [chat_routes.py:135-136](file://safe4ai-pilot/app/api/chat_routes.py#L135-L136)
+- [chat_routes.py:140-150](file://safe4ai-pilot/app/api/chat_routes.py#L140-L150)
+- [chat_routes.py:152-154](file://safe4ai-pilot/app/api/chat_routes.py#L152-L154)
 - [chat_finalizer.py:379-384](file://safe4ai-pilot/app/services/chat_finalizer.py#L379-L384)
 - [chat.ts:64-71](file://safe4ai-pilot/frontend/src/api/chat.ts#L64-L71)
 - [conversation.py:63-67](file://safe4ai-pilot/app/services/conversation.py#L63-L67)
 
 ## Conclusion
-The chat endpoints provide a robust foundation for both synchronous evaluation and interactive streaming experiences. They integrate authentication, session persistence, observability, and security measures while offering flexible client-side consumption patterns. The centralized chat_finalizer approach ensures consistent post-processing across both streaming and blocking endpoints, with unified audit logging, cost recording, and session management. The SSE stream enables rich UX with step progress and incremental token delivery, while the blocking endpoint remains ideal for automated workflows.
+The chat endpoints provide a robust foundation for both synchronous evaluation and interactive streaming experiences. They integrate authentication, centralized preflight validation, session persistence, observability, and security measures while offering flexible client-side consumption patterns. The centralized _prepare_chat_run approach ensures consistent validation logic across both streaming and blocking endpoints, with unified error handling and standardized HTTPException responses. The SSE stream enables rich UX with step progress and incremental token delivery, while the blocking endpoint remains ideal for automated workflows. The centralized chat_finalizer approach ensures consistent post-processing across both streaming and blocking endpoints, with unified audit logging, cost recording, and session management.
 
 ## Appendices
 
@@ -629,7 +689,7 @@ The chat endpoints provide a robust foundation for both synchronous evaluation a
   - 500 Internal Server Error
 
 **Section sources**
-- [chat_routes.py:201-257](file://safe4ai-pilot/app/api/chat_routes.py#L201-L257)
+- [chat_routes.py:170-216](file://safe4ai-pilot/app/api/chat_routes.py#L170-L216)
 - [test_chat.py:80-104](file://safe4ai-pilot/tests/test_chat.py#L80-L104)
 
 ### API Reference: POST /chat/stream
@@ -653,7 +713,7 @@ The chat endpoints provide a robust foundation for both synchronous evaluation a
   - 500 Internal Server Error
 
 **Section sources**
-- [chat_routes.py:265-414](file://safe4ai-pilot/app/api/chat_routes.py#L265-L414)
+- [chat_routes.py:224-360](file://safe4ai-pilot/app/api/chat_routes.py#L224-L360)
 - [chat.ts:14-19](file://safe4ai-pilot/frontend/src/api/chat.ts#L14-L19)
 
 ### Client-Side SSE Handling Checklist
@@ -665,8 +725,36 @@ The chat endpoints provide a robust foundation for both synchronous evaluation a
 - **Monitor post-processing completion in async mode**
 
 **Section sources**
-- [chat.ts:21-75](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L75)
-- [useChat.ts:30-93](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L30-L93)
+- [chat.ts:21-103](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L103)
+- [useChat.ts:30-131](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L30-L131)
+
+### Centralized Preflight Validation Architecture
+**New Section** - Understanding the _prepare_chat_run helper function and its benefits.
+
+#### Benefits
+- **Consistency**: Unified validation logic across all chat endpoints
+- **Maintainability**: Single source of truth for preflight validation
+- **Error Standardization**: Consistent HTTPException responses with proper status codes
+- **Performance**: Early termination of requests before expensive graph operations
+- **Security**: Centralized enforcement of tier, cost, and quota policies
+
+#### Validation Components
+- **Input Validation**: Question length and emptiness checks
+- **Tier Validation**: User tier expiry and active status verification
+- **Cost Validation**: Daily and monthly cost ceiling enforcement
+- **Quota Validation**: Query count and usage-based quota checks
+- **Graph Validation**: AI pipeline readiness verification
+- **Session Validation**: Ownership and existence checks
+
+#### Error Handling Strategy
+- **Early Exit**: Validation failures immediately return HTTPException
+- **Standardized Responses**: Consistent error messages and status codes
+- **Logging**: Comprehensive error logging for debugging and monitoring
+- **Graceful Degradation**: Non-critical failures don't affect main pipeline
+
+**Section sources**
+- [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
+- [chat_routes.py:135-150](file://safe4ai-pilot/app/api/chat_routes.py#L135-L150)
 
 ### Centralized Post-Processing Architecture
 **New Section** - Understanding the chat_finalizer service and its benefits.
@@ -685,5 +773,5 @@ The chat endpoints provide a robust foundation for both synchronous evaluation a
 
 **Section sources**
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
-- [chat_routes.py:366-404](file://safe4ai-pilot/app/api/chat_routes.py#L366-L404)
-- [chat_routes.py:238-257](file://safe4ai-pilot/app/api/chat_routes.py#L238-L257)
+- [chat_routes.py:313-360](file://safe4ai-pilot/app/api/chat_routes.py#L313-L360)
+- [chat_routes.py:196-216](file://safe4ai-pilot/app/api/chat_routes.py#L196-L216)

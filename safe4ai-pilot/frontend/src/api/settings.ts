@@ -4,6 +4,7 @@ export type ProviderType = "ollama" | "openai_compatible";
 export type SseDoneMode = "strict" | "async";
 export type ProviderMode = "local" | "hybrid" | "cloud";
 export type EmbeddingSource = "ollama" | "provider";
+export type TierName = "evaluation" | "team" | "enterprise";
 
 export interface AppSettings {
   generationModel: string;
@@ -49,11 +50,30 @@ export interface AppSettings {
     sessionHours: number;
     auditRetentionDays: number;
     redactPII: boolean;
+    blockedTerms: string[];
+    oidc: {
+      enabled: boolean;
+      issuerUrl: string;
+      clientId: string;
+      clientSecretConfigured: boolean;
+      redirectUri: string;
+      allowedDomains: string[];
+      autoProvision: boolean;
+      configured: boolean;
+    };
   };
   cost: {
     dailyCeilingUsd: number;
     monthlyCeilingUsd: number;
     todayUsd: number;
+  };
+  tier: {
+    name: TierName;
+    maxSeats: number;
+    monthlyQueryLimit: number;
+    tierExpiresAt: string | null;
+    seatsUsed: number;
+    monthlyQueriesUsed: number;
   };
 }
 
@@ -72,8 +92,20 @@ export type PatchableSettings = Partial<{
   sessionHours: number;
   auditRetentionDays: number;
   redactPII: boolean;
+  blockedTerms: string[];
+  oidcEnabled: boolean;
+  oidcIssuerUrl: string;
+  oidcClientId: string;
+  oidcClientSecret: string;
+  oidcRedirectUri: string;
+  oidcAllowedDomains: string[];
+  oidcAutoProvision: boolean;
   dailyCeilingUsd: number;
   monthlyCeilingUsd: number;
+  tier: TierName;
+  maxSeats: number;
+  monthlyQueryLimit: number;
+  tierExpiresAt: string;
   // Inference provider
   providerType: ProviderType;
   providerBaseUrl: string;

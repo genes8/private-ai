@@ -6,7 +6,7 @@ A private AI pilot system that lets enterprise customers chat with their own doc
 ## Stack
 - **Backend:** FastAPI + Python 3.11
 - **AI orchestration:** LangGraph + LangChain
-- **LLM:** Qwen 3.5 9B via Ollama (chat/RAG) + Qwen2.5-VL 7B (vision OCR)
+- **LLM:** Qwen 3.5 9B via Ollama — handles chat/RAG and vision OCR (single multimodal model)
 - **Embeddings:** nomic-embed-text via Ollama
 - **Vector DB:** Qdrant (document retrieval, hybrid dense+sparse)
 - **Relational DB:** PostgreSQL + pgvector (sessions, audit, semantic cache)

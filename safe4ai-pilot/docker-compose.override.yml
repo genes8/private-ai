@@ -1,6 +1,18 @@
 services:
+  # safe4ai Postgres is exposed on host port 5433 so it never collides with a
+  # native PostgreSQL on 5432 (which may host other projects). Inside the compose
+  # network the app still reaches it as postgres:5432.
+  postgres:
+    ports:
+      - "5433:5432"
+
   app:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Reach the host's Ollama from inside the container.
+    environment:
+      - OLLAMA_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./app:/app/app
       - ./observability:/app/observability

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 // ── Section ───────────────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ export function Row({
           <div className="text-[13.5px] font-medium text-ink">{label}</div>
           {saving && (
             <span className="inline-flex items-center gap-1 text-[11px] font-mono text-accent">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+              <span className="size-1.5 rounded-full bg-accent animate-pulse" />
               Saving
             </span>
           )}
@@ -81,12 +81,13 @@ export function Toggle({
       type="button"
       role="switch"
       aria-checked={value}
+      aria-label="Toggle setting"
       onClick={() => onChange(!value)}
-      className={`relative w-9 h-5 rounded-full transition-colors ${
+      className={`relative h-5 w-9 rounded-full transition-colors ${
         value ? "bg-ink" : "bg-line-3"
       }`}>
       <span
-        className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-paper-2 transition-transform ${
+        className={`absolute left-0.5 top-0.5 size-4 rounded-full bg-paper-2 transition-transform ${
           value ? "translate-x-4" : "translate-x-0"
         }`}
       />
@@ -109,6 +110,7 @@ export function Select<T extends string>({
 }) {
   return (
     <select
+      aria-label="Select setting"
       value={value}
       onChange={(e) => onChange(e.target.value as T)}
       className={`h-8 px-2.5 pr-7 rounded border border-line bg-surface text-[12.5px] font-medium text-text outline-none focus:border-accent ${className ?? ""}`}>
@@ -138,22 +140,11 @@ export function NumberInput({
   max?: number;
   step?: number;
 }) {
-  const [draft, setDraft] = useState(String(value));
-  const [isEditing, setIsEditing] = useState(false);
-
-  useEffect(() => {
-    if (!isEditing) setDraft(String(value));
-  }, [isEditing, value]);
-
   function commit(nextRaw: string) {
-    setIsEditing(false);
     const next = Number(nextRaw);
     if (Number.isFinite(next)) {
       const clamped = Math.min(max ?? next, Math.max(min ?? next, next));
-      setDraft(String(clamped));
       if (clamped !== value) onChange(clamped);
-    } else {
-      setDraft(String(value));
     }
   }
 
@@ -161,15 +152,12 @@ export function NumberInput({
     <div className="inline-flex items-center gap-1.5">
       <input
         type="number"
+        aria-label="Numeric setting"
+        key={value}
         min={min}
         max={max}
         step={step}
-        value={draft}
-        onFocus={() => setIsEditing(true)}
-        onChange={(e) => {
-          setIsEditing(true);
-          setDraft(e.target.value);
-        }}
+        defaultValue={value}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -177,7 +165,7 @@ export function NumberInput({
             e.currentTarget.blur();
           }
         }}
-        className="w-20 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono text-right outline-none focus:border-accent"
+        className="h-8 w-20 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono text-right outline-none focus:border-accent"
       />
       {unit && (
         <span className="text-[11.5px] font-mono text-text-3">{unit}</span>
@@ -195,15 +183,12 @@ export function TextInput({
   value: string;
   onCommit: (v: string) => void;
 }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
   return (
     <input
       type="text"
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
+      aria-label="Text setting"
+      key={value}
+      defaultValue={value}
       onBlur={(e) => onCommit(e.target.value)}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
@@ -211,7 +196,7 @@ export function TextInput({
           e.currentTarget.blur();
         }
       }}
-      className="w-64 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent"
+      className="h-8 w-64 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent"
     />
   );
 }
@@ -236,6 +221,7 @@ export function PasswordInput({
   return (
     <input
       type="password"
+      aria-label="Password setting"
       value={draft}
       placeholder={placeholder}
       onChange={(e) => {
@@ -249,7 +235,7 @@ export function PasswordInput({
           e.currentTarget.blur();
         }
       }}
-      className="w-64 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent"
+      className="h-8 w-64 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent"
     />
   );
 }
@@ -270,6 +256,7 @@ export function ModelSelect({
   const allOptions = Array.from(new Set([...options, value].filter(Boolean)));
   return (
     <select
+      aria-label="Model setting"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className="h-8 px-2.5 pr-7 rounded border border-line bg-surface text-[12.5px] font-medium text-text outline-none focus:border-accent w-64">

@@ -1,5 +1,7 @@
 # Safe4AI Private AI Readiness + Pilot
 
+> Superseded on 2026-06-03. Use `safe4ai-pilot/docs/superpowers/plans/2026-06-03-unified-readiness-pilot-roadmap.md` as the canonical plan. This file remains as historical product/offer input only.
+
 ## 1. Product Summary
 
 `Private AI Readiness + Pilot` is a fixed-scope, fixed-timeline paid package for regulated companies that want to test AI on sensitive internal data without sending that data to public cloud AI tools.
@@ -441,4 +443,3 @@ Mitigation:
 - Which LLM performs best for the pilot workflow? Default starting point is Qwen 3.5 9B; final selection to be validated per customer hardware and language requirements.
 - Which embedding model gives the best retrieval quality for the target document types?
 - Should Qdrant or pgvector be the default vector store for customers with existing PostgreSQL infrastructure?
-

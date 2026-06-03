@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.auth.middleware import require_role
 from app.auth.router import limiter
+from app.config import settings
 from app.db import get_db
 from app.db.models import AuditLog, User
-from app.services.app_config_store import load_app_config, upsert_app_config
+from app.security.pinned_http import create_pinned_transport
 from app.security.url_validator import validate_provider_url
+from app.services.app_config_store import load_app_config, upsert_app_config
 from app.services.provider_settings import resolve_provider_config
 from app.services.runtime_config import build_runtime_components
 from app.services.settings_exceptions import EmbeddingDimensionConflict, SettingsValidationError
@@ -63,9 +65,14 @@ def patch_settings(
 
     try:
         # Stage 1: expand mode shorthands, snapshot prev state, derive effective values
-        body, pre_updates, effective_provider, effective_embedding_source, prev_embedding_model, prev_embedding_source = (
-            normalize_patch_request(body, current_config)
-        )
+        (
+            body,
+            pre_updates,
+            effective_provider,
+            effective_embedding_source,
+            prev_embedding_model,
+            prev_embedding_source,
+        ) = normalize_patch_request(body, current_config)
         updates: dict[str, Any] = dict(pre_updates)
 
         # Stage 2: probe Ollama / cloud reachability, sanitize stale model slots
@@ -176,18 +183,11 @@ def test_provider_connection(
                 status_code=422, detail="providerApiKey is required for openai_compatible"
             )
         clean_url, resolved_ip = validate_provider_url(base_url)
-        parsed = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(clean_url)
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        transport = httpx.HTTPTransport(local_address=None)
-
-        class _PinnedTransport(httpx.HTTPTransport):
-            def handle_request(self, request: httpx.Request) -> httpx.Response:
-                request.url = request.url.copy_with(host=resolved_ip)
-                request.headers["host"] = parsed.hostname or resolved_ip
-                return super().handle_request(request)
-
         try:
-            with httpx.Client(transport=_PinnedTransport(), timeout=10.0) as client:
+            with httpx.Client(
+                transport=create_pinned_transport(clean_url, resolved_ip),
+                timeout=10.0,
+            ) as client:
                 resp = client.get(
                     f"{clean_url}/models",
                     headers={"Authorization": f"Bearer {api_key}"},

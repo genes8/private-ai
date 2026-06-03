@@ -1,6 +1,6 @@
-import { apiFetch, apiUrl } from "./client";
+import { ApiError, apiFetch, apiUrl, csrfHeaders } from "./client";
 
-export type AuditKind = "query" | "upload" | "feedback" | "login" | "fallback";
+export type AuditKind = "query" | "upload" | "feedback" | "login" | "fallback" | "admin" | "other";
 
 export interface AuditEvent {
   id: string;
@@ -16,6 +16,7 @@ interface RawAudit {
   id: string;
   timestamp: string;
   user_id: string;
+  user_email?: string | null;
   action_type: string;
   query_text: string | null;
   latency_ms: number | null;
@@ -28,7 +29,8 @@ function mapKind(t: string): AuditKind {
   if (t === "feedback") return "feedback";
   if (t === "login") return "login";
   if (t === "fallback") return "fallback";
-  return "query";
+  if (t.includes("settings") || t.includes("user") || t.includes("admin")) return "admin";
+  return "other";
 }
 
 export const listAuditLogs = (offset = 0, limit = 50, start?: string) => {
@@ -40,7 +42,7 @@ export const listAuditLogs = (offset = 0, limit = 50, start?: string) => {
         id: r.id,
         ts: r.timestamp,
         kind: mapKind(r.action_type),
-        who: r.user_id,
+        who: r.user_email ?? r.user_id,
         query: r.query_text ?? undefined,
         latencyMs: r.latency_ms ?? undefined,
         traceId: r.trace_id ?? undefined,
@@ -50,4 +52,17 @@ export const listAuditLogs = (offset = 0, limit = 50, start?: string) => {
 };
 
 export const exportAuditCsv = () =>
-  fetch(apiUrl("/admin/audit-logs/export.csv"), { credentials: "include" }).then((r) => r.blob());
+  fetch(apiUrl("/admin/audit-logs/export.csv"), {
+    credentials: "include",
+    headers: csrfHeaders(),
+  }).then(async (r) => {
+    if (!r.ok) {
+      const message = await r.text().catch(() => String(r.status));
+      throw new ApiError(r.status, message || "Audit export failed");
+    }
+    const contentType = r.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/csv")) {
+      throw new ApiError(r.status, "Audit export did not return CSV");
+    }
+    return r.blob();
+  });

@@ -80,6 +80,7 @@ def _resolve_session(
         try:
             state = convo.load_session(body.session_id)
             if state.user_id != user_id:
+                # Keep foreign sessions indistinguishable from missing sessions.
                 raise HTTPException(status_code=404, detail="Session not found")
             return body.session_id, state
         except (KeyError, ValueError):
@@ -308,9 +309,13 @@ async def chat_stream(
         except Exception:
             sse_done_mode = "strict"
 
-        _model_name = runtime.chat_model if runtime is not None else settings.ollama_model
+        _model_name = (
+            runtime.chat_model
+            if runtime is not None and isinstance(runtime.chat_model, str)
+            else settings.ollama_model
+        )
 
-        async def _finalize_run(target_db: Session) -> None:
+        def _finalize_run(target_db: Session) -> None:
             try:
                 finalize_chat_run(
                     db=target_db,
@@ -333,19 +338,19 @@ async def chat_stream(
         if sse_done_mode == "async":
             from app.db import SessionLocal
 
-            async def _finalize_in_new_session() -> None:
+            def _finalize_in_new_session() -> None:
                 with SessionLocal() as async_db:
-                    await _finalize_run(async_db)
+                    _finalize_run(async_db)
 
-            asyncio.create_task(_finalize_in_new_session())
+            asyncio.create_task(asyncio.to_thread(_finalize_in_new_session))
         else:
-            await _finalize_run(db)
+            _finalize_run(db)
 
         yield _sse("done", {
             "traceId": final.trace_id,
             "latencyMs": latency_ms,
             "cache": False,
-            "model": runtime.provider_type if runtime is not None else "local",
+            "model": _model_name,
             "kRetrieved": len(final.retrieved_chunks),
             "sessionId": session_id,
         })

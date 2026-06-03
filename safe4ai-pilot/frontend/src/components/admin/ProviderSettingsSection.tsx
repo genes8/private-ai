@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Server, CloudLightning, Cloud, Plus, X } from "lucide-react";
 import { testProviderConnection, type AppSettings, type PatchableSettings, type ProviderMode } from "../../api/settings";
 import { Section, Row, TextInput, PasswordInput, ModelSelect } from "./SettingsAtoms";
@@ -45,7 +45,7 @@ function CustomModelManager({ models, input, saving, onInputChange, onSave }: Cu
     <div className="px-5 py-4 border-t border-line">
       <div className="text-[12px] font-medium text-ink mb-1">Custom model names</div>
       <div className="text-[11.5px] text-text-2 mb-3 max-w-[55ch]">
-        Add model IDs that aren't in the dropdown above — e.g.{" "}
+        Add model IDs that aren't in the dropdown above, e.g.{" "}
         <span className="font-mono">deepseek-v4-flash</span>,{" "}
         <span className="font-mono">qwen-plus</span>,{" "}
         <span className="font-mono">glm-4</span>.
@@ -56,11 +56,12 @@ function CustomModelManager({ models, input, saving, onInputChange, onSave }: Cu
             <span key={m} className="inline-flex items-center gap-1 h-6 px-2 rounded-full bg-surface border border-line text-[11.5px] font-mono text-text">
               {m}
               <button
+                type="button"
                 disabled={saving}
                 onClick={() => onSave(models.filter(x => x !== m))}
                 className="text-text-3 hover:text-danger disabled:opacity-40 ml-0.5"
                 aria-label={`Remove ${m}`}>
-                <X className="w-3 h-3" />
+                <X className="size-3" />
               </button>
             </span>
           ))}
@@ -69,6 +70,7 @@ function CustomModelManager({ models, input, saving, onInputChange, onSave }: Cu
       <div className="flex items-center gap-2">
         <input
           type="text"
+          aria-label="Custom model name"
           value={input}
           onChange={e => onInputChange(e.target.value)}
           onKeyDown={e => {
@@ -79,8 +81,9 @@ function CustomModelManager({ models, input, saving, onInputChange, onSave }: Cu
             }
           }}
           placeholder="e.g. deepseek-v4-flash"
-          className="w-52 h-8 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
+          className="h-8 w-52 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent" />
         <button
+          type="button"
           disabled={!input.trim() || saving}
           onClick={() => {
             const name = input.trim();
@@ -89,7 +92,7 @@ function CustomModelManager({ models, input, saving, onInputChange, onSave }: Cu
             if (!models.includes(name)) onSave([...models, name]);
           }}
           className="inline-flex items-center gap-1.5 h-8 px-3 rounded border border-line bg-surface text-[12px] font-medium text-text hover:bg-paper-2 disabled:opacity-40">
-          <Plus className="w-3.5 h-3.5" />
+          <Plus className="size-3.5" />
           Add
         </button>
         {saving && <span className="text-[11px] font-mono text-accent animate-pulse">Saving…</span>}
@@ -110,7 +113,7 @@ export default function ProviderSettingsSection({
 }: ProviderSettingsSectionProps) {
   const [testState, setTestState] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [testMsg, setTestMsg] = useState("");
-  const [pendingApiKey, setPendingApiKey] = useState("");
+  const pendingApiKeyRef = useRef("");
   const [customModelInput, setCustomModelInput] = useState("");
   const [savingCustomModels, setSavingCustomModels] = useState(false);
 
@@ -151,8 +154,8 @@ export default function ProviderSettingsSection({
                   {badge}
                 </span>
               )}
-              <div className={`w-7 h-7 rounded-md flex items-center justify-center ${selected ? "bg-ink text-paper" : "bg-paper-2 text-text-2"}`}>
-                <Icon className="w-4 h-4" strokeWidth={1.5} />
+              <div className={`size-7 rounded-md flex items-center justify-center ${selected ? "bg-ink text-paper" : "bg-paper-2 text-text-2"}`}>
+                <Icon className="size-4" strokeWidth={1.5} />
               </div>
               <div>
                 <div className={`text-[13px] font-medium ${selected ? "text-ink" : "text-text"}`}>{title}</div>
@@ -192,22 +195,22 @@ export default function ProviderSettingsSection({
             saving={isSavingField("providerApiKey")}>
             <PasswordInput
               placeholder={provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
-              onCommit={v => { if (v) { queueSave({ providerApiKey: v }); setPendingApiKey(""); } }}
-              onChange={setPendingApiKey} />
+              onCommit={v => { if (v) { queueSave({ providerApiKey: v }); pendingApiKeyRef.current = ""; } }}
+              onChange={v => { pendingApiKeyRef.current = v; }} />
           </Row>
-          <Row label="Chat model" hint="Model for answers — e.g. deepseek-v4-flash or deepseek-reasoner." saving={isSavingField("providerChatModel")}>
+          <Row label="Chat model" hint="Model for answers, e.g. deepseek-v4-flash or deepseek-reasoner." saving={isSavingField("providerChatModel")}>
             <ModelSelect value={provider.chatModel} options={providerModels}
               onChange={v => queueSave({ providerChatModel: v })} placeholder="Select or add a model" />
           </Row>
           <div className="px-5 py-3 flex items-start gap-2.5 bg-blue-50/60 border-t border-line">
-            <svg className="w-4 h-4 mt-0.5 text-blue-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+            <svg className="size-4 mt-0.5 text-blue-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
               <circle cx="8" cy="8" r="7" fillOpacity=".15" />
               <path d="M7.25 6.5h1.5v5h-1.5zm0-2.5h1.5v1.5h-1.5z" />
             </svg>
             <p className="text-[12px] text-text-2 leading-relaxed">
               Document search embeddings are always generated by{" "}
               <span className="font-mono text-text">nomic-embed-text</span> on your local Ollama.
-              DeepSeek does not provide an <span className="font-mono text-text">/embeddings</span> API — no documents leave your server.
+              DeepSeek does not provide an <span className="font-mono text-text">/embeddings</span> API, so no documents leave your server.
             </p>
           </div>
           <CustomModelManager
@@ -231,10 +234,10 @@ export default function ProviderSettingsSection({
             saving={isSavingField("providerApiKey")}>
             <PasswordInput
               placeholder={provider.apiKeyConfigured ? "Configured — enter to rotate" : "Paste API key"}
-              onCommit={v => { if (v) { queueSave({ providerApiKey: v }); setPendingApiKey(""); } }}
-              onChange={setPendingApiKey} />
+              onCommit={v => { if (v) { queueSave({ providerApiKey: v }); pendingApiKeyRef.current = ""; } }}
+              onChange={v => { pendingApiKeyRef.current = v; }} />
           </Row>
-          <Row label="Chat model" hint="Model for answers — e.g. gpt-4o or gpt-4o-mini." saving={isSavingField("providerChatModel")}>
+          <Row label="Chat model" hint="Model for answers, e.g. gpt-4o or gpt-4o-mini." saving={isSavingField("providerChatModel")}>
             <ModelSelect value={provider.chatModel} options={providerModels}
               onChange={v => queueSave({ providerChatModel: v })} placeholder="Select or add a model" />
           </Row>
@@ -259,10 +262,11 @@ export default function ProviderSettingsSection({
       {/* Footer: local note or cloud connection test */}
       <div className="px-5 py-3.5 flex items-center gap-3">
         {mode === "local" ? (
-          <span className="text-[12px] text-text-3 font-mono">Local Ollama — no API key required</span>
+	          <span className="text-[12px] text-text-3 font-mono">Local Ollama, no API key required</span>
         ) : (
           <>
             <button
+              type="button"
               disabled={testState === "testing"}
               onClick={async () => {
                 setTestState("testing");
@@ -271,7 +275,7 @@ export default function ProviderSettingsSection({
                   await testProviderConnection({
                     providerType: "openai_compatible",
                     providerBaseUrl: provider.baseUrl,
-                    ...(pendingApiKey ? { providerApiKey: pendingApiKey } : {}),
+                    ...(pendingApiKeyRef.current ? { providerApiKey: pendingApiKeyRef.current } : {}),
                   });
                   setTestState("ok");
                   setTestMsg("Cloud provider connected");

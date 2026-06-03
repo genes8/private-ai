@@ -29,10 +29,11 @@ export default function DocumentRow({ doc, selected, onSelect, onReindex, onDele
   const badge = DOC_BADGE[doc.type] ?? DOC_BADGE.TXT;
 
   return (
-    <div
+    <button
+      type="button"
       onClick={onSelect}
       className={[
-        "group grid px-3 py-3 border-b border-line cursor-pointer hover:bg-surface-2 transition-colors items-center",
+        "group grid w-full px-3 py-3 border-b border-line cursor-pointer hover:bg-surface-2 transition-colors items-center text-left",
         selected ? "bg-[rgba(59,108,242,.025)]" : "",
       ].join(" ")}
       style={{ gridTemplateColumns: "minmax(0,2fr) 80px 90px 90px 1fr 60px", gap: 12 }}
@@ -111,6 +112,6 @@ export default function DocumentRow({ doc, selected, onSelect, onReindex, onDele
           <Trash2 size={12} />
         </button>
       </div>
-    </div>
+    </button>
   );
 }

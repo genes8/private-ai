@@ -1,171 +1,115 @@
-# Bug Hunting Report — safe4ai-pilot/ (2026-05-23, Round 3 — Re-verification)
+# Bug Hunting Report — safe4ai-pilot/ (2026-06-02, Round 5 + Review Follow-up Fixed)
 
-Deep code audit focusing on logic errors, data integrity risks, security concerns, and UI/UX issues. All 30+ source files read and analyzed: chat routes, auth pipeline, RAG pipeline, admin routes, settings routes, ingestion service, security modules, frontend hooks, and all admin pages.
+Full-stack bugfix pass for the Round 4 report. The 30 Round 4 findings were
+re-checked against current source, fixed where they were real defects, or marked
+as already-fixed / invalid where current evidence contradicted the old report.
 
-## Verification Status — 2026-05-23 (Round 3)
+## Verification Status — 2026-06-02 Round 5
 
 | Check | Result | Evidence |
-|-------|--------|----------|
-| Backend tests | ✅ Pass | `./.venv/bin/pytest -q` → `341 passed, 4 skipped, 1 warning` |
+|---|---:|---|
+| Backend tests | ✅ Pass | `.venv/bin/pytest tests/ -q` → `407 passed, 6 skipped, 1 warning` |
+| Review follow-up tests | ✅ Pass | `.venv/bin/pytest tests/test_runtime_config.py tests/test_health.py tests/test_oidc.py tests/test_admin.py::TestSettings::test_patch_settings_persists_oidc_config tests/test_admin.py::TestSettings::test_fetch_provider_model_names_validates_stored_url` → pass |
 | Frontend build | ✅ Pass | `npm run build` in `safe4ai-pilot/frontend` completed successfully |
+| Diff whitespace | ✅ Pass | `git diff --check` clean for touched files |
 
-### Round 2 → Round 3 Delta: 11 of 11 bugs FIXED
+Review follow-up status: complete. The two remaining review blockers are closed:
+legacy OpenAI-compatible provider configs are lazy-resolved into pinned runtime
+clients, and the `/health` provider `/models` check now uses the same pinned
+transport path when a resolved provider IP is available.
 
-| Bug | Status | What changed |
-|-----|--------|-------------|
-| #1 PII filter | ✅ Fixed | Ingestion now redacts PII with `[REDACTED]` via `ContentFilter.redact()` instead of dropping chunks; document content stays fully indexed (rag_pipeline.py:140-143) |
-| #2 Divergent chat persistence | ✅ Fixed | `/chat` now uses `finalize_chat_run()` with `_usage_or_estimate()` (chat_routes.py:236-250). `_save_assistant_reply`, `_write_audit_log`, `_record_cost` deleted |
-| #3 Sync HTTP in async | ✅ Invalid | Settings endpoints are `def` (sync), not `async def`. FastAPI runs sync endpoints in a threadpool — `httpx.Client` is correct. Not a bug |
-| #4 SSRF TOCTOU | ✅ Fixed | `_PinnedTransport` pins HTTP requests to DNS-resolved IP, preventing rebinding (settings_routes.py:315-319). `settings_service.py` caller updated to unpack tuple |
-| #5 Inaccurate cost tracking | ✅ Fixed | `/chat` now uses `_usage_or_estimate()` preferring `provider_usage` when available (chat_routes.py:236) |
-| #6 Silent feedback drop | ✅ Fixed | `useChat.rate()` now sets `ratingError` with descriptive message when session context is lost (useChat.ts:110), and rolls back optimistic rating on API error |
-| #7 Qdrant/DB ID drift | ✅ Fixed | Same `chunk_ids[i]` used for both Qdrant point ID and DB chunk ID (rag_pipeline.py:149-176) |
-| #8 Cache TTL too short | ✅ Fixed | TTL increased from 15s to 60s (settings_routes.py:35) |
-| #9 Retrieve-retry identical | ✅ Fixed | `top_k` now increases by 4 per retry attempt: `retrieval_top_k + state.retrieval_attempts * 4` (graph.py:117) |
-| #10 Input guard false positives | ✅ Fixed | Patterns now use role-specific blocklists: "you are now" only blocks AI-role substitution words; "act as" only blocks on `if you` or specific malicious roles (e.g. `hacker`). Allows: "act as a witness/agent", "You are now a benefits-eligible employee" |
-| #11 Conversation summary | ✅ Mostly fixed | LLM failure now falls back to truncation (conversation.py:107-112). Summary still lossy on success, but that's inherent |
+Known residual warning: Qdrant client compatibility warning when no local Qdrant
+server version can be read during mocked settings tests.
 
----
+## Round 4 Findings — Resolution
 
-## 🔴 CRITICAL — Data Loss / Integrity Risks
+| # | Status | Resolution evidence |
+|---:|---|---|
+| 1 | ✅ Already fixed | `provider_api_key` is in `_SENSITIVE_KEYS`; `upsert_app_config` encrypts it and `load_app_config` decrypts it. Added regression test `test_upsert_app_config_encrypts_provider_api_key`. |
+| 2 | ✅ Fixed | `/chat/stream` async postprocessing now runs sync DB finalization through `asyncio.to_thread(...)` before scheduling with `create_task`. Covered by `test_chat_stream_async_finalization_uses_thread`. |
+| 3 | ✅ Fixed | `_fetch_provider_model_names()`, provider connection tests, cloud embedding probes, and OpenAI-compatible runtime clients now validate and pin provider outbound connections. Covered by `test_fetch_provider_model_names_validates_stored_url`, `test_runtime_config_loads_provider_resolved_ip`, and `test_build_provider_pins_openai_compatible_transport`. |
+| 4 | ✅ Clarified | Foreign sessions still return `404` intentionally, matching missing-session behavior. Added code comment so this remains an explicit anti-enumeration choice. Existing `test_chat_rejects_session_owned_by_another_user` covers it. |
+| 5 | ✅ Fixed | `readStreamChunks()` is iterative, not recursive, and stream read errors become frontend error events. |
+| 6 | ✅ Fixed | `useSettings` no longer re-applies a rejected optimistic diff after server rejection; it invalidates and lets server state win. |
+| 7 | ✅ Fixed | `useSettings.set()` now supports top-level `embeddingSource` and emits `diff.embeddingSource`. TypeScript build verifies the contract. |
+| 8 | ✅ Fixed | Ingestion tasks are tracked by `doc_id`; document delete cancels a registered active task before deletion. Covered by `test_delete_document_cancels_registered_ingestion_task`. |
+| 9 | ✅ Fixed | `formatBytes(0)` now returns `0.0 B`; only negative/null/undefined values render as `—`. |
+| 10 | ✅ Fixed | Unknown audit action types no longer map to `query`; frontend has `admin` and `other` kinds and backend returns `user_email` for display. Covered by `test_list_audit_logs_returns_user_email_for_display`. |
+| 11 | ✅ Fixed | `ErrorBoundary` now wraps the whole router, covering login, chat, admin and settings routes. |
+| 12 | ✅ Fixed | `exportAuditCsv()` now includes CSRF headers, checks `res.ok`, verifies `text/csv`, and throws `ApiError` for failures. |
+| 13 | ✅ Fixed | Streaming disconnect/read errors now surface as an error event; `useChat` annotates an interrupted assistant response when no `done` event arrives. |
+| 14 | ✅ Fixed | `useChat` stores the last session ID under a user-scoped key and reloads it when the authenticated user changes; sign-out/unauthorized clears stored chat sessions. |
+| 15 | ✅ Fixed | Users page now requests `limit=1000` explicitly and displays a "showing first 1,000" hint if the backend cap is reached. |
+| 16 | ✅ Fixed | Generated temporary password is shown in a readonly input with a copy button instead of inline text. |
+| 17 | ✅ Fixed | Multi-file upload failures accumulate failed filenames in one error message instead of overwriting with the last failure. |
+| 18 | ✅ Fixed | Mobile sources toggle now has `aria-label="Toggle citation sources panel"`. |
+| 19 | ✅ Already fixed | Cost percentage hint and bar both guard `dailyCeilingUsd > 0`; no division-by-zero remains in current source. |
+| 20 | ✅ Fixed | Chat collection name now uses `VITE_DEFAULT_COLLECTION ?? "default"`. |
+| 21 | ✅ Fixed | Frontend default Ollama URL now uses `VITE_OLLAMA_URL ?? "http://localhost:11434"`. |
+| 22 | ✅ Fixed | `_validate_embedding_model_dimension()` logs skipped Qdrant checks at debug level instead of silently swallowing all exceptions. Covered by `test_embedding_dimension_check_logs_qdrant_errors`. |
+| 23 | ✅ Fixed by documentation | Settings live metadata cache is documented as per-process with 60s TTL in code and deployment docs; persisted settings are still DB-read per request. |
+| 24 | ✅ Fixed | `OllamaProvider.embed_documents()` only falls back to legacy `/api/embeddings` on 404; other 4xx/5xx errors raise. Covered by `test_ollama_embed_documents_does_not_fallback_on_model_error`. |
+| 25 | ✅ Fixed | Audit list joins `User.email` and frontend displays email when available instead of raw UUID. Covered by `test_list_audit_logs_returns_user_email_for_display`. |
+| 26 | ✅ Fixed | Admin Settings scroll observer now uses `useLayoutEffect` for layout-dependent section observation. |
+| 27 | ✅ Fixed | SSE `done.model` now reports `runtime.chat_model`, with a safe string fallback. Covered by `test_chat_stream_done_event_reports_chat_model_name`. |
+| 28 | ✅ Invalid/no impact | `LiveTimer` is only rendered while `isStreaming` is true and unmounts when streaming stops; no persistent interval remains. |
+| 29 | ✅ Fixed | CSV export validates response status and content type before downloading. |
+| 30 | ✅ Fixed | Password-change success message now explicitly says to sign in again with the new password before redirect. |
 
-**No remaining Critical bugs.** All Critical findings from Round 2 have been resolved or reclassified.
+## Files Changed In This Pass
 
----
+- Backend: `app/api/chat_routes.py`, `app/api/document_routes.py`,
+  `app/api/audit_routes.py`, `app/services/settings_service.py`,
+  `app/services/provider_clients.py`, `app/services/runtime_config.py`,
+  `app/services/provider_settings.py`, `app/services/app_config_store.py`,
+  `app/auth/router.py`, `app/auth/oidc.py`, `app/config.py`,
+  `app/security/input_guard.py`, `app/security/pinned_http.py`,
+  `scripts/audit_cleanup.py`, `scripts/verify_airgap_package.py`.
+- Frontend: `frontend/src/api/chat.ts`, `frontend/src/api/audit.ts`,
+  `frontend/src/api/auth.ts`, `frontend/src/api/documents.ts`,
+  `frontend/src/api/settings.ts`, `frontend/src/hooks/useAuth.ts`,
+  `frontend/src/hooks/useChat.ts`, `frontend/src/hooks/useDocuments.ts`,
+  `frontend/src/hooks/useSettings.ts`, `frontend/src/utils/chatSessionStorage.ts`,
+  `frontend/src/App.tsx`, `frontend/src/pages/ChatPage.tsx`,
+  `frontend/src/pages/LoginPage.tsx`, `frontend/src/pages/SettingsPage.tsx`,
+  `frontend/src/pages/admin/ActivityPage.tsx`,
+  `frontend/src/pages/admin/AdminLayout.tsx`,
+  `frontend/src/pages/admin/DocumentsPage.tsx`,
+  `frontend/src/pages/admin/OverviewPage.tsx`,
+  `frontend/src/pages/admin/SettingsPage.tsx`,
+  `frontend/src/pages/admin/UsersPage.tsx`,
+  `frontend/src/components/admin/ActivityEvent.tsx`,
+  `frontend/src/components/admin/DocumentRow.tsx`,
+  `frontend/src/components/admin/ProviderSettingsSection.tsx`,
+  `frontend/src/components/admin/SettingsAtoms.tsx`.
+- Tests: `tests/test_chat.py`, `tests/test_admin.py`,
+  `tests/test_provider_clients.py`, `tests/test_models.py`,
+  `tests/test_runtime_config.py`, `tests/test_health.py`, `tests/test_oidc.py`.
+- Docs/config: `docs/deployment.md`, `docs/air-gap-runbook.md`,
+  `docker-compose.yml`.
 
-### 2. Blocking `/chat` and streaming `/chat/stream` persist audit/cost data through divergent paths — `app/api/chat_routes.py:56-111`, `app/services/chat_finalizer.py:14-70`
+## Review Follow-up Findings — Resolution
 
-The blocking `/chat` endpoint uses three separate helpers:
+| # | Status | Resolution evidence |
+|---:|---|---|
+| R1 | ✅ Fixed | Persisted `provider_resolved_ip` is now loaded into runtime config and passed into OpenAI-compatible chat/embedding clients, which create a pinned async transport. Legacy OpenAI-compatible configs without a stored IP are lazy-resolved at runtime load. Provider model-list, health `/models`, and embedding-probe paths use the same pinned helper. |
+| R2 | ✅ Fixed | OIDC issuer settings now use SSRF validation. OIDC discovery, token, and userinfo calls validate each outbound URL and use pinned async transports. Covered by `tests/test_oidc.py`. |
+| R3 | ✅ Fixed | Chat session persistence is keyed by authenticated user id and cleared on sign-out/unauthorized. The legacy global key is removed during cleanup. |
+| R4 | ✅ Fixed in report | This report now lists the broader branch scope, including OIDC, auth, air-gap, audit cleanup, settings/tier, runtime, and frontend auth/session files. |
+| R5 | ✅ Fixed | Legacy OpenAI-compatible configs without stored `provider_resolved_ip` are lazy-resolved during runtime config load. Covered by `test_runtime_config_resolves_legacy_provider_without_stored_ip`. |
+| R6 | ✅ Fixed | `/health` provider `/models` checks use `create_pinned_async_transport()` when `runtime.provider_resolved_ip` is present. Covered by `test_health_provider_check_uses_pinned_transport_when_resolved_ip_exists`. |
 
-```python
-_save_assistant_reply(convo, final)
-_write_audit_log(...)
-_record_cost(...)
-```
+## Remaining Open Bugs From Round 4
 
-The streaming `/chat/stream` endpoint uses the unified `finalize_chat_run()` helper instead.
+None known from the original Round 4 list after the fixes and targeted
+verification above. This is not a claim that the entire expanded branch has no
+remaining defects.
 
-These paths currently write different data:
+## Deferred Code Quality Notes
 
-- Blocking path writes `AuditLog.action_type="query"`.
-- Streaming finalizer writes `AuditLog.action_type="chat_query"`.
-- Blocking path has a smaller `response_metadata` payload.
-- Streaming finalizer records provider usage fields in `response_metadata`.
-- Blocking path records cost through `CostTracker.record_run`, but does not use the same `AgentRun` creation path as `finalize_chat_run`.
+These are still architectural/code-style debts, not open Round 4 bugs:
 
-**Impact:** Dashboards and cost/audit reports can disagree depending on whether a query used `/chat` or `/chat/stream`. This is especially risky because `/chat` is intentionally retained for eval scripts, integration tests, and direct API clients.
-
-**Fix:** Make blocking `/chat` use `finalize_chat_run()` with `_usage_or_estimate()`, then delete `_save_assistant_reply`, `_write_audit_log`, and `_record_cost` if no longer needed. Ensure error audit handling remains explicit and consistent.
-
----
-
-## 🟠 HIGH — Logic / Security Issues
-
-**No remaining High bugs.** All High findings from Round 2 have been resolved or reclassified.
-
----
-
-## 🟡 MEDIUM — Robustness / Maintainability
-
-**No remaining Medium runtime bugs.** All Medium findings from Round 2 have been resolved.
-
----
-
-## Previously Fixed Issues (from Rounds 1-7, verified still fixed)
-
-| # | Issue | Verification |
-|---|-------|-------------|
-| R2 #2 | Blocking `/chat` and streaming `/chat/stream` used divergent persistence paths | ✅ `/chat` now uses `finalize_chat_run()` |
-| R2 #3 | Sync HTTP in async settings endpoints | ✅ Invalid — endpoints are sync `def`, not `async def` |
-| R2 #4 | SSRF TOCTOU race via DNS rebinding | ✅ `_PinnedTransport` pins requests to resolved IP |
-| R2 #5 | Cost ceiling used estimated tokens for `/chat` | ✅ Now uses `_usage_or_estimate()` with `provider_usage` |
-| R2 #6 | `useChat.rate()` silently dropped feedback | ✅ Now shows `ratingError` message |
-| R2 #7 | Qdrant/DB chunk ID drift | ✅ Same UUID used for both Qdrant point and DB chunk |
-| R2 #8 | Settings cache TTL too short (15s) | ✅ Increased to 60s |
-| R2 #9 | Retrieve-retry used identical parameters | ✅ `top_k` increases by 4 per attempt |
-| R2 #10 | Input guard false positives on legal language | ✅ Role-specific blocklists; "act as a witness/agent" and "You are now a benefits-eligible employee" now pass |
-| R2 #11 | Conversation summary grew unbounded on LLM failure | ✅ Falls back to truncation |
-| R3 #1 | PII ingestion dropped chunks instead of redacting | ✅ `ContentFilter.redact()` added; ingestion replaces PII with `[REDACTED]` |
-| R1 #1 | "Indexing healthy" card was fake | ✅ Now dynamic — queries `corpus-stats` API |
-| R1 #2 | Settings sources section hardcoded | ✅ Marked read-only with honest label |
-| R1 #3 | Reranker list hardcoded | ✅ Hint updated to "Supported options" |
-| R1 #4 | Chat suggestions static | ✅ Labeled "Example questions — edit before sending" |
-| R1 #5 | SSE mode misplaced in Provider | ✅ Moved to Retrieval section |
-| R1 #6 | Feedback trace "not recorded" | ✅ `GET /admin/feedback/{id}/trace` endpoint added |
-| R1 #7 | Settings nav scroll desync | ✅ IntersectionObserver syncs active nav |
-| R1 #8 | AdminLayout full feedback fetch | ✅ Lightweight `/admin/feedback/count` endpoint |
-| Old #1 | `syncedAt: "2h ago"` in sources | ✅ Returns `None` |
-| Old #2 | Dead Sync/Remove buttons | ✅ Removed |
-| Old #4 | Fake trace grid | ✅ Replaced with honest message |
-| Old #7 | Fake `source` filenames | ✅ `source` field removed |
-| Old #8 | Login page fake health check | ✅ Calls `/health` API |
-| Old #33 | `addedBy` always "—" | ✅ Backend returns `uploaded_by_email` |
-
----
-
-## Thermo-Nuclear Code Quality Review — Re-verified 2026-05-23 (Round 3)
-
-Scope: full code-quality audit of the current source tree. This is stricter than the bug list above and focuses on structural maintainability, abstraction quality, and spaghetti growth.
-
-### BLOCKERS — Must Fix Before Shipping
-
-| ID | Status | Finding | Verification |
-|----|--------|---------|--------------|
-| B1 | ✅ Fixed | Divergent chat persistence paths unified. | `/chat` now calls `finalize_chat_run()`; `_save_assistant_reply`/`_write_audit_log`/`_record_cost` deleted. |
-| B2 | ✅ Fixed | `CustomModelManager` moved to module level. | `ProviderSettingsSection.tsx:43-99` — standalone component, no longer inside render body. |
-| B3 | ✅ Confirmed | `collect_field_updates` is a long validation if-chain. | `app/services/settings_service.py:258-413` still contains repeated `if body.X is not None` validation/update branches. |
-
-### HIGH — Serious Quality Debt
-
-| ID | Status | Finding | Verification |
-|----|--------|---------|--------------|
-| H1 | ⚠️ Partially confirmed | Service layer raises `HTTPException`. | Confirmed in `settings_service.py` and `provider_settings.py`; not confirmed in `startup_migrations.py`, which uses `RuntimeError`/logged warnings instead. |
-| H2 | ✅ Confirmed | `SettingsPage.set()` is a stringly typed dispatcher. | `frontend/src/pages/admin/SettingsPage.tsx:212-267` maps `keyof AppSettings` to flat patch fields with manual casts, while provider controls call `queueSave()` directly. |
-| H3 | ✅ Confirmed | `applyDiff` mixes explicit optimistic patching with derived provider consequences. | `frontend/src/pages/admin/SettingsPage.tsx:116-165` uses nested null-coalescing chains and mode-specific provider synchronization. |
-| H4 | ✅ Confirmed | Hybrid/cloud provider UI has substantial duplication. | `ProviderSettingsSection.tsx` repeats API URL, API key, chat model, and custom model UI across hybrid/cloud blocks. |
-
-### MEDIUM — Architectural Smells
-
-| ID | Status | Finding | Verification |
-|----|--------|---------|--------------|
-| M1 | ✅ Confirmed | `_QDRANT_COLLECTION = "documents"` is duplicated. | Present in `admin_routes.py`, `startup_migrations.py`, `ingestion_service.py`, and `scripts/verify_deletion.py`. |
-| M2 | ✅ Confirmed | Deleted-user constants and ensure logic are duplicated. | Constants exist in `admin_routes.py` and `startup_migrations.py`; one implementation uses ORM, the other raw SQL. |
-| M3 | ✅ Confirmed | `settings_routes.py` still owns too much business logic. | `_fetch_provider_model_names`, `_get_settings_live_metadata`, and `_serialize_settings` live in the route module. |
-| M4 | ✅ Confirmed | Provider `/models` probing is duplicated. | `_fetch_provider_model_names()` and `test_provider_connection()` each implement direct `/models` calls. |
-| M5 | ⚠️ Partially confirmed | LLM grading code is dead in the main graph path. | `graph.py` always passes `rerank_threshold`, so the production graph takes score-based grading; direct tests still call `grade_chunks()` without threshold, so the code is not globally unreachable. |
-| M6 | ⚠️ Partially confirmed | Startup migrations swallow many failures. | Several `_ensure_*` helpers log and continue, but `_ensure_qdrant_collection()` re-raises `RuntimeError` for vector-size mismatch and default-credential checks can fail in enforce mode. |
-| M7 | ✅ Fixed | Dead `if True:` branch in CSRF middleware. | No longer present in `app/main.py`. |
-| M8 | ✅ Confirmed | Vector-size extraction is copy-pasted. | Same vector config extraction pattern appears in `settings_service.py` and `startup_migrations.py`. |
-| M9 | ⚠️ Partially fixed | Vision model magic string partially centralized. | `runtime_config.py:20` and `settings_service.py:31` define `_DEFAULT_VISION_MODEL`; `settings_routes.py` still uses the literal string at lines 119, 140, 159, 161. |
-| M10 | ✅ Confirmed | Entity booster compiles regex inside loops. | `entity_booster.py:90,97` calls `re.search(r"\b" + re.escape(tok) + r"\b", ...)` per token/chunk. |
-
-### Stale Or Incorrect Review Items
-
-| Review claim | Current status |
-|--------------|----------------|
-| `AdminLayout` fetches all feedback just to count negatives | ❌ Stale. `AdminLayout` now uses `queryKey: ["feedback-count"]` and `GET /admin/feedback/count`. |
-| Feedback query key shared between `AdminLayout` and `FeedbackPage` | ❌ Stale. `AdminLayout` uses `["feedback-count"]`; `FeedbackPage` uses `["feedback"]`. |
-
-### Thermo Summary
-
-| Category | Count | Key Theme |
-|----------|-------|-----------|
-| Blockers | 1 remaining (of 3) | `collect_field_updates` long if-chain; B1 and B2 fixed |
-| High | 4 | HTTP/service boundary coupling, split save paths, fragile optimistic state, duplicated provider UI |
-| Medium | 9 remaining (of 10) | Duplicated constants, route-layer business logic, partial dead code, silent startup warnings, magic strings; M7 fixed |
-| Stale/Incorrect | 2 | Feedback-count issues already fixed |
-
-**Thermo verdict:** Improved since Round 2. 2 of 3 blockers fixed (B1, B2), 1 medium smell fixed (M7). Remaining B3 is a code-style concern, not a runtime bug. The codebase is in better structural shape than the previous audit.
-
----
-
-## Summary
-
-| Priority | Count | Key Themes |
-|----------|-------|------------|
-| 🔴 Critical | 0 | All Critical findings resolved |
-| 🟠 High | 0 | All High findings resolved or reclassified |
-| 🟡 Medium | 0 | All Medium runtime bugs resolved |
-| **Total** | **0** | All 11 runtime bugs fixed across Rounds 2–3 |
-
-Thermo-nuclear review status: **1 structural blocker remaining (of 3), 4 high-priority quality debts, 9 medium architectural smells (of 10).**
+- `collect_field_updates` remains a long validation dispatcher.
+- Some service modules still raise HTTP-oriented exceptions.
+- Settings provider UI still has duplication and stringly typed dispatch.
+- Collection constants and deleted-user helpers could be centralized further.

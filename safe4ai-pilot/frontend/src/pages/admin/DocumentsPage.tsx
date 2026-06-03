@@ -69,6 +69,7 @@ export default function DocumentsPage() {
         <input
           ref={inputRef}
           type="file"
+          aria-label="Upload documents"
           className="hidden"
           multiple
           accept=".pdf,.docx,.xlsx,.txt"
@@ -89,7 +90,7 @@ export default function DocumentsPage() {
               dragging ? "border-accent bg-accent/5" : "border-line",
             ].join(" ")}
           >
-            <div className="w-[38px] h-[38px] rounded-[9px] bg-[#eaf0ff] flex items-center justify-center shrink-0">
+            <div className="size-[38px] rounded-[9px] bg-[#eaf0ff] flex items-center justify-center shrink-0">
               <Upload size={16} className="text-[#1d3fa6]" />
             </div>
             <div className="flex-1">
@@ -117,7 +118,7 @@ export default function DocumentsPage() {
               {/* Table header */}
               <div
                 className="grid px-3 py-2 border-b border-line bg-surface-2 font-mono text-[10.5px] font-medium text-text-3 uppercase"
-                style={{ gridTemplateColumns: "minmax(0,2fr) 80px 90px 90px 1fr 60px", gap: 12, letterSpacing: "0.06em" }}
+                style={{ gridTemplateColumns: "minmax(0,2fr) 80px 90px 90px 1fr 60px", gap: 12 }}
               >
                 <span>Name</span>
                 <span>Type</span>
@@ -199,6 +200,7 @@ export default function DocumentsPage() {
 
             <div className="border-t border-line px-[14px] py-2.5 flex gap-1.5">
               <button
+                type="button"
                 onClick={() => reindex(selectedDoc.id)}
                 disabled={isReindexing}
                 className="flex-1 h-[26px] px-[9px] text-[12px] font-medium text-text-2 border border-line bg-surface rounded-[5px] hover:bg-surface-2 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -207,6 +209,7 @@ export default function DocumentsPage() {
                 {isReindexing ? "Working…" : "Reindex"}
               </button>
               <button
+                type="button"
                 onClick={() => setConfirmDelete(selectedDoc.id)}
                 className="flex-1 h-[26px] px-[9px] text-[12px] font-medium text-[#c0392b] border border-line bg-surface rounded-[5px] hover:bg-[#fbe9e6] transition-colors"
               >

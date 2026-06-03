@@ -24,7 +24,7 @@ interface Props { variant?: Variant; tone?: Tone; children?: ReactNode; }
 export default function Chip({ variant = "default", tone = "neutral", children }: Props) {
   return (
     <span className={["inline-flex items-center rounded-full h-[22px] px-2 gap-1.5 text-[11.5px] font-medium", toneCls[tone][variant]].join(" ")}>
-      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor[tone] }} />
+      <span className="size-1.5 rounded-full shrink-0" style={{ background: dotColor[tone] }} />
       {children}
     </span>
   );

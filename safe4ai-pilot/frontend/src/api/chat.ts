@@ -19,6 +19,19 @@ export type SseEvent =
   | { type: "done";  data: SseDone  }
   | { type: "error"; data: { message: string } };
 
+async function* readStreamChunks(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<Uint8Array> {
+  while (true) {
+    let result: ReadableStreamReadResult<Uint8Array>;
+    try {
+      result = await reader.read();
+    } catch (err) {
+      throw err instanceof Error ? err : new Error("Stream read failed");
+    }
+    if (result.done) return;
+    yield result.value;
+  }
+}
+
 export async function* streamChat(
   question: string,
   sessionId: string | null,
@@ -71,32 +84,33 @@ export async function* streamChat(
     return { type: "error", data: { message: `Unexpected SSE event: ${name}` } };
   }
 
-  while (true) {
-    let done: boolean, value: Uint8Array | undefined;
-    try {
-      ({ done, value } = await reader.read());
-    } catch {
-      break;
-    }
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
+  try {
+    for await (const value of readStreamChunks(reader)) {
+      buf += decoder.decode(value, { stream: true });
 
-    const lines = buf.split(/\r?\n/);
-    buf = lines.pop() ?? "";
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop() ?? "";
 
-    for (const line of lines) {
-      if (line === "") {
-        const ev = emitEvent();
-        if (ev) yield ev;
-        continue;
-      }
-      if (line.startsWith("event:")) {
-        eventName = line.slice(6).trim();
-        continue;
-      }
-      if (line.startsWith("data:")) {
-        dataLines.push(line.startsWith("data: ") ? line.slice(6) : line.slice(5));
+      for (const line of lines) {
+        if (line === "") {
+          const ev = emitEvent();
+          if (ev) yield ev;
+          continue;
+        }
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim();
+          continue;
+        }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.startsWith("data: ") ? line.slice(6) : line.slice(5));
+        }
       }
     }
+  } catch (err) {
+    if (signal?.aborted) return;
+    yield {
+      type: "error",
+      data: { message: err instanceof Error ? err.message : "Streaming connection interrupted" },
+    };
   }
 }

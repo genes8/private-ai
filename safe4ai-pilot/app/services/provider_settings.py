@@ -12,6 +12,8 @@ from typing import Any, Literal
 import httpx
 
 from app.config import settings
+from app.security.pinned_http import create_pinned_transport
+from app.security.url_validator import validate_provider_url
 from app.services.settings_exceptions import SettingsValidationError
 
 
@@ -191,9 +193,13 @@ def probe_cloud_embeddings(
     if not (base_url and api_key and embedding_model):
         return
     try:
-        with httpx.Client(timeout=5.0) as client:
+        clean_url, resolved_ip = validate_provider_url(base_url)
+        with httpx.Client(
+            timeout=5.0,
+            transport=create_pinned_transport(clean_url, resolved_ip),
+        ) as client:
             resp = client.post(
-                f"{base_url.rstrip('/')}/embeddings",
+                f"{clean_url}/embeddings",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={"model": embedding_model, "input": "test"},
             )
@@ -210,6 +216,8 @@ def probe_cloud_embeddings(
             f"Embedding endpoint timed out ({base_url}). Check the URL and try again."
         ) from exc
     except Exception as exc:
+        if getattr(exc, "status_code", None) == 422:
+            raise SettingsValidationError(str(getattr(exc, "detail", exc))) from exc
         raise SettingsValidationError(
             f"Could not reach embedding endpoint ({base_url}): {exc}"
         ) from exc

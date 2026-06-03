@@ -105,6 +105,25 @@ def test_load_app_config_coerces_boolean_strings_explicitly() -> None:
     assert config["reranker_enabled"] is False
 
 
+def test_upsert_app_config_encrypts_provider_api_key() -> None:
+    from app.db.models import AppConfig
+    from app.services.app_config_store import load_app_config, upsert_app_config
+
+    rows: dict[str, AppConfig] = {}
+    db = MagicMock()
+    db.get.side_effect = lambda _model, key: rows.get(key)
+    db.add.side_effect = lambda row: rows.setdefault(row.key, row)
+    db.query.return_value.all.side_effect = lambda: list(rows.values())
+
+    upsert_app_config(db, {"provider_api_key": "sk-secret"}, commit=False)
+
+    stored = rows["provider_api_key"].value
+    assert isinstance(stored, str)
+    assert stored.startswith("enc:")
+    assert "sk-secret" not in stored
+    assert load_app_config(db)["provider_api_key"] == "sk-secret"
+
+
 @pytest.mark.asyncio
 async def test_prewarm_provider_skips_non_ollama() -> None:
     from app.main import _prewarm_provider

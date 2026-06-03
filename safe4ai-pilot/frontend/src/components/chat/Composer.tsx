@@ -39,6 +39,7 @@ export default function Composer({ value, onChange, onSubmit, scope, disabled, p
         </div>
       )}
       <textarea
+        aria-label="Message"
         ref={ref}
         rows={1}
         value={value}
@@ -60,7 +61,7 @@ export default function Composer({ value, onChange, onSubmit, scope, disabled, p
           onClick={() => value.trim() && onSubmit()}
           disabled={disabled || !value.trim()}
           aria-label="Send message"
-          className="flex h-7 w-7 items-center justify-center rounded-lg bg-ink text-paper hover:bg-ink-2 disabled:opacity-30 transition-colors"
+          className="flex size-7 items-center justify-center rounded-lg bg-ink text-paper hover:bg-ink-2 disabled:opacity-30 transition-colors"
         >
           <Send size={13} />
         </button>

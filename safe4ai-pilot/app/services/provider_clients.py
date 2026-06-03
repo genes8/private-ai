@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
+
+from app.security.pinned_http import create_pinned_async_transport
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class OpenAICompatibleProvider:
         chat_model: str,
         embedding_model: str,
         vision_model: str,
+        resolved_ip: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
@@ -65,7 +67,12 @@ class OpenAICompatibleProvider:
         self._chat_model = chat_model
         self._embedding_model = embedding_model
         self._vision_model = vision_model
-        self._client = client or httpx.AsyncClient(timeout=60)
+        transport = (
+            create_pinned_async_transport(self._base_url, resolved_ip)
+            if client is None and resolved_ip
+            else None
+        )
+        self._client = client or httpx.AsyncClient(timeout=60, transport=transport)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -184,7 +191,9 @@ class OllamaProvider:
         response.raise_for_status()
         payload = response.json()
         message = payload.get("message")
-        content = (message.get("content", "") if isinstance(message, dict) else "") or payload.get("response", "")
+        content = (
+            message.get("content", "") if isinstance(message, dict) else ""
+        ) or payload.get("response", "")
         return ChatResult(content=str(content), usage=None)
 
     async def embed_query(self, query: str) -> list[float]:
@@ -200,7 +209,12 @@ class OllamaProvider:
             if response.status_code < 400:
                 embeddings = response.json().get("embeddings", [])
                 return [list(v) for v in embeddings]
-        except (httpx.HTTPStatusError, httpx.RequestError):
+            if response.status_code != 404:
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+        except httpx.RequestError:
             pass
 
         # Fallback: call legacy /api/embeddings one at a time

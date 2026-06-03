@@ -1,5 +1,5 @@
 import { Download } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ActivityEvent from "../../components/admin/ActivityEvent";
 import Button from "../../components/Button";
@@ -16,6 +16,8 @@ const KIND_FILTERS: { label: string; value: AuditKind | "all" }[] = [
   { label: "Feedback", value: "feedback" },
   { label: "Auth",     value: "login" },
   { label: "Fallback", value: "fallback" },
+  { label: "Admin",    value: "admin" },
+  { label: "Other",    value: "other" },
 ];
 
 const RANGE_FILTERS = ["Last hour", "Today", "Last 7 days", "Last 30 days"];
@@ -41,10 +43,6 @@ export default function ActivityPage() {
   const { events, isLoading, page, setPage, limit } = useAuditStream(rangeToStart(activeRange));
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings, staleTime: 60_000 });
   const retentionDays = settings?.security?.auditRetentionDays ?? 365;
-
-  useEffect(() => {
-    setPage(0);
-  }, [activeRange, setPage]);
 
   const filtered = activeKind === "all" ? events : events.filter((e) => e.kind === activeKind);
 
@@ -107,7 +105,10 @@ export default function ActivityPage() {
               <button
                 key={r}
                 type="button"
-                onClick={() => setActiveRange(r)}
+                onClick={() => {
+                  setActiveRange(r);
+                  setPage(0);
+                }}
                 className={[
                   "flex items-center h-7 px-2 rounded-md text-[13px] w-full text-left transition-colors",
                   activeRange === r
@@ -122,7 +123,7 @@ export default function ActivityPage() {
 
           <div className="mt-auto bg-[#f4f1ea] rounded-md p-3 font-mono text-[11px] text-text-3 leading-relaxed">
             <p className="font-medium text-ink text-[10.5px] uppercase tracking-[0.06em] mb-1.5">Retention</p>
-            All audit events retained <b className="text-text">{retentionDays} days</b>, then archived to immutable storage.
+            Audit rows are retained <b className="text-text">{retentionDays} days</b>. Cleanup uses the configured archive export before deletion.
           </div>
         </aside>
 
@@ -135,7 +136,7 @@ export default function ActivityPage() {
               <span className="font-mono text-[11.5px] text-text-3">{todayFormatted}</span>
               <span className="flex-1" />
               <span className="font-mono text-[11.5px] text-text-3 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#3b6cf2] animate-pulse shrink-0" />
+                <span className="size-1.5 rounded-full bg-[#3b6cf2] animate-pulse shrink-0" />
                 live
               </span>
             </div>

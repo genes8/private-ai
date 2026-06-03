@@ -42,7 +42,7 @@ export default function OverviewPage() {
       <AdminLayout>
         <div className="flex-1 flex items-center justify-center bg-paper">
           <div className="text-center">
-            <AlertCircle className="w-6 h-6 text-danger mx-auto mb-2" strokeWidth={1.5} />
+            <AlertCircle className="size-6 text-danger mx-auto mb-2" strokeWidth={1.5} />
             <p className="text-[13px] text-danger font-mono mb-1">Failed to load overview</p>
             <p className="text-[12px] text-text-3 font-mono max-w-sm">
               {error instanceof Error ? error.message : "The dashboard could not fetch stats."}
@@ -87,7 +87,7 @@ export default function OverviewPage() {
             <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-1.5">summary</p>
             <h1 className="font-serif text-[19px] text-ink" style={{ letterSpacing: "-0.005em" }}>Today's briefing</h1>
             <p className="text-[12px] text-text-3 mt-0.5 font-mono">
-              {dateStr} — generated at {timeStr}, refreshes every minute.
+              {dateStr}, generated at {timeStr}; refreshes every minute.
             </p>
           </div>
 
@@ -143,8 +143,8 @@ export default function OverviewPage() {
               recentNegative.map((item) => (
                 <div key={item.id} className="bg-surface border border-line rounded-lg p-3.5 grid gap-3.5 items-start"
                   style={{ gridTemplateColumns: "70px 1fr" }}>
-                  <span className="font-mono text-[9.5px] font-medium pt-0.5 leading-tight"
-                    style={{ color: "#c0392b", letterSpacing: "0.06em" }}>
+                  <span className="font-mono text-[9.5px] font-medium pt-0.5 leading-tight tracking-kicker"
+                    style={{ color: "#c0392b" }}>
                     FEEDBACK
                   </span>
                   <div>

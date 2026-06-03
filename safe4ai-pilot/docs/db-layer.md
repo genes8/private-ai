@@ -92,14 +92,18 @@ Now I have a thorough understanding. Let me compile the full structured summary.
 | `user_id` | String | FK→users.id, nullable, INDEX | |
 | `session_id` | String | nullable | |
 | `timestamp` | DateTime(tz) | server_default=func.now(), INDEX | |
-| `action_type` | String | NOT NULL | e.g. `system_cleanup` |
+| `action_type` | String | NOT NULL | e.g. `chat_query`, `settings_provider_change` |
 | `query_text` | String(500) | nullable | |
 | `response_metadata` | JSON | nullable | |
 | `latency_ms` | Integer | nullable | |
 | `model_used` | String | nullable | |
 | `trace_id` | String | nullable | |
 
-> **Note:** The `audit_logs` table is defined with all columns needed for per-query auditing (`action_type`, `query_text`, `latency_ms`, `model_used`, `trace_id`), but **no write operations exist in the current chat/query flows**. Currently, audit log rows are only written by the scheduled cleanup task (`action_type = "system_cleanup"`). The frontend maps expected `action_type` values: `"login"`, `"query"`, `"upload"`, `"feedback"`, `"fallback"` — but the backend does not insert these yet.
+> **Note:** Audit rows are written by specific flows, not by every action. Current writers:
+> - **`chat_query`** — written for each completed chat query by `app/services/chat_finalizer.py::finalize_chat_run` (called from `app/api/chat_routes.py`), including `latency_ms`, `model_used`, `trace_id`, and token/usage metadata. Quota counting reads these rows (`app/services/quota_service.py`).
+> - **`settings_provider_change`** — written when provider settings change (`app/api/settings_routes.py`).
+>
+> The scheduled cleanup task (`scripts/audit_cleanup.py`) does **not** insert rows; it archives existing audit rows to a tamper-evident JSONL file and then deletes rows past retention. The frontend can render additional `action_type` values (e.g. `"login"`, `"upload"`, `"feedback"`, `"fallback"`) that the backend does **not** yet emit — those remain real gaps.
 
 #### 2.7 `agent_runs`
 | Column | Type | Constraints | Notes |
@@ -196,7 +200,7 @@ WHERE email = 'admin@safe4ai.local';
 3. On completion: `ConversationManager.save_session()` updates `sessions.state_json` with final `PrivateAIState` (includes message history + citations + metadata)
 4. If `requires_human_review`: inserts `human_review_queue` row
 
-**Note:** `audit_logs` and `agent_runs` are **not currently written** by the chat flow. The `CostTracker.record_run()` and `AuditLog` inserts exist as reusable functions but are not called from the chat routes. The graph is stateless with respect to DB (it only operates on `PrivateAIState`).
+**Note:** The LangGraph graph itself is stateless with respect to the DB (it only operates on `PrivateAIState`). Persistence happens **after** the graph completes, in `app/services/chat_finalizer.py::finalize_chat_run`, which writes — in a single transaction — the updated `sessions.state_json`, one `audit_logs` row (`action_type="chat_query"`), and one `agent_runs` row (`status="completed"`, with `cost_usd`). This finalizer is invoked from both the streaming and non-streaming chat paths in `app/api/chat_routes.py`.
 
 **Validation queries:**
 ```sql
@@ -549,9 +553,9 @@ Each document is:
 
 ### 6. Key Observations / Gaps
 
-1. **Audit log writes are missing.** The `audit_logs` table is fully defined with all fields needed for per-query auditing (`action_type`, `query_text`, `latency_ms`, `model_used`, `trace_id`), and the frontend expects entries with types `"login"`, `"query"`, `"upload"`, `"feedback"`, `"fallback"`. However, **no backend code currently inserts these rows** during normal operations — only the cleanup task writes to it.
+1. **Audit log writes are partial, not absent.** Per-query `chat_query` rows are written by `chat_finalizer.finalize_chat_run` and `settings_provider_change` rows by the settings route. However, several `action_type` values the frontend can render — `"login"`, `"upload"`, `"feedback"`, `"fallback"` — are **not yet emitted** by the backend. Those remain genuine gaps.
 
-2. **Agent run recording is defined but not wired.** `CostTracker.record_run()` creates `agent_runs` rows, but is not called from any current code path.
+2. **Agent run recording is wired for chat.** `agent_runs` rows are inserted by `chat_finalizer.finalize_chat_run` on each completed chat query (status `"completed"`, with `cost_usd`). Failure-path and non-chat agent runs are not separately recorded.
 
 3. **Schema is auto-created, not migrated.** Alembic is configured but the `versions/` directory is empty. Schema is created fresh via `Base.metadata.create_all()` in the lifespan. This means schema changes must be managed manually or via migration generation.
 

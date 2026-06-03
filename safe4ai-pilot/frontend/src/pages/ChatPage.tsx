@@ -1,5 +1,5 @@
 import { BookOpen, ChevronDown, LogOut, Settings, Shield, Square } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
@@ -22,6 +22,22 @@ const SUGGESTED = [
   { tag: "Compliance",question: "What are our data retention obligations?" },
 ];
 
+interface ChatUiState {
+  composer: string;
+  activeCitationId: string | null;
+  drawerMessageId: string | null;
+  mobileSourcesOpen: boolean;
+  menuOpen: boolean;
+}
+
+const initialChatUiState: ChatUiState = {
+  composer: "",
+  activeCitationId: null,
+  drawerMessageId: null,
+  mobileSourcesOpen: false,
+  menuOpen: false,
+};
+
 function timeOfDay() {
   const h = new Date().getHours();
   return h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";
@@ -29,17 +45,17 @@ function timeOfDay() {
 
 export default function ChatPage() {
   const { me, isAdmin, signOut } = useAuth();
-  const { messages, steps, streaming, sendMessage, rate, stop, ratingError } = useChat();
+  const { messages, steps, streaming, sendMessage, rate, stop, ratingError } = useChat(me?.id);
   const { data: corpusStats } = useQuery({
     queryKey: ["corpus-stats"],
     queryFn: () => apiFetch<{ docCount: number; chunkCount: number }>("/admin/corpus-stats"),
     staleTime: 10_000,
   });
-  const [composer, setComposer] = useState("");
-  const [activeCitationId, setActiveCitationId] = useState<string | null>(null);
-  const [drawerMessageId, setDrawerMessageId] = useState<string | null>(null);
-  const [mobileSourcesOpen, setMobileSourcesOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [ui, setUi] = useReducer(
+    (current: ChatUiState, patch: Partial<ChatUiState>) => ({ ...current, ...patch }),
+    initialChatUiState,
+  );
+  const { composer, activeCitationId, drawerMessageId, mobileSourcesOpen, menuOpen } = ui;
   const bottomRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -47,7 +63,7 @@ export default function ChatPage() {
     if (!menuOpen) return;
     function handleOutside(e: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
+        setUi({ menuOpen: false });
       }
     }
     document.addEventListener("mousedown", handleOutside);
@@ -76,7 +92,7 @@ export default function ChatPage() {
   function handleSubmit() {
     const q = composer.trim();
     if (!q || streaming) return;
-    setComposer("");
+    setUi({ composer: "" });
     sendMessage(q).then(() =>
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50)
     );
@@ -97,7 +113,7 @@ export default function ChatPage() {
           <div className="flex items-center gap-2">
             {streaming && (
               <span className="inline-flex items-center gap-1.5 h-[22px] px-2 rounded-full bg-surface border border-line text-[11.5px] text-text-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#3b6cf2] animate-pulse shrink-0" />
+                <span className="size-1.5 rounded-full bg-[#3b6cf2] animate-pulse shrink-0" />
                 Generating…
               </span>
             )}
@@ -106,7 +122,7 @@ export default function ChatPage() {
             <div className="relative" ref={menuRef}>
               <button
                 type="button"
-                onClick={() => setMenuOpen((o) => !o)}
+                onClick={() => setUi({ menuOpen: !menuOpen })}
                 className="flex items-center gap-1 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 aria-haspopup="true"
                 aria-expanded={menuOpen}
@@ -127,7 +143,7 @@ export default function ChatPage() {
 
                   <Link
                     to="/settings"
-                    onClick={() => setMenuOpen(false)}
+                    onClick={() => setUi({ menuOpen: false })}
                     className="flex items-center gap-2.5 px-3 py-2 text-[12.5px] text-text-2 hover:bg-surface-2 transition-colors"
                   >
                     <Settings size={13} className="text-text-3 shrink-0" />
@@ -137,7 +153,7 @@ export default function ChatPage() {
                   {isAdmin && (
                     <Link
                       to="/admin"
-                      onClick={() => setMenuOpen(false)}
+                      onClick={() => setUi({ menuOpen: false })}
                       className="flex items-center gap-2.5 px-3 py-2 text-[12.5px] text-text-2 hover:bg-surface-2 transition-colors"
                     >
                       <Shield size={13} className="text-text-3 shrink-0" />
@@ -149,7 +165,7 @@ export default function ChatPage() {
 
                   <button
                     type="button"
-                    onClick={() => { signOut(); setMenuOpen(false); }}
+                    onClick={() => { signOut(); setUi({ menuOpen: false }); }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-[12.5px] text-text-2 hover:bg-surface-2 transition-colors"
                   >
                     <LogOut size={13} className="text-text-3 shrink-0" />
@@ -167,7 +183,7 @@ export default function ChatPage() {
             {messages.length === 0 && (
               <div className="flex flex-col gap-8 pt-16">
                 <div>
-                  <p className="font-mono text-[10.5px] uppercase text-text-mute mb-3" style={{ letterSpacing: "0.08em" }}>
+                  <p className="font-mono text-[10.5px] uppercase tracking-kicker text-text-mute mb-3">
                     good {timeOfDay()}, {me?.email?.split("@")[0] ?? "there"}
                   </p>
                   <h2 className="font-serif text-[38px] italic leading-tight tracking-tight text-ink">
@@ -182,7 +198,7 @@ export default function ChatPage() {
                 </div>
                 <div>
                   <p className="font-mono text-[10px] uppercase tracking-[0.06em] text-text-mute mb-2">
-                    Example questions — edit before sending
+                    Example questions, edit before sending
                   </p>
                   <div className="grid grid-cols-2 gap-3">
                     {SUGGESTED.map((s) => (
@@ -192,7 +208,7 @@ export default function ChatPage() {
                         icon={<BookOpen size={12} />}
                         question={s.question}
                         onSelect={() => {
-                          setComposer(s.question);
+                          setUi({ composer: s.question });
                           setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
                         }}
                       />
@@ -220,9 +236,11 @@ export default function ChatPage() {
                     onCopy={() => void handleCopy(msg.content)}
                     onRate={(r) => rate(msg.id, r)}
                     onCitationOpen={(id) => {
-                      setDrawerMessageId(msg.id);
-                      setActiveCitationId((prev) => (prev === id ? null : id));
-                      setMobileSourcesOpen(true);
+                      setUi({
+                        drawerMessageId: msg.id,
+                        activeCitationId: activeCitationId === id ? null : id,
+                        mobileSourcesOpen: true,
+                      });
                     }}
                   />
                 )}
@@ -242,7 +260,7 @@ export default function ChatPage() {
         </div>
 
         {/* Composer */}
-        <div className="border-t border-line bg-surface px-4 py-4">
+        <div className="border-t border-line bg-surface p-4">
             {streaming && (
               <div className="text-center mb-2">
                 <button
@@ -264,7 +282,7 @@ export default function ChatPage() {
           <div className="mx-auto max-w-2xl">
             <Composer
               value={composer}
-              onChange={setComposer}
+              onChange={(value) => setUi({ composer: value })}
               onSubmit={handleSubmit}
               disabled={streaming}
             />
@@ -273,7 +291,8 @@ export default function ChatPage() {
             <div className="mx-auto mt-3 max-w-2xl md:hidden">
               <button
                 type="button"
-                onClick={() => setMobileSourcesOpen((prev) => !prev)}
+                aria-label="Toggle citation sources panel"
+                onClick={() => setUi({ mobileSourcesOpen: !mobileSourcesOpen })}
                 className="flex w-full items-center justify-between rounded-lg border border-line bg-surface-2 px-3 py-2 text-left text-[12px] font-medium text-text-2"
               >
                 <span>Sources</span>
@@ -293,7 +312,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Citation drawer — right side, auto-visible from last assistant message */}
+      {/* Citation drawer, right side, auto-visible from last assistant message */}
       {drawerSources.length > 0 && (
         <aside className="hidden md:flex md:w-[320px] lg:w-[360px] shrink-0 border-l border-line bg-surface-2 flex-col">
           <div className="px-4 py-3 border-b border-line">

@@ -15,7 +15,8 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
-from app.api.account_routes import me_router, router as account_router
+from app.api.account_routes import me_router
+from app.api.account_routes import router as account_router
 from app.api.audit_routes import router as audit_router
 from app.api.chat_routes import router as chat_router
 from app.api.document_routes import router as document_router
@@ -27,6 +28,7 @@ from app.auth.router import limiter as auth_limiter
 from app.auth.router import router as auth_router
 from app.config import settings
 from app.db import Base, SessionLocal, engine
+from app.security.pinned_http import create_pinned_async_transport
 from app.services.runtime_config import build_runtime_components, load_runtime_config
 from app.startup_migrations import run_startup_migrations
 from scripts.audit_cleanup import schedule_cleanup
@@ -120,7 +122,10 @@ async def limit_body_size(
 
     # F-01: Reject ambiguous requests with both CL and TE (RFC 7230 §3.3.3)
     if content_length and transfer_encoding:
-        return Response(status_code=400, content="Ambiguous body framing: both Content-Length and Transfer-Encoding present")
+        return Response(
+            status_code=400,
+            content="Ambiguous body framing: both Content-Length and Transfer-Encoding present",
+        )
 
     if content_length:
         try:
@@ -184,7 +189,10 @@ async def _prewarm_provider(runtime: Any) -> None:
     """Warm the configured provider when it supports local Ollama preloading."""
     await asyncio.sleep(5)  # give Ollama container time to be fully ready
     if getattr(runtime, "provider_type", "ollama") != "ollama":
-        logger.info("provider_prewarm_skipped", provider_type=getattr(runtime, "provider_type", "unknown"))
+        logger.info(
+            "provider_prewarm_skipped",
+            provider_type=getattr(runtime, "provider_type", "unknown"),
+        )
         return
     try:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -227,7 +235,16 @@ async def health() -> dict[str, object]:
             if not runtime.provider_api_key:
                 checks["provider"] = "error"
             else:
-                async with httpx.AsyncClient(timeout=5) as client:
+                provider_resolved_ip = getattr(runtime, "provider_resolved_ip", None)
+                transport = (
+                    create_pinned_async_transport(
+                        runtime.provider_base_url,
+                        str(provider_resolved_ip),
+                    )
+                    if provider_resolved_ip and isinstance(provider_resolved_ip, str)
+                    else None
+                )
+                async with httpx.AsyncClient(timeout=5, transport=transport) as client:
                     r = await client.get(
                         f"{runtime.provider_base_url}/models",
                         headers={"Authorization": f"Bearer {runtime.provider_api_key}"},

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type SseCite, type StepName, type StepState, streamChat } from "../api/chat";
 import { submitFeedback } from "../api/feedback";
+import { readStoredChatSessionId, storeChatSessionId } from "../utils/chatSessionStorage";
 
 interface Step { name: StepName; state: StepState }
+const DEFAULT_COLLECTION = import.meta.env.VITE_DEFAULT_COLLECTION ?? "default";
 
 export interface ChatMessage {
   id: string;
@@ -14,12 +16,12 @@ export interface ChatMessage {
   rated?: "up" | "down";
 }
 
-export function useChat() {
+export function useChat(userId?: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [steps, setSteps] = useState<Step[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [ratingError, setRatingError] = useState<string | null>(null);
-  const sessionRef = useRef<string | null>(null);
+  const sessionRef = useRef<string | null>(readStoredChatSessionId(userId));
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
@@ -31,6 +33,10 @@ export function useChat() {
       abortRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    sessionRef.current = readStoredChatSessionId(userId);
+  }, [userId]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -64,12 +70,14 @@ export function useChat() {
     setMessages((prev) => [...prev, assistantMsg]);
 
     let traceId: string | null = null;
+    let streamCompleted = false;
+    let streamErrored = false;
 
     const abort = new AbortController();
     abortRef.current = abort;
 
     try {
-      for await (const ev of streamChat(question, sessionRef.current, "default", abort.signal)) {
+      for await (const ev of streamChat(question, sessionRef.current, DEFAULT_COLLECTION, abort.signal)) {
         if (!mountedRef.current) break;
         if (ev.type === "step") {
           setSteps((prev) =>
@@ -86,11 +94,14 @@ export function useChat() {
         } else if (ev.type === "done") {
           traceId = ev.data.traceId;
           sessionRef.current = ev.data.sessionId;
+          storeChatSessionId(userId, ev.data.sessionId);
+          streamCompleted = !ev.data.error;
           const trust = { latencyMs: ev.data.latencyMs, cacheHit: ev.data.cache, model: ev.data.model, kRetrieved: ev.data.kRetrieved };
           setMessages((prev) =>
             prev.map((m) => m.id === assistantId ? { ...m, trust, traceId } : m),
           );
         } else if (ev.type === "error") {
+          streamErrored = true;
           setMessages((prev) =>
             prev.map((m) => m.id === assistantId ? { ...m, content: `Error: ${ev.data.message}` } : m),
           );
@@ -98,11 +109,23 @@ export function useChat() {
       }
     } finally {
       if (mountedRef.current) {
+        if (!streamCompleted && !streamErrored && !abort.signal.aborted) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    content: `${m.content}${m.content ? "\n\n" : ""}Response interrupted before completion. Please retry.`,
+                  }
+                : m,
+            ),
+          );
+        }
         setStreaming(false);
         setSteps([]);
       }
     }
-  }, []);
+  }, [userId]);
 
   const rate = useCallback(async (msgId: string, rating: "up" | "down") => {
     const msg = messagesRef.current.find((m) => m.id === msgId);

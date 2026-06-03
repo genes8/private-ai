@@ -9,6 +9,7 @@ from app.agents.graph import build_graph
 from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
 from app.config import settings
+from app.security.url_validator import validate_provider_url
 from app.services.app_config_store import load_app_config
 from app.services.provider_clients import (
     OllamaProvider,
@@ -17,7 +18,7 @@ from app.services.provider_clients import (
 from app.services.provider_settings import resolve_provider_config
 
 _DEFAULT_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-_DEFAULT_VISION_MODEL = "qwen2.5vl:7b"
+_DEFAULT_VISION_MODEL = "qwen3.5:9b"
 
 # Known embedding dimensions keyed by model name (lower-case).
 _EMBEDDING_DIMENSIONS: dict[str, int] = {
@@ -38,6 +39,7 @@ def expected_vector_size(model: str) -> int | None:
 class RuntimeConfig:
     provider_type: str
     provider_base_url: str
+    provider_resolved_ip: str | None
     provider_api_key: str | None
     embedding_source: str  # "ollama" | "provider"
     generation_model: str
@@ -53,6 +55,7 @@ class RuntimeConfig:
     chunk_overlap: int
     sse_done_mode: str
     usage_source: str
+    blocked_terms: list[str]
 
     @property
     def provider_mode(self) -> str:
@@ -91,6 +94,26 @@ def _coerce_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip().lower() for item in value if str(item).strip()]
+
+
+def _provider_resolved_ip(
+    *,
+    provider_type: str,
+    provider_base_url: str,
+    configured_ip: Any,
+) -> str | None:
+    if provider_type != "openai_compatible":
+        return None
+    if configured_ip:
+        return str(configured_ip).strip()
+    _clean_url, resolved_ip = validate_provider_url(provider_base_url)
+    return resolved_ip
 
 
 def load_runtime_config(db: Session) -> RuntimeConfig:
@@ -134,6 +157,11 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
     return RuntimeConfig(
         provider_type=provider_type,
         provider_base_url=provider_base_url.rstrip("/"),
+        provider_resolved_ip=_provider_resolved_ip(
+            provider_type=provider_type,
+            provider_base_url=provider_base_url,
+            configured_ip=cfg.get("provider_resolved_ip"),
+        ),
         provider_api_key=cfg.get("provider_api_key"),
         embedding_source=embedding_source,
         generation_model=generation_model,
@@ -149,6 +177,7 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
         chunk_overlap=_coerce_int(cfg.get("chunk_overlap"), 150),
         sse_done_mode=sse_done_mode,
         usage_source="actual" if provider_type == "openai_compatible" else "estimated",
+        blocked_terms=_coerce_string_list(cfg.get("blocked_terms")),
     )
 
 
@@ -159,6 +188,7 @@ def build_provider(runtime: RuntimeConfig) -> OllamaProvider | OpenAICompatibleP
             raise RuntimeError("OpenAI-compatible provider requires an API key")
         return OpenAICompatibleProvider(
             base_url=runtime.provider_base_url,
+            resolved_ip=runtime.provider_resolved_ip,
             api_key=runtime.provider_api_key,
             chat_model=runtime.chat_model,
             embedding_model=runtime.embedding_model,
@@ -222,5 +252,6 @@ def build_runtime_components(db: Session) -> tuple[RuntimeConfig, HybridRetrieve
         ollama_model=runtime.chat_model,
         retrieval_top_k=runtime.retrieval_k,
         rerank_threshold=runtime.score_floor,
+        blocked_terms=runtime.blocked_terms,
     )
     return runtime, retriever, reranker, graph

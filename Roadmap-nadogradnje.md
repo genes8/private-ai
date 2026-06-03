@@ -1,5 +1,7 @@
 # TRENUTNO STANJE ARHITWEKTURE
 
+> Superseded on 2026-06-03. Use `safe4ai-pilot/docs/superpowers/plans/2026-06-03-unified-readiness-pilot-roadmap.md` as the canonical plan. This file remains as historical architecture/upgrade input only.
+
 Ovo je arhitektura za **AI chat/RAG aplikaciju**: frontend šalje zahteve backendu, backend proverava korisnika, vodi chat logiku, pretražuje dokumente, šalje kontekst LLM-u i vraća odgovor korisniku.
 
 graph TB  
@@ -648,4 +650,3 @@ Prioritetno:
    * healthcare  
    * insurance  
    * banking/risk
-

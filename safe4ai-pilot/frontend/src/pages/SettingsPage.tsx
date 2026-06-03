@@ -9,17 +9,19 @@ import { ApiError } from "../api/client";
 import { changePassword, getAccountSettings } from "../api/account";
 import { useAuth } from "../hooks/useAuth";
 
+const accountDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 function formatDate(value: string | null) {
   if (!value) return "No activity yet";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return accountDateFormatter.format(date);
 }
 
 function passwordIssue(password: string, confirmPassword: string): string | null {
@@ -78,8 +80,8 @@ export default function SettingsPage() {
 
   const passwordMutation = useMutation({
     mutationFn: changePassword,
-    onSuccess: (result) => {
-      setSuccessMessage(result.message);
+    onSuccess: () => {
+      setSuccessMessage("Password changed successfully. Please sign in with your new password.");
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -138,7 +140,7 @@ export default function SettingsPage() {
 
           {isLoading && (
             <div className="rounded-lg border border-line bg-surface px-5 py-8 text-center text-[13px] text-text-mute">
-              Loading settings...
+              Loading settings…
             </div>
           )}
 
@@ -185,24 +187,27 @@ export default function SettingsPage() {
                       <div className="text-[13.5px] font-medium text-ink">Change password</div>
                     </div>
                     <div className="space-y-3">
-                      <input
-                        type="password"
+	                      <input
+	                        aria-label="Current password"
+	                        type="password"
                         value={currentPassword}
                         onChange={(event) => setCurrentPassword(event.target.value)}
                         placeholder="Current password"
                         disabled={!data.security.passwordChangeAllowed}
                         className="h-9 w-full rounded border border-line bg-surface px-3 font-mono text-[12.5px] outline-none focus:border-accent disabled:opacity-50"
                       />
-                      <input
-                        type="password"
+	                      <input
+	                        aria-label="New password"
+	                        type="password"
                         value={newPassword}
                         onChange={(event) => setNewPassword(event.target.value)}
                         placeholder="New password"
                         disabled={!data.security.passwordChangeAllowed}
                         className="h-9 w-full rounded border border-line bg-surface px-3 font-mono text-[12.5px] outline-none focus:border-accent disabled:opacity-50"
                       />
-                      <input
-                        type="password"
+	                      <input
+	                        aria-label="Confirm new password"
+	                        type="password"
                         value={confirmPassword}
                         onChange={(event) => setConfirmPassword(event.target.value)}
                         placeholder="Confirm new password"

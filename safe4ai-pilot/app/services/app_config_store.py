@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -24,11 +25,19 @@ _KEY_TYPES: dict[str, type] = {
     "reranker_enabled": bool,
     "sso_only": bool,
     "redact_pii": bool,
+    "oidc_enabled": bool,
+    "oidc_issuer_url": str,
+    "oidc_client_id": str,
+    "oidc_redirect_uri": str,
+    "oidc_allowed_domains": list,
+    "oidc_auto_provision": bool,
     # Tier / license config
     "tier": str,                  # "evaluation" | "team" | "enterprise"
     "max_seats": int,             # 0 = unlimited
     "monthly_query_limit": int,   # 0 = unlimited
     "tier_expires_at": str,       # ISO-8601 UTC string; absent/empty = no expiry
+    "blocked_terms": list,
+    "provider_resolved_ip": str,
 }
 
 # Keys in this set are encrypted at rest using Fernet derived from SECRET_KEY.
@@ -37,6 +46,7 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset({
     "anthropic_api_key",
     "api_key",
     "provider_api_key",
+    "oidc_client_secret",
 })
 
 _CIPHER_PREFIX = "enc:"
@@ -63,6 +73,15 @@ def _decrypt(value: str, secret_key: str) -> str:
 
 
 def _coerce_value(value: Any, expected: type) -> Any:
+    if expected is list:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+            raise ValueError(f"Invalid list JSON: {value}")
+        return list(value)
     if expected is bool:
         if isinstance(value, bool):
             return value

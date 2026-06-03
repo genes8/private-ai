@@ -19,11 +19,11 @@
 
 ## Update Summary
 **Changes Made**
-- Added comprehensive documentation for streaming LangGraph state management
-- Updated PrivateAIState model documentation to reflect enhanced state merging capabilities
-- Added new section on streaming implementation and partial state updates
-- Enhanced troubleshooting guide with streaming-specific considerations
-- Updated architecture diagrams to show streaming flow
+- Updated documentation to reflect enhanced type handling in the graph implementation
+- Simplified GradedChunk→RankedChunk conversion logic explanation in output filtering
+- Improved sequence handling documentation for output filtering operations
+- Enhanced streaming state merging documentation with current implementation details
+- Updated architecture diagrams to reflect current graph-based implementation
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -39,10 +39,10 @@
 11. [Appendices](#appendices)
 
 ## Introduction
-This document explains the LangGraph State Machine that powers the PrivateAI RAG pipeline. It focuses on the StateGraph architecture, the PrivateAIState model, and the end-to-end flow across pipeline nodes. The implementation now includes enhanced streaming capabilities with improved handling of partial state updates from streaming LangGraph nodes. It also documents state transitions, conditional routing, observability via OpenTelemetry, error handling, and recovery strategies. Practical guidance is included for extending the state machine with new nodes, modifying state variables, and implementing custom routing logic.
+This document explains the LangGraph State Machine that powers the PrivateAI RAG pipeline. It focuses on the StateGraph architecture, the PrivateAIState model, and the end-to-end flow across pipeline nodes. The implementation now includes enhanced streaming capabilities with improved handling of partial state updates from streaming LangGraph nodes, better type safety through Pydantic models, and simplified chunk conversion logic. It also documents state transitions, conditional routing, observability via OpenTelemetry, error handling, and recovery strategies. Practical guidance is included for extending the state machine with new nodes, modifying state variables, and implementing custom routing logic.
 
 ## Project Structure
-The state machine is implemented in a single module that composes nodes from dedicated components. The orchestration logic lives in the graph builder, while supporting services handle retrieval, reranking, grading, decomposition, guards, and tracing. The system now supports both blocking and streaming execution modes.
+The state machine is implemented in a single module that composes nodes from dedicated components. The orchestration logic lives in the graph builder, while supporting services handle retrieval, reranking, grading, decomposition, guards, and tracing. The system now supports both blocking and streaming execution modes with enhanced type safety.
 
 ```mermaid
 graph TB
@@ -86,42 +86,42 @@ G --> M
 ```
 
 **Diagram sources**
-- [graph.py:39-335](file://safe4ai-pilot/app/agents/graph.py#L39-L335)
-- [adaptive_router.py:11-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L11-L65)
-- [document_grader.py:13-53](file://safe4ai-pilot/app/agents/document_grader.py#L13-L53)
+- [graph.py:39-342](file://safe4ai-pilot/app/agents/graph.py#L39-L342)
+- [adaptive_router.py:1-18](file://safe4ai-pilot/app/agents/adaptive_router.py#L1-L18)
+- [document_grader.py:1-72](file://safe4ai-pilot/app/agents/document_grader.py#L1-L72)
 - [query_decomposer.py:10-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L10-L41)
 - [hybrid_retriever.py:13-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L13-L143)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
-- [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
-- [chat_routes.py:160-172](file://safe4ai-pilot/app/api/chat_routes.py#L160-L172)
-- [tracer.py:34-75](file://safe4ai-pilot/observability/tracer.py#L34-L75)
+- [output_filter.py:26-74](file://safe4ai-pilot/app/security/output_filter.py#L26-L74)
+- [chat_routes.py:224-361](file://safe4ai-pilot/app/api/chat_routes.py#L224-L361)
+- [tracer.py:34-76](file://safe4ai-pilot/observability/tracer.py#L34-L76)
 - [agent_runner.py:14-55](file://safe4ai-pilot/app/services/agent_runner.py#L14-L55)
-- [models.py:49-102](file://safe4ai-pilot/app/models.py#L49-L102)
+- [models.py:49-113](file://safe4ai-pilot/app/models.py#L49-L113)
 
 **Section sources**
-- [graph.py:39-335](file://safe4ai-pilot/app/agents/graph.py#L39-L335)
-- [models.py:49-102](file://safe4ai-pilot/app/models.py#L49-L102)
-- [chat_routes.py:160-172](file://safe4ai-pilot/app/api/chat_routes.py#L160-L172)
+- [graph.py:39-342](file://safe4ai-pilot/app/agents/graph.py#L39-L342)
+- [models.py:49-113](file://safe4ai-pilot/app/models.py#L49-L113)
+- [chat_routes.py:224-361](file://safe4ai-pilot/app/api/chat_routes.py#L224-L361)
 
 ## Core Components
-- PrivateAIState: Central state container that tracks conversation context, retrieval metadata, grounding, citations, observability attributes, and human review flags. It defines the current execution step and status. Now supports enhanced state merging for streaming operations.
-- Node functions: Asynchronous functions representing each stage of the pipeline, returning updates to the state to drive transitions.
-- Conditional routing: Uses LLM-based decisions with fallback rules to choose the next node.
-- Streaming support: Enhanced with `graph.astream()` for real-time state updates and partial state merging.
+- PrivateAIState: Central state container that tracks conversation context, retrieval metadata, grounding, citations, observability attributes, and human review flags. It defines the current execution step and status using Pydantic's Literal types for enhanced type safety. Now supports enhanced state merging for streaming operations.
+- Node functions: Asynchronous functions representing each stage of the pipeline, returning updates to the state to drive transitions with improved type handling.
+- Conditional routing: Uses LLM-based decisions with fallback rules to choose the next node, now with better type safety guarantees.
+- Streaming support: Enhanced with `graph.astream()` for real-time state updates and partial state merging with improved sequence handling.
 - Observability: Per-node spans inherit from a pipeline-level span; spans capture session identifiers, trace IDs, and node-specific attributes.
 
 Key state variables and roles:
 - Control flow: messages, current_step, status
-- Retrieval: rewritten_query, retrieved_chunks, graded_chunks, retrieval_score_max, retrieval_attempts
+- Retrieval: rewritten_query, retrieved_chunks (RankedChunk), graded_chunks (GradedChunk), retrieval_score_max, retrieval_attempts
 - Decomposition: sub_queries
 - Generation: draft_answer, citations, generation_context
 - Quality and safety: grounded, requires_human_review, errors, trace_id, cost_usd
 - Human review: requires_human_review flag triggers manual intervention
 
 **Section sources**
-- [models.py:49-102](file://safe4ai-pilot/app/models.py#L49-L102)
-- [graph.py:51-335](file://safe4ai-pilot/app/agents/graph.py#L51-L335)
+- [models.py:49-113](file://safe4ai-pilot/app/models.py#L49-L113)
+- [graph.py:51-342](file://safe4ai-pilot/app/agents/graph.py#L51-L342)
 
 ## Architecture Overview
 The StateGraph orchestrates a self-correcting RAG pipeline with the following stages:
@@ -131,7 +131,7 @@ The StateGraph orchestrates a self-correcting RAG pipeline with the following st
 - Grade: Grades chunks for relevance and decides between generate or decompose.
 - Decompose: Generates sub-queries and re-runs retrieval/grading per sub-query.
 - Generate: Builds a grounded answer from relevant chunks.
-- Output Filter: Checks for PII hallucinations and suspicious length.
+- Output Filter: Checks for PII hallucinations and suspicious length with simplified sequence handling.
 - Quality Gate: Decides whether to respond, retrieve again (self-correction), or fall back.
 - Respond/Fallback: Finalization nodes.
 
@@ -152,20 +152,20 @@ J --> C
 ```
 
 **Diagram sources**
-- [graph.py:300-335](file://safe4ai-pilot/app/agents/graph.py#L300-L335)
+- [graph.py:315-342](file://safe4ai-pilot/app/agents/graph.py#L315-L342)
 
 ## Streaming Implementation
-The system now supports real-time streaming via LangGraph's `astream()` method, enabling progressive state updates and immediate feedback to clients.
+The system now supports real-time streaming via LangGraph's `astream()` method, enabling progressive state updates and immediate feedback to clients with enhanced type safety.
 
 ### Streaming Flow
 1. **Initialization**: Create run state with `_build_run_state()` and establish trace ID
 2. **Streaming**: Use `graph.astream(run_state)` to iterate through node states
-3. **State Merging**: Apply `_merge_stream_state()` to combine partial updates
+3. **State Merging**: Apply `_merge_stream_state()` to combine partial updates with improved type handling
 4. **Progressive Updates**: Emit SSE events for step transitions and token streaming
 5. **Finalization**: Complete processing and save session state
 
 ### State Merging Mechanism
-The `_merge_stream_state()` function handles partial state updates from streaming nodes:
+The `_merge_stream_state()` function handles partial state updates from streaming nodes with enhanced type safety:
 
 ```mermaid
 flowchart TD
@@ -179,24 +179,25 @@ ReturnPS --> End
 ```
 
 **Diagram sources**
-- [chat_routes.py:239-244](file://safe4ai-pilot/app/api/chat_routes.py#L239-L244)
+- [chat_routes.py:115-121](file://safe4ai-pilot/app/api/chat_routes.py#L115-L121)
 
 **Section sources**
-- [chat_routes.py:370-393](file://safe4ai-pilot/app/api/chat_routes.py#L370-L393)
-- [chat_routes.py:239-244](file://safe4ai-pilot/app/api/chat_routes.py#L239-L244)
-- [test_chat.py:179-199](file://safe4ai-pilot/tests/test_chat.py#L179-L199)
+- [chat_routes.py:234-361](file://safe4ai-pilot/app/api/chat_routes.py#L234-L361)
+- [chat_routes.py:115-121](file://safe4ai-pilot/app/api/chat_routes.py#L115-L121)
+- [test_chat.py:179-223](file://safe4ai-pilot/tests/test_chat.py#L179-L223)
 
 ## Detailed Component Analysis
 
 ### PrivateAIState Model
-PrivateAIState encapsulates the conversation state and pipeline metadata. It is a Pydantic model that enforces type safety and defaults for optional fields. The model now supports enhanced state merging for streaming operations:
+PrivateAIState encapsulates the conversation state and pipeline metadata. It is a Pydantic model that enforces type safety and defaults for optional fields. The model now supports enhanced state merging for streaming operations with improved type annotations:
 
-- Conversation history: list of messages with role and content
-- Execution control: current_step and status
-- Retrieval pipeline: rewritten_query, retrieved_chunks, graded_chunks, retrieval_score_max, retrieval_attempts
+- Conversation history: list of messages with role and content using Pydantic's Literal types
+- Execution control: current_step and status using Pydantic's Literal types for enhanced type safety
+- Retrieval pipeline: rewritten_query, retrieved_chunks (RankedChunk), graded_chunks (GradedChunk), retrieval_score_max, retrieval_attempts
 - Decomposition: sub_queries
 - Generation: draft_answer, citations, generation_context
 - Safety and observability: grounded, requires_human_review, errors, trace_id, cost_usd
+- Provider usage tracking: provider_usage field for cost monitoring
 
 ```mermaid
 classDiagram
@@ -220,6 +221,7 @@ class PrivateAIState {
 +bool requires_human_review
 +int retrieval_attempts
 +GradedChunk[] generation_context
++ProviderUsage provider_usage
 }
 class Message {
 +Literal role
@@ -253,11 +255,11 @@ RankedChunk <|-- GradedChunk : "extends"
 ```
 
 **Diagram sources**
-- [models.py:49-102](file://safe4ai-pilot/app/models.py#L49-L102)
-- [models.py:7-36](file://safe4ai-pilot/app/models.py#L7-L36)
+- [models.py:49-113](file://safe4ai-pilot/app/models.py#L49-L113)
+- [models.py:17-46](file://safe4ai-pilot/app/models.py#L17-L46)
 
 **Section sources**
-- [models.py:49-102](file://safe4ai-pilot/app/models.py#L49-L102)
+- [models.py:49-113](file://safe4ai-pilot/app/models.py#L49-L113)
 
 ### Node: intake
 Purpose: Validate the latest message and enforce input safety. If invalid, route to fallback; otherwise, move to rewrite.
@@ -281,38 +283,38 @@ NextRR --> End
 ```
 
 **Diagram sources**
-- [graph.py:82-93](file://safe4ai-pilot/app/agents/graph.py#L82-L93)
+- [graph.py:62-74](file://safe4ai-pilot/app/agents/graph.py#L62-L74)
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
 
 **Section sources**
-- [graph.py:82-93](file://safe4ai-pilot/app/agents/graph.py#L82-L93)
+- [graph.py:62-74](file://safe4ai-pilot/app/agents/graph.py#L62-L74)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 
 ### Node: rewrite
 Purpose: Produce a rewritten query using a prompt and model.
 
 Behavior:
-- Render a rewrite prompt with the latest message content.
-- Call Ollama generate endpoint; on success, set rewritten_query and advance to retrieve.
+- Render a rewrite prompt with the latest message content and up to 6 prior exchanges.
+- Call LLM generate endpoint; on success, set rewritten_query and advance to retrieve.
 - On failure, preserve original query and still advance to retrieve.
 
 ```mermaid
 sequenceDiagram
 participant N as "rewrite_node"
 participant P as "Prompts"
-participant O as "Ollama"
+participant O as "LLM"
 N->>P : "Load rewrite prompt"
-N->>O : "POST /api/generate (model, prompt)"
+N->>O : "Generate (prompt with history)"
 O-->>N : "response (text)"
 N->>N : "Set rewritten_query"
 N-->>N : "Set current_step=retrieve"
 ```
 
 **Diagram sources**
-- [graph.py:95-105](file://safe4ai-pilot/app/agents/graph.py#L95-L105)
+- [graph.py:75-100](file://safe4ai-pilot/app/agents/graph.py#L75-L100)
 
 **Section sources**
-- [graph.py:95-105](file://safe4ai-pilot/app/agents/graph.py#L95-L105)
+- [graph.py:75-100](file://safe4ai-pilot/app/agents/graph.py#L75-L100)
 
 ### Node: retrieve
 Purpose: Retrieve candidate chunks and rerank them.
@@ -328,21 +330,21 @@ sequenceDiagram
 participant N as "retrieve_node"
 participant R as "HybridRetriever"
 participant X as "Reranker"
-N->>R : "retrieve(query)"
+N->>R : "retrieve(query, top_k)"
 R-->>N : "raw chunks"
-N->>X : "rerank(query, raw)"
+N->>X : "rerank(query, raw, top_n)"
 X-->>N : "ranked chunks"
 N->>N : "Update retrieved_chunks, retrieval_score_max, retrieval_attempts"
 N-->>N : "Set current_step=grade"
 ```
 
 **Diagram sources**
-- [graph.py:107-128](file://safe4ai-pilot/app/agents/graph.py#L107-L128)
+- [graph.py:101-123](file://safe4ai-pilot/app/agents/graph.py#L101-L123)
 - [hybrid_retriever.py:56-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L56-L143)
 - [reranker.py:15-36](file://safe4ai-pilot/app/components/reranker.py#L15-L36)
 
 **Section sources**
-- [graph.py:107-128](file://safe4ai-pilot/app/agents/graph.py#L107-L128)
+- [graph.py:101-123](file://safe4ai-pilot/app/agents/graph.py#L101-L123)
 - [hybrid_retriever.py:13-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L13-L143)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
 
@@ -371,15 +373,14 @@ SyncDec --> |No| Decomp
 ```
 
 **Diagram sources**
-- [graph.py:130-146](file://safe4ai-pilot/app/agents/graph.py#L130-L146)
-- [adaptive_router.py:25-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L25-L65)
-- [document_grader.py:13-53](file://safe4ai-pilot/app/agents/document_grader.py#L13-L53)
+- [graph.py:124-142](file://safe4ai-pilot/app/agents/graph.py#L124-L142)
+- [adaptive_router.py:6-11](file://safe4ai-pilot/app/agents/adaptive_router.py#L6-L11)
+- [document_grader.py:29-72](file://safe4ai-pilot/app/agents/document_grader.py#L29-L72)
 
 **Section sources**
-- [graph.py:130-146](file://safe4ai-pilot/app/agents/graph.py#L130-L146)
-- [adaptive_router.py:11-23](file://safe4ai-pilot/app/agents/adaptive_router.py#L11-L23)
-- [adaptive_router.py:25-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L25-L65)
-- [document_grader.py:13-53](file://safe4ai-pilot/app/agents/document_grader.py#L13-L53)
+- [graph.py:124-142](file://safe4ai-pilot/app/agents/graph.py#L124-L142)
+- [adaptive_router.py:1-18](file://safe4ai-pilot/app/agents/adaptive_router.py#L1-L18)
+- [document_grader.py:1-72](file://safe4ai-pilot/app/agents/document_grader.py#L1-L72)
 
 ### Node: decompose
 Purpose: Generate sub-queries and re-run retrieval/grading per sub-query.
@@ -402,7 +403,7 @@ D-->>N : "sub_queries"
 loop for each sub_query
 N->>R : "retrieve(sub_query)"
 R-->>N : "raw chunks"
-N->>X : "rerank(sub_query, raw)"
+N->>X : "rerank(sub_query, raw, top_n)"
 X-->>N : "ranked"
 N->>G : "grade_chunks(sub_query, ranked)"
 G-->>N : "graded"
@@ -412,18 +413,18 @@ N-->>N : "Set current_step=generate"
 ```
 
 **Diagram sources**
-- [graph.py:148-186](file://safe4ai-pilot/app/agents/graph.py#L148-L186)
+- [graph.py:143-183](file://safe4ai-pilot/app/agents/graph.py#L143-L183)
 - [query_decomposer.py:10-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L10-L41)
 - [hybrid_retriever.py:56-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L56-L143)
 - [reranker.py:15-36](file://safe4ai-pilot/app/components/reranker.py#L15-L36)
-- [document_grader.py:13-53](file://safe4ai-pilot/app/agents/document_grader.py#L13-L53)
+- [document_grader.py:29-72](file://safe4ai-pilot/app/agents/document_grader.py#L29-L72)
 
 **Section sources**
-- [graph.py:148-186](file://safe4ai-pilot/app/agents/graph.py#L148-L186)
+- [graph.py:143-183](file://safe4ai-pilot/app/agents/graph.py#L143-L183)
 - [query_decomposer.py:10-41](file://safe4ai-pilot/app/agents/query_decomposer.py#L10-L41)
 - [hybrid_retriever.py:13-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L13-L143)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
-- [document_grader.py:13-53](file://safe4ai-pilot/app/agents/document_grader.py#L13-L53)
+- [document_grader.py:1-72](file://safe4ai-pilot/app/agents/document_grader.py#L1-L72)
 
 ### Node: generate
 Purpose: Construct a grounded answer from relevant chunks.
@@ -441,7 +442,7 @@ FindRel --> HasRel{"Any relevant?"}
 HasRel --> |No| SafeAns["Set draft_answer=safe default<br/>Set citations=[]"]
 HasRel --> |Yes| BuildCtx["Build context from relevant"]
 BuildCtx --> Prompt["Render answer prompt"]
-Prompt --> CallLLM["Call Ollama generate"]
+Prompt --> CallLLM["Call LLM generate"]
 CallLLM --> AnsOK{"Success?"}
 AnsOK --> |Yes| MakeCites["Create citations from relevant"]
 AnsOK --> |No| ErrPath["Record error<br/>Set safe answer"]
@@ -451,24 +452,25 @@ ErrPath --> Next
 ```
 
 **Diagram sources**
-- [graph.py:188-238](file://safe4ai-pilot/app/agents/graph.py#L188-L238)
+- [graph.py:184-241](file://safe4ai-pilot/app/agents/graph.py#L184-L241)
 
 **Section sources**
-- [graph.py:188-238](file://safe4ai-pilot/app/agents/graph.py#L188-L238)
+- [graph.py:184-241](file://safe4ai-pilot/app/agents/graph.py#L184-L241)
 
 ### Node: output_filter
-Purpose: Validate the generated answer for safety and PII.
+Purpose: Validate the generated answer for safety and PII with simplified sequence handling.
 
 Behavior:
 - If no relevant context or empty answer, skip filtering and go to quality_gate.
 - Otherwise, check answer against source chunks for PII hallucinations and suspicious length.
+- **Updated**: Simplified sequence handling - GradedChunk extends RankedChunk, so we can pass GradedChunk instances directly to output_filter which accepts Sequence[RankedChunk].
 - If blocked, set requires_human_review and record reason; otherwise, proceed to quality_gate.
 
 ```mermaid
 flowchart TD
 Start(["Entry: output_filter"]) --> CheckCtx["Has relevant context and non-empty answer?"]
 CheckCtx --> |No| ToGate["Set current_step=quality_gate"]
-CheckCtx --> |Yes| Guard["OutputFilter.check(answer, source_chunks)"]
+CheckCtx --> |Yes| Guard["OutputFilter.check(answer, relevant, citations)"]
 Guard --> Allowed{"Allowed?"}
 Allowed --> |No| Block["Set draft_answer=safe default<br/>Set requires_human_review=true<br/>Append reason to errors"]
 Allowed --> |Yes| ToGate2["Set current_step=quality_gate"]
@@ -477,12 +479,12 @@ ToGate2 --> End(["Exit"])
 ```
 
 **Diagram sources**
-- [graph.py:240-259](file://safe4ai-pilot/app/agents/graph.py#L240-L259)
-- [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
+- [graph.py:242-261](file://safe4ai-pilot/app/agents/graph.py#L242-L261)
+- [output_filter.py:26-74](file://safe4ai-pilot/app/security/output_filter.py#L26-L74)
 
 **Section sources**
-- [graph.py:240-259](file://safe4ai-pilot/app/agents/graph.py#L240-L259)
-- [output_filter.py:30-60](file://safe4ai-pilot/app/security/output_filter.py#L30-L60)
+- [graph.py:242-261](file://safe4ai-pilot/app/agents/graph.py#L242-L261)
+- [output_filter.py:26-74](file://safe4ai-pilot/app/security/output_filter.py#L26-L74)
 
 ### Node: quality_gate
 Purpose: Final routing decision with self-correction guard.
@@ -512,13 +514,12 @@ Sync --> Decision
 ```
 
 **Diagram sources**
-- [graph.py:261-280](file://safe4ai-pilot/app/agents/graph.py#L261-L280)
-- [adaptive_router.py:25-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L25-L65)
+- [graph.py:262-288](file://safe4ai-pilot/app/agents/graph.py#L262-L288)
+- [adaptive_router.py:13-18](file://safe4ai-pilot/app/agents/adaptive_router.py#L13-L18)
 
 **Section sources**
-- [graph.py:261-280](file://safe4ai-pilot/app/agents/graph.py#L261-L280)
-- [adaptive_router.py:18-23](file://safe4ai-pilot/app/agents/adaptive_router.py#L18-L23)
-- [adaptive_router.py:25-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L25-L65)
+- [graph.py:262-288](file://safe4ai-pilot/app/agents/graph.py#L262-L288)
+- [adaptive_router.py:1-18](file://safe4ai-pilot/app/agents/adaptive_router.py#L1-L18)
 
 ### Node: respond
 Purpose: Mark completion and terminate the graph.
@@ -527,7 +528,7 @@ Behavior:
 - Set status to completed and current_step to respond.
 
 **Section sources**
-- [graph.py:282-284](file://safe4ai-pilot/app/agents/graph.py#L282-L284)
+- [graph.py:289-292](file://safe4ai-pilot/app/agents/graph.py#L289-L292)
 
 ### Node: fallback
 Purpose: Provide a safe default answer and mark completion.
@@ -537,7 +538,7 @@ Behavior:
 - Set status to completed, current_step to fallback, and requires_human_review if errors or previously flagged.
 
 **Section sources**
-- [graph.py:286-294](file://safe4ai-pilot/app/agents/graph.py#L286-L294)
+- [graph.py:293-302](file://safe4ai-pilot/app/agents/graph.py#L293-L302)
 
 ### Routing Logic and Transitions
 - Conditional edges:
@@ -569,19 +570,19 @@ G->>G : "fallback → END"
 ```
 
 **Diagram sources**
-- [graph.py:315-335](file://safe4ai-pilot/app/agents/graph.py#L315-L335)
+- [graph.py:318-342](file://safe4ai-pilot/app/agents/graph.py#L318-L342)
 
 **Section sources**
-- [graph.py:315-335](file://safe4ai-pilot/app/agents/graph.py#L315-L335)
+- [graph.py:318-342](file://safe4ai-pilot/app/agents/graph.py#L318-L342)
 
 ## Dependency Analysis
-The graph composes specialized components:
+The graph composes specialized components with enhanced type safety:
 - Retrieval: HybridRetriever depends on Qdrant and Ollama embeddings; Reranker uses a cross-encoder model.
-- Grading: Asynchronous per-chunk grading via Ollama.
-- Decomposition: Sub-query generation via Ollama.
-- Guards: InputGuard and OutputFilter provide safety checks.
+- Grading: Asynchronous per-chunk grading via LLM with improved type handling through Pydantic models.
+- Decomposition: Sub-query generation via LLM.
+- Guards: InputGuard and OutputFilter provide safety checks with enhanced sequence handling.
 - Routing: LLM-based routing with synchronous fallbacks.
-- Streaming: Enhanced with state merging for real-time updates.
+- Streaming: Enhanced with state merging for real-time updates and improved type safety.
 
 ```mermaid
 graph TB
@@ -608,33 +609,33 @@ CR --> M
 
 **Diagram sources**
 - [graph.py:11-22](file://safe4ai-pilot/app/agents/graph.py#L11-L22)
-- [adaptive_router.py:7-10](file://safe4ai-pilot/app/agents/adaptive_router.py#L7-L10)
+- [adaptive_router.py:1-10](file://safe4ai-pilot/app/agents/adaptive_router.py#L1-L10)
 - [document_grader.py:9-12](file://safe4ai-pilot/app/agents/document_grader.py#L9-L12)
 - [query_decomposer.py:7-10](file://safe4ai-pilot/app/agents/query_decomposer.py#L7-L10)
 - [hybrid_retriever.py:10](file://safe4ai-pilot/app/components/hybrid_retriever.py#L10)
 - [reranker.py:6](file://safe4ai-pilot/app/components/reranker.py#L6)
 - [input_guard.py:7](file://safe4ai-pilot/app/security/input_guard.py#L7)
 - [output_filter.py:9](file://safe4ai-pilot/app/security/output_filter.py#L9)
-- [chat_routes.py:160-172](file://safe4ai-pilot/app/api/chat_routes.py#L160-L172)
-- [models.py:7](file://safe4ai-pilot/app/models.py#L7)
+- [chat_routes.py:224-361](file://safe4ai-pilot/app/api/chat_routes.py#L224-L361)
+- [models.py:49-113](file://safe4ai-pilot/app/models.py#L49-L113)
 
 **Section sources**
 - [graph.py:11-22](file://safe4ai-pilot/app/agents/graph.py#L11-L22)
 
 ## Performance Considerations
 - Parallelism:
-  - Chunk grading uses asynchronous gathering to process multiple chunks concurrently.
+  - Chunk grading uses asynchronous gathering to process multiple chunks concurrently with improved type safety.
   - Decompose runs retrieval/grading per sub-query; consider batching and rate limiting to avoid downstream saturation.
 - Latency:
   - Retrieval and reranking are I/O bound; caching or precomputation of rerank scores can help.
   - LLM calls are latency-sensitive; timeouts are configured; consider connection pooling and retries with backoff.
 - Cost:
-  - PrivateAIState includes a cost accumulator field; integrate cost tracking around LLM calls for visibility.
+  - PrivateAIState includes a cost accumulator field and provider_usage tracking; integrate cost tracking around LLM calls for visibility.
 - Memory:
   - generation_context snapshots ensure output_filter validates against a stable set of chunks; keep this bounded to control memory growth.
 - Streaming:
   - State merging overhead is minimal compared to network latency for streaming responses.
-  - Token streaming provides immediate feedback while maintaining state consistency.
+  - Token streaming provides immediate feedback while maintaining state consistency with enhanced type safety.
 
 ## Troubleshooting Guide
 Common issues and remedies:
@@ -649,30 +650,30 @@ Common issues and remedies:
 - Un-grounded answer:
   - quality_gate prevents responding with ungrounded answers; trigger fallback and human review if needed.
 - PII hallucination:
-  - output_filter blocks answers containing PII not present in source chunks; refine prompts or reduce hallucinations.
+  - output_filter blocks answers containing PII not present in source chunks; refined sequence handling ensures proper validation.
 - Streaming issues:
-  - State merging failures: verify `_merge_stream_state()` handles both PrivateAIState and dict updates correctly.
+  - State merging failures: verify `_merge_stream_state()` handles both PrivateAIState and dict updates correctly with enhanced type safety.
   - Partial updates: ensure nodes return consistent state updates that can be merged safely.
   - Client disconnection: streaming gracefully handles disconnections and cleans up resources.
 
 Operational hooks:
 - Per-node spans capture session_id, trace_id, and node attributes for debugging.
 - Pipeline-level span wraps the entire run for end-to-end tracing.
-- Streaming state merging ensures consistent state even with partial updates.
+- Streaming state merging ensures consistent state even with partial updates and improved type safety.
 
 **Section sources**
-- [graph.py:82-93](file://safe4ai-pilot/app/agents/graph.py#L82-L93)
-- [graph.py:95-105](file://safe4ai-pilot/app/agents/graph.py#L95-L105)
-- [graph.py:107-128](file://safe4ai-pilot/app/agents/graph.py#L107-L128)
-- [graph.py:130-146](file://safe4ai-pilot/app/agents/graph.py#L130-L146)
-- [graph.py:240-259](file://safe4ai-pilot/app/agents/graph.py#L240-L259)
-- [graph.py:261-280](file://safe4ai-pilot/app/agents/graph.py#L261-L280)
-- [chat_routes.py:239-244](file://safe4ai-pilot/app/api/chat_routes.py#L239-L244)
-- [tracer.py:34-75](file://safe4ai-pilot/observability/tracer.py#L34-L75)
+- [graph.py:62-74](file://safe4ai-pilot/app/agents/graph.py#L62-L74)
+- [graph.py:75-100](file://safe4ai-pilot/app/agents/graph.py#L75-L100)
+- [graph.py:101-123](file://safe4ai-pilot/app/agents/graph.py#L101-L123)
+- [graph.py:124-142](file://safe4ai-pilot/app/agents/graph.py#L124-L142)
+- [graph.py:242-261](file://safe4ai-pilot/app/agents/graph.py#L242-L261)
+- [graph.py:262-288](file://safe4ai-pilot/app/agents/graph.py#L262-L288)
+- [chat_routes.py:115-121](file://safe4ai-pilot/app/api/chat_routes.py#L115-L121)
+- [tracer.py:34-76](file://safe4ai-pilot/observability/tracer.py#L34-L76)
 - [agent_runner.py:26-32](file://safe4ai-pilot/app/services/agent_runner.py#L26-L32)
 
 ## Conclusion
-The LangGraph State Machine orchestrates a robust, self-correcting RAG pipeline with strong safety and observability. PrivateAIState centralizes conversation context and execution metadata, enabling clear state transitions and resilient routing. The enhanced streaming capabilities with improved state merging mechanism provide real-time feedback while maintaining state consistency. The design balances LLM-driven adaptivity with synchronous fallbacks, ensuring reliable outcomes under failure conditions. Extensibility is achieved by adding nodes, updating state fields, and integrating custom routing logic with streaming support.
+The LangGraph State Machine orchestrates a robust, self-correcting RAG pipeline with strong safety and observability. PrivateAIState centralizes conversation context and execution metadata with enhanced type safety through Pydantic models, enabling clear state transitions and resilient routing. The enhanced streaming capabilities with improved state merging mechanism provide real-time feedback while maintaining state consistency. The design balances LLM-driven adaptivity with synchronous fallbacks, ensuring reliable outcomes under failure conditions. The simplified GradedChunk→RankedChunk conversion logic and improved sequence handling in output filtering demonstrate better type safety and cleaner code architecture. Extensibility is achieved by adding nodes, updating state fields, and integrating custom routing logic with streaming support.
 
 ## Appendices
 
@@ -680,22 +681,22 @@ The LangGraph State Machine orchestrates a robust, self-correcting RAG pipeline 
 - Add a new node:
   - Define an async function that takes PrivateAIState and returns a dict of state updates.
   - Register the node with builder.add_node and wire edges (conditional or deterministic).
-  - Ensure the node returns state updates compatible with streaming state merging.
+  - Ensure the node returns state updates compatible with streaming state merging and enhanced type safety.
 - Modify state variables:
-  - Extend PrivateAIState with new fields; initialize defaults in the model.
-  - Update nodes to read/write the new fields.
-  - Verify state merging compatibility for streaming operations.
+  - Extend PrivateAIState with new fields using Pydantic's Field defaults; initialize defaults in the model.
+  - Update nodes to read/write the new fields with proper type annotations.
+  - Verify state merging compatibility for streaming operations and enhanced type safety.
 - Custom routing:
   - Implement a decision function similar to decide_next_step and route_after_grade.
   - Use it in a conditional edge to route to new nodes.
 - Streaming compatibility:
-  - Ensure all state updates are serializable and mergeable.
-  - Test with `_merge_stream_state()` to verify proper state reconstruction.
+  - Ensure all state updates are serializable and mergeable with proper type handling.
+  - Test with `_merge_stream_state()` to verify proper state reconstruction with enhanced type safety.
 
 **Section sources**
-- [graph.py:296-335](file://safe4ai-pilot/app/agents/graph.py#L296-L335)
-- [models.py:49-102](file://safe4ai-pilot/app/models.py#L49-L102)
-- [chat_routes.py:239-244](file://safe4ai-pilot/app/api/chat_routes.py#L239-L244)
+- [graph.py:296-342](file://safe4ai-pilot/app/agents/graph.py#L296-L342)
+- [models.py:49-113](file://safe4ai-pilot/app/models.py#L49-L113)
+- [chat_routes.py:115-121](file://safe4ai-pilot/app/api/chat_routes.py#L115-L121)
 
 ### Observability and Tracing
 - Per-node spans:
@@ -719,7 +720,7 @@ Runner->>Tracer : "Exit pipeline span"
 
 **Diagram sources**
 - [agent_runner.py:14-55](file://safe4ai-pilot/app/services/agent_runner.py#L14-L55)
-- [tracer.py:34-75](file://safe4ai-pilot/observability/tracer.py#L34-L75)
+- [tracer.py:34-76](file://safe4ai-pilot/observability/tracer.py#L34-L76)
 - [graph.py:24-32](file://safe4ai-pilot/app/agents/graph.py#L24-L32)
 
 **Section sources**
@@ -735,25 +736,25 @@ Runner->>Tracer : "Exit pipeline span"
   - retrieval_attempts guard prevents infinite self-correction loops; after exceeding the maximum, routing is restricted to respond or fallback.
   - Fallback ensures a safe default answer is returned when groundedness cannot be established.
 - Streaming recovery:
-  - State merging mechanism ensures partial updates are safely combined.
+  - State merging mechanism ensures partial updates are safely combined with enhanced type safety.
   - Streaming gracefully handles client disconnections and maintains state consistency.
 
 **Section sources**
 - [agent_runner.py:36-54](file://safe4ai-pilot/app/services/agent_runner.py#L36-L54)
-- [graph.py:269-280](file://safe4ai-pilot/app/agents/graph.py#L269-L280)
-- [graph.py:286-294](file://safe4ai-pilot/app/agents/graph.py#L286-L294)
-- [chat_routes.py:370-393](file://safe4ai-pilot/app/api/chat_routes.py#L370-L393)
+- [graph.py:270-288](file://safe4ai-pilot/app/agents/graph.py#L270-L288)
+- [graph.py:293-302](file://safe4ai-pilot/app/agents/graph.py#L293-L302)
+- [chat_routes.py:234-361](file://safe4ai-pilot/app/api/chat_routes.py#L234-L361)
 
 ### Streaming State Management
-The streaming implementation provides real-time state updates with robust merging capabilities:
+The streaming implementation provides real-time state updates with robust merging capabilities and enhanced type safety:
 
-- **State Merging**: `_merge_stream_state()` handles both PrivateAIState objects and dict updates
-- **Streaming Flow**: `graph.astream()` provides node-by-node state updates
+- **State Merging**: `_merge_stream_state()` handles both PrivateAIState objects and dict updates with improved type handling
+- **Streaming Flow**: `graph.astream()` provides node-by-node state updates with enhanced type safety
 - **Progressive Updates**: SSE events deliver step transitions and token streaming
 - **Error Handling**: Graceful degradation with fallback to safe defaults
-- **Testing**: Comprehensive test coverage for partial state update scenarios
+- **Testing**: Comprehensive test coverage for partial state update scenarios with proper type validation
 
 **Section sources**
-- [chat_routes.py:239-244](file://safe4ai-pilot/app/api/chat_routes.py#L239-L244)
-- [chat_routes.py:370-393](file://safe4ai-pilot/app/api/chat_routes.py#L370-L393)
-- [test_chat.py:179-199](file://safe4ai-pilot/tests/test_chat.py#L179-L199)
+- [chat_routes.py:115-121](file://safe4ai-pilot/app/api/chat_routes.py#L115-L121)
+- [chat_routes.py:234-361](file://safe4ai-pilot/app/api/chat_routes.py#L234-L361)
+- [test_chat.py:179-223](file://safe4ai-pilot/tests/test_chat.py#L179-L223)

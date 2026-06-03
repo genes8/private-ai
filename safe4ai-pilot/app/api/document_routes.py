@@ -89,9 +89,16 @@ def _schedule_ingestion_task(
         tasks = set()
         request.app.state.ingestion_tasks = tasks
     tasks.add(task)
+    tasks_by_doc = getattr(request.app.state, "ingestion_tasks_by_doc", None)
+    if tasks_by_doc is None:
+        tasks_by_doc = {}
+        request.app.state.ingestion_tasks_by_doc = tasks_by_doc
+    tasks_by_doc[doc_id] = task
 
     def _cleanup(done_task: asyncio.Task[None]) -> None:
         tasks.discard(done_task)
+        if tasks_by_doc.get(doc_id) is done_task:
+            tasks_by_doc.pop(doc_id, None)
         if done_task.cancelled():
             logger.warning("ingestion_task_cancelled", doc_id=doc_id, job_id=job_id)
             return
@@ -286,6 +293,11 @@ def delete_document(
     doc = db.get(Document, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    tasks_by_doc = getattr(request.app.state, "ingestion_tasks_by_doc", {})
+    ingestion_task = tasks_by_doc.get(doc_id)
+    if ingestion_task is not None and not ingestion_task.done():
+        ingestion_task.cancel()
+        tasks_by_doc.pop(doc_id, None)
     try:
         active_job = _lock_query(
             db.query(IngestionJob).filter(

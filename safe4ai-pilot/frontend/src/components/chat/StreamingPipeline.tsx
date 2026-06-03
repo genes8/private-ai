@@ -17,7 +17,7 @@ export default function StreamingPipeline({ steps }: { steps: Step[] }) {
         <div key={s.name} className="flex items-center gap-3">
           {s.state === "done"    && <Check size={12} className="text-success shrink-0" />}
           {s.state === "active"  && <Loader2 size={12} className="animate-spin text-accent shrink-0" />}
-          {s.state === "pending" && <div className="w-3 h-3 rounded-full border border-line-3 shrink-0" />}
+          {s.state === "pending" && <div className="size-3 rounded-full border border-line-3 shrink-0" />}
           <span className={["text-[11.5px] w-[110px] shrink-0", s.state === "pending" ? "text-text-mute" : "text-text-2"].join(" ")}>
             {STEP_LABELS[s.name]}
           </span>

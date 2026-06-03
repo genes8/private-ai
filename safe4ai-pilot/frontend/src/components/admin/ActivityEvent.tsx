@@ -6,6 +6,8 @@ const KIND_BADGE: Record<string, { label: string; bg: string; text: string }> = 
   feedback: { label: "FEEDBACK", bg: "#f9efd9",        text: "#8b5a16" },
   login:    { label: "AUTH",     bg: "#e6f3ec",        text: "#1f6e45" },
   fallback: { label: "FALLBACK", bg: "#fbe9e6",        text: "#8c2a20" },
+  admin:    { label: "ADMIN",    bg: "#e9ecf7",        text: "#2e3f8f" },
+  other:    { label: "OTHER",    bg: "var(--paper-2)", text: "var(--text-2)" },
 };
 
 const NODE_COLOR: Record<string, string> = {
@@ -14,6 +16,8 @@ const NODE_COLOR: Record<string, string> = {
   feedback: "var(--amber, #b87a1a)",
   fallback: "var(--red, #c0392b)",
   login:    "var(--green, #2f8f5e)",
+  admin:    "var(--blue, #3b6cf2)",
+  other:    "var(--text-3)",
 };
 
 interface Props { event: AuditEvent }
@@ -46,8 +50,8 @@ export default function ActivityEvent({ event }: Props) {
           {/* Meta line */}
           <div className="flex items-center gap-2 flex-wrap mb-1.5">
             <span
-              className="font-mono text-[9.5px] font-medium rounded-[3px] px-1.5 py-0.5 shrink-0"
-              style={{ background: badge.bg, color: badge.text, letterSpacing: "0.06em" }}
+              className="font-mono text-[9.5px] font-medium tracking-kicker rounded-[3px] px-1.5 py-0.5 shrink-0"
+              style={{ background: badge.bg, color: badge.text }}
             >
               {badge.label}
             </span>

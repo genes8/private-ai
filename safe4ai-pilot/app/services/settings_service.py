@@ -11,6 +11,7 @@ import json
 import threading
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -19,10 +20,12 @@ from qdrant_client import QdrantClient as _QdrantClient
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.auth.oidc import load_oidc_config
 from app.config import settings
-from app.db.models import AuditLog, Document, User
+from app.db.models import Document
+from app.security.pinned_http import create_pinned_transport
+from app.security.url_validator import validate_provider_url
 from app.services.app_config_store import load_app_config
-from app.services.quota_service import count_active_seats, count_monthly_queries
 from app.services.provider_settings import (
     expand_provider_mode,
     probe_cloud_embeddings,
@@ -30,14 +33,14 @@ from app.services.provider_settings import (
     sanitize_ollama_role_models,
     validate_hybrid_embedding,
 )
+from app.services.quota_service import count_active_seats, count_monthly_queries
 from app.services.runtime_config import expected_vector_size
 from app.services.settings_exceptions import EmbeddingDimensionConflict, SettingsValidationError
-from app.security.url_validator import validate_provider_url
 from observability.cost_tracker import CostTracker
 
 logger = structlog.get_logger(__name__)
 
-_DEFAULT_VISION_MODEL = "qwen2.5vl:7b"
+_DEFAULT_VISION_MODEL = "qwen3.5:9b"
 
 # ---------------------------------------------------------------------------
 # Dispatch tables for collect_field_updates — simple fields only.
@@ -49,6 +52,8 @@ _BOOL_FIELDS: tuple[tuple[str, str], ...] = (
     ("rerankerEnabled", "reranker_enabled"),
     ("ssoOnly", "sso_only"),
     ("redactPII", "redact_pii"),
+    ("oidcEnabled", "oidc_enabled"),
+    ("oidcAutoProvision", "oidc_auto_provision"),
 )
 
 # (request_attr, db_key, lo, hi)
@@ -101,6 +106,14 @@ class PatchSettingsRequest(BaseModel):
     maxSeats: int | None = None          # 0 = unlimited
     monthlyQueryLimit: int | None = None # 0 = unlimited
     tierExpiresAt: str | None = None     # ISO-8601 UTC or "" to clear
+    blockedTerms: list[str] | None = None
+    oidcEnabled: bool | None = None
+    oidcIssuerUrl: str | None = None
+    oidcClientId: str | None = None
+    oidcClientSecret: str | None = None
+    oidcRedirectUri: str | None = None
+    oidcAllowedDomains: list[str] | None = None
+    oidcAutoProvision: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +126,64 @@ def validate_model_identifier(value: str, field_name: str) -> str:
         raise SettingsValidationError(f"{field_name} cannot be empty")
     if len(normalized) > 200:
         raise SettingsValidationError(f"{field_name} is too long")
+    return normalized
+
+
+def _normalize_blocked_terms(value: list[str], field_name: str = "blockedTerms") -> list[str]:
+    if len(value) > 100:
+        raise SettingsValidationError(f"{field_name} supports at most 100 terms")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        term = str(raw).strip().lower()
+        if not term:
+            continue
+        if len(term) > 120:
+            raise SettingsValidationError(f"{field_name} entries must be 120 characters or fewer")
+        if term not in seen:
+            normalized.append(term)
+            seen.add(term)
+    return normalized
+
+
+def _validate_oidc_url(
+    value: str,
+    field_name: str,
+    *,
+    strip_trailing_slash: bool = False,
+    ssrf_validate: bool = False,
+) -> str:
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise SettingsValidationError(f"{field_name} must be an absolute HTTP(S) URL")
+    normalized = normalized.rstrip("/") if strip_trailing_slash else normalized
+    if ssrf_validate:
+        try:
+            clean_url, _resolved_ip = validate_provider_url(normalized)
+        except Exception as exc:
+            detail = getattr(exc, "detail", str(exc))
+            raise SettingsValidationError(f"{field_name} is not allowed: {detail}") from exc
+        return clean_url
+    return normalized
+
+
+def _normalize_domains(value: list[str], field_name: str = "oidcAllowedDomains") -> list[str]:
+    if len(value) > 50:
+        raise SettingsValidationError(f"{field_name} supports at most 50 domains")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        domain = str(raw).strip().lower()
+        if not domain:
+            continue
+        if any(ch in domain for ch in {"/", "\\", "@", " "}) or "." not in domain:
+            raise SettingsValidationError(f"{field_name} entries must be bare domains")
+        if domain not in seen:
+            normalized.append(domain)
+            seen.add(domain)
     return normalized
 
 
@@ -166,8 +237,12 @@ def _validate_embedding_model_dimension(model: str) -> None:
             )
     except EmbeddingDimensionConflict:
         raise
-    except Exception:  # noqa: S110
-        pass  # Qdrant unreachable is non-fatal — startup guard will catch it
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "embedding_dim_check_skipped",
+            error=str(exc),
+            exc_type=type(exc).__name__,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +275,14 @@ def normalize_patch_request(
         body.embeddingSource or current_config.get("embedding_source", _eff_embed_default)
     )
 
-    return body, pre_updates, effective_provider, effective_embedding_source, prev_embedding_model, prev_embedding_source
+    return (
+        body,
+        pre_updates,
+        effective_provider,
+        effective_embedding_source,
+        prev_embedding_model,
+        prev_embedding_source,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +381,12 @@ def collect_field_updates(
     if effective_provider == "ollama":
         requested_ollama_models = any(
             v is not None
-            for v in (body.generationModel, body.generationFallback, body.embeddingModel, body.visionModel)
+            for v in (
+                body.generationModel,
+                body.generationFallback,
+                body.embeddingModel,
+                body.visionModel,
+            )
         )
         available_ollama = fetch_ollama_model_names() if requested_ollama_models else set()
         if body.generationModel is not None:
@@ -379,7 +466,8 @@ def collect_field_updates(
     if body.providerBaseUrl is not None:
         clean_url, resolved_ip = validate_provider_url(body.providerBaseUrl)
         updates["provider_base_url"] = clean_url
-        updates["provider_resolved_ip"] = resolved_ip  # pin against DNS rebinding; use as connection target
+        # Used by runtime clients as the actual connection target.
+        updates["provider_resolved_ip"] = resolved_ip
     if body.providerApiKey is not None:
         updates["provider_api_key"] = body.providerApiKey
     if body.providerChatModel is not None:
@@ -417,6 +505,23 @@ def collect_field_updates(
         if body.embeddingSource not in {"ollama", "provider"}:
             raise SettingsValidationError("embeddingSource must be ollama or provider")
         updates["embedding_source"] = body.embeddingSource
+    if body.blockedTerms is not None:
+        updates["blocked_terms"] = _normalize_blocked_terms(body.blockedTerms)
+    if body.oidcIssuerUrl is not None:
+        updates["oidc_issuer_url"] = _validate_oidc_url(
+            body.oidcIssuerUrl,
+            "oidcIssuerUrl",
+            strip_trailing_slash=True,
+            ssrf_validate=True,
+        )
+    if body.oidcClientId is not None:
+        updates["oidc_client_id"] = validate_model_identifier(body.oidcClientId, "oidcClientId")
+    if body.oidcClientSecret is not None:
+        updates["oidc_client_secret"] = body.oidcClientSecret.strip()
+    if body.oidcRedirectUri is not None:
+        updates["oidc_redirect_uri"] = _validate_oidc_url(body.oidcRedirectUri, "oidcRedirectUri")
+    if body.oidcAllowedDomains is not None:
+        updates["oidc_allowed_domains"] = _normalize_domains(body.oidcAllowedDomains)
 
     # --- Tier / license config ---
     if body.tier is not None:
@@ -444,6 +549,9 @@ def collect_field_updates(
 # ---------------------------------------------------------------------------
 
 _SETTINGS_LIVE_TTL_SECONDS = 60.0
+# Per-process cache only. Multi-worker deployments may return live metadata
+# from each worker's last refresh for up to this TTL; persisted settings still
+# come from the database on every request.
 _settings_live_cache: dict[str, Any] = {
     "expires_at": 0.0,
     "today_cost": 0.0,
@@ -456,9 +564,13 @@ _settings_live_cache_lock = threading.Lock()
 
 def _fetch_provider_model_names(base_url: str, api_key: str) -> list[str]:
     try:
-        with httpx.Client(timeout=5.0) as client:
+        clean_url, _resolved_ip = validate_provider_url(base_url)
+        with httpx.Client(
+            transport=create_pinned_transport(clean_url, _resolved_ip),
+            timeout=5.0,
+        ) as client:
             resp = client.get(
-                f"{base_url.rstrip('/')}/models",
+                f"{clean_url.rstrip('/')}/models",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             resp.raise_for_status()
@@ -528,7 +640,7 @@ def serialize_settings(db: Session) -> dict[str, Any]:
         str(_val("generation_model", settings.ollama_model)),
         str(_val("generation_fallback_model", settings.ollama_model)),
         str(_val("embedding_model", settings.embedding_model)),
-        str(_val("vision_model", "qwen2.5vl:7b")),
+        str(_val("vision_model", "qwen3.5:9b")),
     }
     custom_provider_models: list[str] = []
     try:
@@ -544,12 +656,13 @@ def serialize_settings(db: Session) -> dict[str, Any]:
     provider_type = _prov.provider_type
     embedding_source = _prov.embedding_source
     provider_mode = _prov.provider_mode
+    oidc = load_oidc_config(db_overrides)
 
     return {
         "generationModel": _val("generation_model", settings.ollama_model),
         "generationFallback": _val("generation_fallback_model", settings.ollama_model),
         "embeddingModel": _val("embedding_model", settings.embedding_model),
-        "visionModel": _val("vision_model", "qwen2.5vl:7b"),
+        "visionModel": _val("vision_model", "qwen3.5:9b"),
         "provider": {
             "type": provider_type,
             "baseUrl": _val("provider_base_url", settings.ollama_url),
@@ -568,9 +681,9 @@ def serialize_settings(db: Session) -> dict[str, Any]:
                 )
             ),
             "visionModel": (
-                _val("vision_model", "qwen2.5vl:7b")
+                _val("vision_model", "qwen3.5:9b")
                 if embedding_source == "ollama"
-                else _val("provider_vision_model", "qwen2.5vl:7b")
+                else _val("provider_vision_model", "qwen3.5:9b")
             ),
             "embeddingSource": embedding_source,
             "providerMode": provider_mode,
@@ -611,6 +724,17 @@ def serialize_settings(db: Session) -> dict[str, Any]:
             "sessionHours": _val("session_hours", 24),
             "auditRetentionDays": _val("audit_retention_days", settings.audit_log_retention_days),
             "redactPII": _val("redact_pii", False),
+            "blockedTerms": _normalize_blocked_terms(_val("blocked_terms", [])),
+            "oidc": {
+                "enabled": oidc.enabled,
+                "issuerUrl": oidc.issuer_url,
+                "clientId": oidc.client_id,
+                "clientSecretConfigured": bool(oidc.client_secret),
+                "redirectUri": oidc.redirect_uri,
+                "allowedDomains": oidc.allowed_domains,
+                "autoProvision": oidc.auto_provision,
+                "configured": oidc.configured,
+            },
         },
         "cost": {
             "dailyCeilingUsd": _val("daily_ceiling_usd", 50),

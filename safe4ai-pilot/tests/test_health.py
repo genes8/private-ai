@@ -84,6 +84,47 @@ def test_health_uses_provider_check_for_openai_compatible() -> None:
     assert body["checks"]["provider"] == "ok"
 
 
+def test_health_provider_check_uses_pinned_transport_when_resolved_ip_exists() -> None:
+    from app.main import app
+
+    mock_engine = _mock_engine_connect()
+    pinned_transport = object()
+    client_kwargs: list[dict[str, object]] = []
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            client_kwargs.append(kwargs)
+
+        async def __aenter__(self) -> _FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, _url: str, **_kwargs: object) -> MagicMock:
+            resp = MagicMock()
+            resp.status_code = 200
+            return resp
+
+    with (
+        patch("app.main.engine", mock_engine),
+        patch("app.main.load_runtime_config") as mock_runtime_config,
+        patch("app.main.create_pinned_async_transport", return_value=pinned_transport),
+        patch("app.main.httpx.AsyncClient", _FakeAsyncClient),
+    ):
+        mock_runtime_config.return_value = MagicMock(
+            provider_type="openai_compatible",
+            provider_base_url="https://api.example.test/v1",
+            provider_resolved_ip="93.184.216.34",
+            provider_api_key="secret",
+        )
+        client = TestClient(app)
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert {"timeout": 5, "transport": pinned_transport} in client_kwargs
+
+
 def test_prompt_registry_get_latest() -> None:
     from app.prompts.registry import get_prompt
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -62,6 +63,24 @@ def _override_get_db(db: MagicMock) -> Callable[[], Generator[MagicMock, None, N
 _ALLOWED_ORIGIN = "http://localhost:3000"
 
 
+def _config_row(key: str, value: object) -> SimpleNamespace:
+    return SimpleNamespace(key=key, value=value)
+
+
+def _oidc_rows(**overrides: object) -> list[SimpleNamespace]:
+    values: dict[str, object] = {
+        "oidc_enabled": True,
+        "oidc_issuer_url": "https://idp.example.com",
+        "oidc_client_id": "safe4ai",
+        "oidc_client_secret": "secret-value",
+        "oidc_redirect_uri": "http://localhost:8000/auth/sso/callback",
+        "oidc_allowed_domains": ["example.com"],
+        "oidc_auto_provision": False,
+    }
+    values.update(overrides)
+    return [_config_row(key, value) for key, value in values.items()]
+
+
 # ---------------------------------------------------------------------------
 # test_login_success
 # ---------------------------------------------------------------------------
@@ -95,6 +114,76 @@ def test_login_success(test_client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json() == {"message": "logged in"}
     assert "access_token" in response.cookies
+
+
+def test_sso_status_reports_configured_oidc(test_client: TestClient) -> None:
+    db = _mock_db_with_user(None)
+    db.query.return_value.all.return_value = _oidc_rows()
+    app.dependency_overrides[get_db] = _override_get_db(db)
+    try:
+        response = test_client.get("/auth/sso/status")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["configured"] is True
+    assert body["loginUrl"] == "/auth/sso/start"
+    assert "secret" not in str(body).lower()
+
+
+def test_password_login_blocked_when_sso_only_and_oidc_configured(
+    test_client: TestClient,
+) -> None:
+    from app.auth.middleware import hash_password
+
+    hashed = hash_password("SuperSecret123!")
+    user = _make_user(password_hash=hashed)
+    db = _mock_db_with_user(user)
+    db.query.return_value.all.return_value = _oidc_rows(sso_only=True)
+
+    csrf_token = _get_csrf(test_client)
+    app.dependency_overrides[get_db] = _override_get_db(db)
+    try:
+        response = test_client.post(
+            "/auth/login",
+            headers={"origin": _ALLOWED_ORIGIN, "X-CSRF-Token": csrf_token},
+            json={"email": "alice@example.com", "password": "SuperSecret123!"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 403
+    assert "sso" in response.json()["detail"].lower()
+
+
+def test_sso_callback_sets_session_for_existing_user(
+    test_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_userinfo(*args: object, **kwargs: object) -> dict[str, object]:
+        return {"email": "alice@example.com", "email_verified": True}
+
+    user = _make_user(email="alice@example.com")
+    db = _mock_db_with_user(user)
+    db.query.return_value.all.return_value = _oidc_rows()
+    monkeypatch.setattr("app.auth.router.exchange_code_for_userinfo", _fake_userinfo)
+
+    test_client.cookies.set("oidc_state", "state-123")
+    app.dependency_overrides[get_db] = _override_get_db(db)
+    try:
+        response = test_client.get(
+            "/auth/sso/callback?code=code-123&state=state-123",
+            follow_redirects=False,
+        )
+    finally:
+        test_client.cookies.clear()
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code in {302, 307}
+    assert "access_token" in response.cookies
+    assert user.failed_login_count == 0
 
 
 # ---------------------------------------------------------------------------

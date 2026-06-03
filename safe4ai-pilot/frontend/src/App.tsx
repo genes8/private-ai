@@ -35,8 +35,9 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
+    <ErrorBoundary>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
 
       <Route
         path="/chat"
@@ -100,7 +101,7 @@ export default function App() {
         path="/admin/settings"
         element={
           <RequireAdmin>
-            <ErrorBoundary><SettingsPage /></ErrorBoundary>
+            <SettingsPage />
           </RequireAdmin>
         }
       />
@@ -109,12 +110,13 @@ export default function App() {
         path="/settings"
         element={
           <RequireAuth>
-            <ErrorBoundary><UserSettingsPage /></ErrorBoundary>
+            <UserSettingsPage />
           </RequireAuth>
         }
       />
 
-      <Route path="*" element={<Navigate to="/chat" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/chat" replace />} />
+      </Routes>
+    </ErrorBoundary>
   );
 }

@@ -38,19 +38,30 @@ function LiveTimer() {
   );
 }
 
-function renderWithCitations(
-  body: string,
-  onOpen: (id: string) => void,
-  activeId: string | null,
-): React.ReactNode[] {
+function AnswerWithCitations({
+  body,
+  onOpen,
+  activeId,
+}: {
+  body: string;
+  onOpen: (id: string) => void;
+  activeId: string | null;
+}) {
   const parts = body.split(/(\[\d+\])/g);
-  return parts.map((part, i) => {
+  let offset = 0;
+  return (
+    <>
+      {parts.map((part) => {
+    const partOffset = offset;
+    offset += part.length;
     const m = part.match(/^\[(\d+)\]$/);
     if (m) {
-      return <CitationChip key={i} id={m[1]} active={activeId === m[1]} onOpen={onOpen} />;
+      return <CitationChip key={`cite-${m[1]}-${partOffset}`} id={m[1]} active={activeId === m[1]} onOpen={onOpen} />;
     }
-    return <span key={i}>{part}</span>;
-  });
+    return <span key={`text-${partOffset}`}>{part}</span>;
+  })}
+    </>
+  );
 }
 
 export default function AnswerBlock({ body, sources, trust, onCopy, onRate, onCitationOpen, isStreaming, rated }: Props) {
@@ -63,7 +74,7 @@ export default function AnswerBlock({ body, sources, trust, onCopy, onRate, onCi
 
   return (
     <div className="grid items-start gap-3" style={{ gridTemplateColumns: "28px 1fr" }}>
-      <div className="w-7 h-7 rounded-[7px] bg-ink flex items-center justify-center shrink-0 mt-0.5">
+      <div className="size-7 rounded-[7px] bg-ink flex items-center justify-center shrink-0 mt-0.5">
         <Logo size={16} />
       </div>
       <div className="space-y-2 min-w-0">
@@ -73,7 +84,7 @@ export default function AnswerBlock({ body, sources, trust, onCopy, onRate, onCi
         </div>
 
         <p className="text-[14.5px] leading-relaxed tracking-body text-text whitespace-pre-wrap">
-          {renderWithCitations(body, handleCiteOpen, activeId)}
+          <AnswerWithCitations body={body} onOpen={handleCiteOpen} activeId={activeId} />
           {isStreaming && <span className="inline-block w-0.5 h-3.5 bg-text animate-pulse ml-0.5" />}
         </p>
 
@@ -81,6 +92,7 @@ export default function AnswerBlock({ body, sources, trust, onCopy, onRate, onCi
           <div className="flex flex-wrap gap-1.5 pt-0.5">
             {sources.map((s) => (
               <button
+                type="button"
                 key={s.id}
                 onClick={() => handleCiteOpen(s.id)}
                 className={[
@@ -101,6 +113,7 @@ export default function AnswerBlock({ body, sources, trust, onCopy, onRate, onCi
         {!isStreaming && (
           <div className="flex items-center gap-1">
             <button
+              type="button"
               onClick={onCopy}
               className="p-1.5 rounded hover:bg-surface-2 text-text-mute hover:text-text-3 transition-colors"
               title="Copy"
@@ -108,6 +121,7 @@ export default function AnswerBlock({ body, sources, trust, onCopy, onRate, onCi
               <Copy size={13} />
             </button>
             <button
+              type="button"
               onClick={() => onRate?.("up")}
               aria-pressed={rated === "up"}
               className={["p-1.5 rounded transition-colors", rated === "up" ? "text-success" : "text-text-mute hover:text-success hover:bg-success-soft"].join(" ")}
@@ -116,6 +130,7 @@ export default function AnswerBlock({ body, sources, trust, onCopy, onRate, onCi
               <ThumbsUp size={13} />
             </button>
             <button
+              type="button"
               onClick={() => onRate?.("down")}
               aria-pressed={rated === "down"}
               className={["p-1.5 rounded transition-colors", rated === "down" ? "text-danger" : "text-text-mute hover:text-danger hover:bg-danger-soft"].join(" ")}

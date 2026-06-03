@@ -7,6 +7,7 @@ interface Props {
 export default function CitationChip({ id, active, onOpen }: Props) {
   return (
     <button
+      type="button"
       onClick={() => onOpen?.(id)}
       className={[
         "inline-flex items-center justify-center min-w-[18px] h-[17px] px-1 rounded text-[10.5px] font-mono font-medium",

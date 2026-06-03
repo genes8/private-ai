@@ -36,3 +36,15 @@ def test_ollama_override_contains_local_llm_services() -> None:
 
     assert "ollama" in services
     assert "ollama-init" in services
+
+
+def test_airgap_package_verifier_passes() -> None:
+    from scripts.verify_airgap_package import verify_airgap_package
+
+    report = verify_airgap_package(ROOT)
+
+    assert report["ok"] is True
+    assert report["checks"]["app_reranker_prebaked"] is True
+    assert report["checks"]["ollama_overlay_pulls_required_models"] is True
+    assert report["checks"]["runbook_present"] is True
+    assert report["checks"]["audit_archive_volume"] is True

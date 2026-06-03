@@ -290,6 +290,29 @@ class TestDocumentDelete:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_delete_document_cancels_registered_ingestion_task(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        doc = _make_document()
+        db.get.side_effect = lambda model, pk: admin if model is User else doc
+        db.query.return_value.filter.return_value.first.return_value = None
+
+        task = MagicMock()
+        task.cancelled.return_value = False
+        task.done.return_value = False
+
+        with patch("pathlib.Path.mkdir"), \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("app.services.document_service.QdrantClient"):
+            client = _make_test_client(db, admin)
+            client.app.state.ingestion_tasks_by_doc = {"doc-1": task}  # type: ignore[attr-defined]
+            resp = client.delete("/admin/documents/doc-1")
+
+        assert resp.status_code == 204
+        task.cancel.assert_called_once()
+        from app.main import app
+        app.dependency_overrides.clear()
+
 
 class TestDocumentReindex:
     def test_reindex_returns_202(self) -> None:
@@ -455,6 +478,170 @@ class TestSettings:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_patch_settings_persists_normalized_blocked_terms(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.scalar.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.settings_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.settings_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch(
+                "/settings",
+                json={"blockedTerms": [" MRN ", "patient identifier", ""]},
+            )
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        assert updates["blocked_terms"] == ["mrn", "patient identifier"]
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_get_settings_includes_blocked_terms(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        blocked_terms = MagicMock()
+        blocked_terms.key = "blocked_terms"
+        blocked_terms.value = ["mrn", "patient identifier"]
+        db.query.return_value.all.return_value = [blocked_terms]
+        db.query.return_value.scalar.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ), patch(
+            "app.services.settings_service._settings_live_cache", {"expires_at": 0.0}
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.get("/settings")
+
+        assert resp.status_code == 200
+        assert resp.json()["security"]["blockedTerms"] == ["mrn", "patient identifier"]
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_patch_settings_persists_oidc_config(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.query.return_value.all.return_value = []
+        db.query.return_value.scalar.return_value = 0
+        provider_url_patch = patch(
+            "app.services.settings_service.validate_provider_url",
+            return_value=("https://idp.example.com", "93.184.216.34"),
+        )
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "app.api.settings_routes.upsert_app_config"
+        ) as mock_upsert, patch(
+            "app.api.settings_routes.build_runtime_components",
+            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), provider_url_patch, patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.patch(
+                "/settings",
+                json={
+                    "oidcEnabled": True,
+                    "oidcIssuerUrl": "https://idp.example.com/",
+                    "oidcClientId": "safe4ai",
+                    "oidcClientSecret": "secret-value",
+                    "oidcRedirectUri": "http://localhost:8000/auth/sso/callback",
+                    "oidcAllowedDomains": [" Example.com ", ""],
+                    "oidcAutoProvision": True,
+                },
+            )
+
+        assert resp.status_code == 200
+        updates = mock_upsert.call_args.args[1]
+        assert updates["oidc_enabled"] is True
+        assert updates["oidc_issuer_url"] == "https://idp.example.com"
+        assert updates["oidc_client_id"] == "safe4ai"
+        assert updates["oidc_client_secret"] == "secret-value"
+        assert updates["oidc_allowed_domains"] == ["example.com"]
+        assert updates["oidc_auto_provision"] is True
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_get_settings_exposes_oidc_without_secret(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        rows = []
+        for key, value in {
+            "oidc_enabled": True,
+            "oidc_issuer_url": "https://idp.example.com",
+            "oidc_client_id": "safe4ai",
+            "oidc_client_secret": "secret-value",
+            "oidc_redirect_uri": "http://localhost:8000/auth/sso/callback",
+            "oidc_allowed_domains": ["example.com"],
+            "oidc_auto_provision": False,
+        }.items():
+            row = MagicMock()
+            row.key = key
+            row.value = value
+            rows.append(row)
+        db.query.return_value.all.return_value = rows
+        db.query.return_value.scalar.return_value = 0
+
+        with patch("pathlib.Path.mkdir"), patch(
+            "observability.cost_tracker.CostTracker.get_stats",
+            return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
+        ), patch(
+            "app.services.settings_service._settings_live_cache", {"expires_at": 0.0}
+        ):
+            client = _make_test_client(db, admin)
+            resp = client.get("/settings")
+
+        assert resp.status_code == 200
+        oidc = resp.json()["security"]["oidc"]
+        assert oidc["enabled"] is True
+        assert oidc["configured"] is True
+        assert oidc["clientSecretConfigured"] is True
+        assert "secret-value" not in str(resp.json())
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_fetch_provider_model_names_validates_stored_url(self) -> None:
+        from app.services.settings_service import _fetch_provider_model_names
+
+        response = MagicMock()
+        response.json.return_value = {"data": [{"id": "model-a"}]}
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.get.return_value = response
+
+        with patch(
+            "app.services.settings_service.validate_provider_url",
+            return_value=("https://provider.example/v1", "203.0.113.10"),
+        ) as mock_validate, patch("app.services.settings_service.httpx.Client", return_value=client):
+            models = _fetch_provider_model_names("https://provider.example/v1", "sk-test")
+
+        assert models == ["model-a"]
+        mock_validate.assert_called_once_with("https://provider.example/v1")
+
+    def test_embedding_dimension_check_logs_qdrant_errors(self) -> None:
+        from app.services.settings_service import _validate_embedding_model_dimension
+
+        qdrant = MagicMock()
+        qdrant.get_collection.side_effect = RuntimeError("qdrant unavailable")
+
+        with patch("app.services.settings_service._QdrantClient", return_value=qdrant), patch(
+            "app.services.settings_service.logger.debug"
+        ) as mock_debug:
+            _validate_embedding_model_dimension("nomic-embed-text")
+
+        mock_debug.assert_called_once()
+        assert mock_debug.call_args.args[0] == "embedding_dim_check_skipped"
+
     def test_patch_openai_generation_model_updates_provider_chat_model(self) -> None:
         admin = _make_admin_user()
         db = _mock_db_with_admin(admin)
@@ -510,7 +697,7 @@ class TestSettings:
 
         with patch("pathlib.Path.mkdir"), patch(
             "app.services.settings_service.fetch_ollama_model_names",
-            return_value={"qwen3.5:9b", "nomic-embed-text", "qwen2.5vl:7b"},
+            return_value={"qwen3.5:9b", "nomic-embed-text"},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -524,7 +711,6 @@ class TestSettings:
         body = resp.json()
         assert body["availableModels"]["ollama"] == [
             "nomic-embed-text",
-            "qwen2.5vl:7b",
             "qwen3.5:9b",
         ]
         assert "bge-reranker-v2" in body["availableModels"]["reranker"]
@@ -630,7 +816,7 @@ class TestSettings:
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
         ), patch(
             "app.services.settings_service.fetch_ollama_model_names",
-            return_value={app_settings.ollama_model, app_settings.embedding_model, "qwen2.5vl:7b"},
+            return_value={app_settings.ollama_model, app_settings.embedding_model},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -662,7 +848,7 @@ class TestSettings:
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
         ), patch(
             "app.services.settings_service.fetch_ollama_model_names",
-            return_value={app_settings.ollama_model, app_settings.embedding_model, "qwen2.5vl:7b"},
+            return_value={app_settings.ollama_model, app_settings.embedding_model},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -697,7 +883,7 @@ class TestSettings:
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
         ), patch(
             "app.services.settings_service.fetch_ollama_model_names",
-            return_value={"nomic-embed-text", "qwen2.5vl:7b"},
+            return_value={"nomic-embed-text", "qwen3.5:9b"},
         ), patch(
             # validate_provider_url calls socket.getaddrinfo — bypass DNS in tests
             "app.services.settings_service.validate_provider_url",
@@ -762,7 +948,7 @@ class TestSettings:
         ), patch(
             "app.services.settings_service.fetch_ollama_model_names",
             # text-embedding-3-small is NOT in Ollama, but nomic-embed-text and vision default are
-            return_value={"nomic-embed-text", "qwen2.5vl:7b"},
+            return_value={"nomic-embed-text", "qwen3.5:9b"},
         ), patch(
             # validate_provider_url calls socket.getaddrinfo — bypass DNS in tests
             "app.services.settings_service.validate_provider_url",
@@ -818,7 +1004,7 @@ class TestSettings:
         ), patch(
             "app.services.settings_service.fetch_ollama_model_names",
             # deepseek-v4-flash is NOT in Ollama; only the Ollama defaults are
-            return_value={app_settings.ollama_model, app_settings.embedding_model, "qwen2.5vl:7b"},
+            return_value={app_settings.ollama_model, app_settings.embedding_model},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -855,7 +1041,7 @@ class TestSettings:
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
         ), patch(
             "app.services.settings_service.fetch_ollama_model_names",
-            return_value={app_settings.ollama_model, app_settings.embedding_model, "qwen2.5vl:7b"},
+            return_value={app_settings.ollama_model, app_settings.embedding_model},
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -866,7 +1052,7 @@ class TestSettings:
         assert resp.status_code == 200
         updates = mock_upsert.call_args.args[1]
         assert updates["embedding_model"] == app_settings.embedding_model
-        assert updates["vision_model"] == "qwen2.5vl:7b"
+        assert updates["vision_model"] == "qwen3.5:9b"
         from app.main import app
         app.dependency_overrides.clear()
 
@@ -894,7 +1080,7 @@ class TestSettings:
         ), patch(
             "app.services.settings_service.fetch_ollama_model_names",
             # Both embedding AND vision defaults must be present so the sanitization can reset
-            return_value={"nomic-embed-text", "qwen2.5vl:7b"},
+            return_value={"nomic-embed-text", "qwen3.5:9b"},
         ), patch(
             "app.services.settings_service.validate_provider_url",
             side_effect=lambda url: (url.rstrip("/"), "93.184.216.34"),
@@ -908,7 +1094,7 @@ class TestSettings:
         assert resp.status_code == 200
         updates = mock_upsert.call_args.args[1]
         # vision_model must be reset to the Ollama default, not left as the cloud vision ID
-        assert updates["vision_model"] == "qwen2.5vl:7b"
+        assert updates["vision_model"] == "qwen3.5:9b"
         from app.main import app
         app.dependency_overrides.clear()
 
@@ -927,6 +1113,9 @@ class TestSettings:
         ), patch(
             "app.api.settings_routes.build_runtime_components",
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.services.settings_service.validate_provider_url",
+            return_value=("https://idp.example.com", "93.184.216.34"),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -966,6 +1155,9 @@ class TestSettings:
         ), patch(
             "app.api.settings_routes.build_runtime_components",
             return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock()),
+        ), patch(
+            "app.services.settings_service.validate_provider_url",
+            return_value=("https://idp.example.com", "93.184.216.34"),
         ), patch(
             "observability.cost_tracker.CostTracker.get_stats",
             return_value={"total_cost_usd": 0.0, "runs_count": 0, "by_day": []},
@@ -1306,6 +1498,34 @@ class TestAuditLogs:
 
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_list_audit_logs_returns_user_email_for_display(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        audit = MagicMock()
+        audit.id = "audit-1"
+        audit.user_id = "user-1"
+        audit.session_id = "sess-1"
+        audit.timestamp = datetime.now(UTC)
+        audit.action_type = "settings_provider_change"
+        audit.query_text = None
+        audit.latency_ms = None
+        audit.model_used = None
+        audit.trace_id = "trace-1"
+
+        _paged = db.query.return_value.outerjoin.return_value.order_by.return_value.offset.return_value.limit.return_value
+        _paged.all.return_value = [(audit, "pilot@example.com")]
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/audit-logs")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body[0]["user_email"] == "pilot@example.com"
+        assert body[0]["user_id"] == "user-1"
         from app.main import app
         app.dependency_overrides.clear()
 

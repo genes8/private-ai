@@ -18,6 +18,13 @@
 - [AdminFeedback.tsx](file://safe4ai-pilot/frontend/src/components/admin/FeedbackListItem.tsx)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Enhanced OutputFilter with new Rule 0 that blocks grounded answers containing no citations when source chunks are present
+- Updated multi-rule evaluation system documentation to reflect citation validation alongside PII content verification and length-based heuristics
+- Added comprehensive examples of citation enforcement scenarios and testing patterns
+- Expanded troubleshooting guidance for citation-related validation failures
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
@@ -31,7 +38,7 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document describes the output validation and quality assurance system designed to ensure AI-generated responses meet safety and quality standards. It explains the output filter implementation, including response sanitization, PII detection, length heuristics, and integration with internal quality metrics and administrative review. It also covers configuration of output policies, custom validation rules, handling quality failures, and the relationship with user feedback and compliance reporting.
+This document describes the output validation and quality assurance system designed to ensure AI-generated responses meet safety and quality standards. The system has been enhanced with a new citation enforcement mechanism that prevents grounded answers from being returned without proper attribution when source documents are available. It explains the output filter implementation, including response sanitization, PII detection, citation validation, length heuristics, and integration with internal quality metrics and administrative review. It also covers configuration of output policies, custom validation rules, handling quality failures, and the relationship with user feedback and compliance reporting.
 
 ## Project Structure
 The validation system spans backend security guards, service orchestration, database models, and frontend admin components:
@@ -99,17 +106,16 @@ AF --> FB
 ## Core Components
 - InputGuard: sanitizes and validates user queries, rejecting potentially malicious inputs and enforcing length limits
 - ContentFilter: removes document chunks containing PII or matching blocked terms prior to retrieval
-- OutputFilter: checks generated answers for hallucinated PII and suspicious length; blocks or warns accordingly
+- OutputFilter: implements a multi-rule evaluation system checking for citation enforcement, PII hallucination, and suspicious length; blocks or warns accordingly
 - UploadValidator: enforces allowed extensions, declared and detected MIME types, and file size limits
 - ConversationManager: orchestrates session state, controls pipeline steps, and applies safety measures during conversation lifecycle
 - GuardResult: unified result type for all guards indicating allowed/denied decisions and reasons
 - PrivateAIState: pipeline state including steps, retrieval context, generation context, and flags for human review
 
 Key validation rules and behaviors:
-- OutputFilter blocks answers containing PII not present in the source chunks and logs warnings for excessively long answers
-- ContentFilter excludes chunks with PII or blocked terms and logs exclusions
-- InputGuard strips HTML/control characters, enforces length, and detects prompt injection patterns
-- UploadValidator ensures file integrity and safety via extension, declared MIME, magic-byte detection, and size checks
+- **Rule 0 (New)**: Citation enforcement - blocks answers with source chunks but empty citation list to prevent unattributed grounded responses
+- **Rule 1**: PII hallucination detection - compares PII found in the answer against the combined source content and blocks if any PII appears without evidence in sources
+- **Rule 2**: Length heuristic - logs a warning for answers exceeding a configurable threshold without blocking
 
 **Section sources**
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
@@ -140,7 +146,7 @@ else "Allowed"
 Guard-->>API : "GuardResult(allowed=True)"
 API->>RAG : "Generate answer with context"
 RAG-->>Conv : "draft_answer + citations"
-Conv->>OF : "check(answer, generation_context)"
+Conv->>OF : "check(answer, generation_context, citations)"
 alt "Blocked"
 OF-->>API : "GuardResult(allowed=False)"
 API-->>Client : "Reject with reason"
@@ -162,36 +168,46 @@ end
 
 ## Detailed Component Analysis
 
-### Output Filter Implementation
-The OutputFilter performs two primary checks:
-- PII hallucination detection: Compares PII found in the answer against the combined source content and blocks if any PII appears without evidence in sources
-- Length heuristic: Logs a warning for answers exceeding a configurable threshold without blocking
+### Enhanced Output Filter Implementation
+The OutputFilter now implements a comprehensive multi-rule evaluation system:
+
+**Rules (evaluated in order):**
+1. **Rule 0 (Citation Enforcement)**: If source chunks are present but the answer has no citations, block the response. This prevents grounded answers from being returned without attribution.
+2. **Rule 1 (PII Hallucination)**: If the answer contains PII that is absent from every source chunk, block the response.
+3. **Rule 2 (Length Heuristic)**: If the answer exceeds 4,000 characters, log a warning (still allowed).
 
 ```mermaid
 flowchart TD
-Start(["check(answer, source_chunks)"]) --> FindPII["_find_pii_matches(answer)"]
+Start(["check(answer, source_chunks, citations)"]) --> Rule0["Rule 0: Citation check"]
+Rule0 --> HasChunks{"Source chunks present?"}
+HasChunks --> |No| Rule1["Rule 1: PII check"]
+HasChunks --> |Yes| HasCitations{"Citations provided?"}
+HasCitations --> |No| Block0["Block: Answer cites no sources"]
+HasCitations --> |Yes| Rule1
+Rule1 --> FindPII["_find_pii_matches(answer)"]
 FindPII --> HasPII{"PII found?"}
-HasPII --> |No| LenCheck["Length check vs threshold"]
+HasPII --> |No| LenCheck["Rule 2: Length check"]
 HasPII --> |Yes| Combine["Join source_chunks.content"]
 Combine --> VerifyPII{"All PII in source?"}
-VerifyPII --> |No| Block["Return GuardResult(allowed=False,<br/>reason blocked)"]
+VerifyPII --> |No| Block1["Block: PII not in source documents"]
 VerifyPII --> |Yes| LenCheck
-LenCheck --> Long{"Length > threshold?"}
+LenCheck --> Long{"Length > 4000 chars?"}
 Long --> |Yes| Warn["Log warning 'output_suspiciously_long'"]
 Long --> |No| Allow["Return GuardResult(allowed=True, reason='ok')"]
 Warn --> Allow
-Block --> End(["Exit"])
+Block0 --> End(["Exit"])
+Block1 --> End
 Allow --> End
 ```
 
 **Diagram sources**
-- [output_filter.py:23-61](file://safe4ai-pilot/app/security/output_filter.py#L23-L61)
+- [output_filter.py:26-74](file://safe4ai-pilot/app/security/output_filter.py#L26-L74)
 
 **Section sources**
-- [output_filter.py:13-18](file://safe4ai-pilot/app/security/output_filter.py#L13-L18)
-- [output_filter.py:20](file://safe4ai-pilot/app/security/output_filter.py#L20)
-- [output_filter.py:23-28](file://safe4ai-pilot/app/security/output_filter.py#L23-L28)
-- [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
+- [output_filter.py:35-44](file://safe4ai-pilot/app/security/output_filter.py#L35-L44)
+- [output_filter.py:45-52](file://safe4ai-pilot/app/security/output_filter.py#L45-L52)
+- [output_filter.py:54-63](file://safe4ai-pilot/app/security/output_filter.py#L54-L63)
+- [output_filter.py:65-73](file://safe4ai-pilot/app/security/output_filter.py#L65-L73)
 
 ### Content Filter for Retrieval Safety
 The ContentFilter removes chunks containing PII or matching blocked terms, logging each exclusion. It exposes helpers to detect PII and filter by blocked terms.
@@ -358,20 +374,21 @@ CM --> FB["QueryFeedback"]
 - UploadValidator: Magic-byte detection adds overhead; batch validations when possible and avoid redundant checks
 - ConversationManager summarization: Summarization is asynchronous and optional; tune thresholds and model parameters to balance accuracy and latency
 
-[No sources needed since this section provides general guidance]
-
 ## Troubleshooting Guide
 Common issues and resolutions:
-- Output blocked due to hallucinated PII: Verify that source chunks include the relevant context; adjust retrieval or reranking to improve grounding
-- Excessive warnings for long answers: Tune the length threshold or investigate generation settings that cause verbose outputs
-- ContentFilter excluding too many chunks: Review blocked terms and PII patterns; ensure they align with organizational policy
-- InputGuard rejecting legitimate queries: Adjust injection patterns or length limits; validate with representative datasets
-- UploadValidator rejections: Confirm file extensions, declared types, and sizes; verify magic-byte detection support
+- **Output blocked due to citation enforcement**: Verify that source chunks are present and citations are populated during the generation process; ensure the citation population step runs correctly when grounded answers are produced
+- **Output blocked due to hallucinated PII**: Verify that source chunks include the relevant context; adjust retrieval or reranking to improve grounding
+- **Excessive warnings for long answers**: Tune the length threshold or investigate generation settings that cause verbose outputs
+- **ContentFilter excluding too many chunks**: Review blocked terms and PII patterns; ensure they align with organizational policy
+- **InputGuard rejecting legitimate queries**: Adjust injection patterns or length limits; validate with representative datasets
+- **UploadValidator rejections**: Confirm file extensions, declared types, and sizes; verify magic-byte detection support
 
 Operational checks:
 - AuditLog retention and indexing support compliance reporting
 - QueryFeedback enables trend analysis and user sentiment monitoring
 - Admin dashboards provide visibility into activity and feedback
+
+**Updated** Enhanced troubleshooting guidance now includes citation enforcement scenarios and their specific resolution strategies
 
 **Section sources**
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
@@ -381,9 +398,7 @@ Operational checks:
 - [models.py (database):118-156](file://safe4ai-pilot/app/db/models.py#L118-L156)
 
 ## Conclusion
-The output validation and quality assurance system combines input sanitization, content filtering, and output filtering to ensure AI responses are safe and grounded. The system’s modular design, clear guard results, and integration with observability and admin tools enable robust quality control, compliance reporting, and continuous improvement through user feedback.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The output validation and quality assurance system combines input sanitization, content filtering, and enhanced output filtering to ensure AI responses are safe, properly attributed, and grounded. The new citation enforcement mechanism prevents grounded answers from being returned without proper attribution, while the multi-rule evaluation system maintains robust PII detection and length-based heuristics. The system's modular design, clear guard results, and integration with observability and admin tools enable robust quality control, compliance reporting, and continuous improvement through user feedback.
 
 ## Appendices
 
@@ -421,3 +436,22 @@ The output validation and quality assurance system combines input sanitization, 
 - [feedback.py](file://safe4ai-pilot/observability/feedback.py)
 - [AdminAudit.tsx](file://safe4ai-pilot/frontend/src/components/admin/ActivityEvent.tsx)
 - [AdminFeedback.tsx](file://safe4ai-pilot/frontend/src/components/admin/FeedbackListItem.tsx)
+
+### Enhanced Citation Enforcement Examples
+The new citation enforcement system provides several key validation scenarios:
+
+**Rule 0 Test Cases:**
+- **Blocking grounded answers without citations**: When source_chunks are present but citations=[] or citations=None, the system blocks the response with reason "Answer cites no sources"
+- **Passing answers with proper citations**: When source_chunks are present and citations contain at least one Citation object, the system proceeds to PII validation
+- **Exempting no-context fallbacks**: When source_chunks=[] (empty list), Rule 0 is bypassed regardless of citation status
+- **Citation parameter validation**: Both explicit citations=[] and missing citations parameter trigger the same blocking behavior
+
+**Integration Points:**
+- Citation objects are populated during the retrieval and generation pipeline
+- The OutputFilter receives citations as part of the validation context
+- Failed citation enforcement generates audit events for compliance tracking
+
+**Section sources**
+- [output_filter.py:45-52](file://safe4ai-pilot/app/security/output_filter.py#L45-L52)
+- [test_security_guards.py:225-261](file://safe4ai-pilot/tests/test_security_guards.py#L225-L261)
+- [models.py:41-46](file://safe4ai-pilot/app/models.py#L41-L46)

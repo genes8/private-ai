@@ -9,6 +9,7 @@ interface Props {
 export default function TrustSignal({ latencyMs, cacheHit, model, kRetrieved, onOpenTrace }: Props) {
   return (
     <button
+      type="button"
       onClick={onOpenTrace}
       className="inline-flex items-center gap-2.5 font-mono text-[11px] text-text-3 hover:text-text-2 transition-colors"
     >

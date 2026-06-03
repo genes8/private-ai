@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
 import { apiFetch } from "../api/client";
-import { login } from "../api/auth";
+import { getSsoStatus, login, ssoStartUrl } from "../api/auth";
 import Button from "../components/Button";
 import Logo from "../components/Logo";
 
@@ -22,9 +22,12 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { data: health, error: healthError } = useQuery({ queryKey: ["health"], queryFn: fetchHealth, staleTime: 30_000, retry: 1 });
+  const { data: sso } = useQuery({ queryKey: ["sso-status"], queryFn: getSsoStatus, staleTime: 30_000, retry: 1 });
   const healthChecking = !health && !healthError;
   const healthOk = health?.status === "ok";
   const healthLabel = healthChecking ? "Checking…" : healthOk ? "All systems operational" : "Some systems degraded";
+  const ssoReady = Boolean(sso?.enabled && sso.configured && sso.loginUrl);
+  const passwordLoginVisible = !ssoReady || !sso?.ssoOnly;
 
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<Form>({
     resolver: zodResolver(schema),
@@ -65,19 +68,19 @@ export default function LoginPage() {
         </div>
 
         <div className="relative max-w-[340px]">
-          <p className="font-mono text-[11px] uppercase mb-4" style={{ letterSpacing: "0.08em", color: "#7c8aa0" }}>
+          <p className="font-mono text-[11px] uppercase tracking-kicker mb-4" style={{ color: "#7c8aa0" }}>
             Private AI · Enterprise RAG
           </p>
           <h2 className="font-serif text-[36px] italic leading-tight" style={{ color: "#f4f1ea" }}>
             Answers grounded in<br /><em style={{ color: "#7aa2f7" }}>your</em> documents
           </h2>
           <p className="mt-4 text-[13px] leading-relaxed" style={{ color: "#7c8aa0" }}>
-            All retrieval happens on your infrastructure. Zero data leaves your network.
+            Local mode keeps retrieval inside your deployment boundary.
           </p>
         </div>
 
         <div className="relative flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: healthChecking || healthOk ? "#2f8f5e" : "#e07a3e" }} />
+          <span className="size-1.5 rounded-full shrink-0" style={{ background: healthChecking || healthOk ? "#2f8f5e" : "#e07a3e" }} />
           <span className="font-mono text-[10.5px]" style={{ color: "#4a4f57" }}>{healthLabel}</span>
         </div>
       </div>
@@ -94,10 +97,36 @@ export default function LoginPage() {
             Sign in with your workspace credentials.
           </p>
 
+          {ssoReady && (
+            <Button
+              variant="primary"
+              size="lg"
+              type="button"
+              className="w-full mb-3"
+              onClick={() => {
+                window.location.assign(ssoStartUrl());
+              }}
+            >
+              Sign in with SSO
+            </Button>
+          )}
+
+          {passwordLoginVisible && ssoReady && (
+            <div className="relative mb-3 flex items-center gap-3">
+              <span className="h-px flex-1 bg-line" />
+              <span className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3">
+                password
+              </span>
+              <span className="h-px flex-1 bg-line" />
+            </div>
+          )}
+
+          {passwordLoginVisible ? (
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-3">
             <div>
-              <label className="block text-[12px] font-medium text-text-2 mb-1.5">Email</label>
+              <label htmlFor="login-email" className="block text-[12px] font-medium text-text-2 mb-1.5">Email</label>
               <input
+                id="login-email"
                 type="email"
                 required
                 autoComplete="email"
@@ -114,8 +143,9 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-[12px] font-medium text-text-2 mb-1.5">Password</label>
+              <label htmlFor="login-password" className="block text-[12px] font-medium text-text-2 mb-1.5">Password</label>
               <input
+                id="login-password"
                 type="password"
                 required
                 autoComplete="current-password"
@@ -149,6 +179,11 @@ export default function LoginPage() {
               Sign in
             </Button>
           </form>
+          ) : (
+            <p className="rounded-lg bg-surface border border-line px-3.5 py-2.5 text-center text-[12.5px] text-text-2">
+              Password login is disabled for this workspace.
+            </p>
+          )}
         </div>
       </div>
     </div>

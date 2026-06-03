@@ -61,6 +61,7 @@ services:
       - ./data/raw:/app/data/raw
       - ./data/processed:/app/data/processed
       - ./data/index_config:/app/data/index_config
+      - ./data/audit-archive:/app/data/audit-archive
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
       interval: 15s

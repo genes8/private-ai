@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -81,3 +83,54 @@ class TestRunCleanup:
 
         assert result["audit_rows_deleted"] == 0
         assert result["cache_rows_deleted"] == 0
+
+    def test_cleanup_archives_expired_audit_logs_before_delete(
+        self,
+        mock_db: MagicMock,
+        tmp_path,
+    ) -> None:
+        from app.db.models import AuditLog
+        from scripts.audit_cleanup import run_cleanup
+
+        expired = MagicMock(spec=AuditLog)
+        expired.id = "audit-old-1"
+        expired.user_id = "user-1"
+        expired.session_id = "session-1"
+        expired.timestamp = datetime.now(UTC) - timedelta(days=120)
+        expired.action_type = "query"
+        expired.query_text = "what changed?"
+        expired.response_metadata = {"trace": "trace-1"}
+        expired.latency_ms = 42
+        expired.model_used = "qwen3:latest"
+        expired.trace_id = "trace-1"
+
+        mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = [
+            expired
+        ]
+        mock_db.execute.side_effect = [MagicMock(rowcount=1), MagicMock(rowcount=0)]
+
+        result = run_cleanup(
+            mock_db,
+            retention_days=90,
+            cache_retention_days=30,
+            archive_dir=tmp_path,
+            archive_secret="archive-secret",
+        )
+
+        archives = list(tmp_path.glob("audit-*.jsonl"))
+        manifests = list(tmp_path.glob("audit-*.manifest.json"))
+        assert len(archives) == 1
+        assert len(manifests) == 1
+        assert result["audit_rows_archived"] == 1
+
+        archived_row = json.loads(archives[0].read_text().splitlines()[0])
+        manifest = json.loads(manifests[0].read_text())
+        assert archived_row["id"] == "audit-old-1"
+        assert archived_row["action_type"] == "query"
+        assert manifest["row_count"] == 1
+        assert manifest["final_hash"]
+        assert manifest["hmac_sha256"]
+
+        added: AuditLog = mock_db.add.call_args[0][0]
+        assert added.response_metadata["archive_rows"] == 1
+        assert added.response_metadata["archive_manifest_path"].endswith(".manifest.json")

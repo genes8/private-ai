@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useReducer, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Search,
@@ -28,7 +28,8 @@ interface User {
 type UserStatus = "active" | "inactive";
 type FilterTab = "all" | UserStatus;
 
-const listUsers = () => apiFetch<User[]>("/admin/users");
+const USER_LIST_LIMIT = 1000;
+const listUsers = () => apiFetch<User[]>(`/admin/users?limit=${USER_LIST_LIMIT}`);
 const deactivateUser = (id: string) =>
   apiFetch<void>(`/admin/users/${id}`, { method: "DELETE" });
 const inviteUser = (body: { email: string; role: string; password?: string }) =>
@@ -105,7 +106,7 @@ function RolePill({ role }: { role: string }) {
 function StatusPill({ isActive }: { isActive: boolean }) {
   return (
     <span className="inline-flex items-center gap-1.5 h-[22px] px-2 rounded-full border border-line bg-surface text-[11.5px] text-text-2">
-      <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-success" : "bg-danger"}`} />
+      <span className={`size-1.5 rounded-full ${isActive ? "bg-success" : "bg-danger"}`} />
       {isActive ? "active" : "inactive"}
     </span>
   );
@@ -119,25 +120,31 @@ function InviteModal({
   onClose: () => void;
   onSubmit: (body: { email: string; role: string; password: string }) => Promise<{ id: string }>;
 }) {
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState<string>("pilot_user");
-  const [error, setError] = useState<string | null>(null);
-  const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [state, updateState] = useReducer(
+    (current: {
+      email: string;
+      role: string;
+      error: string | null;
+      generatedPassword: string | null;
+      submitting: boolean;
+    }, patch: Partial<typeof current>) => ({ ...current, ...patch }),
+    { email: "", role: "pilot_user", error: null, generatedPassword: null, submitting: false }
+  );
+  const { email, role, error, generatedPassword, submitting } = state;
+  const [copied, setCopied] = useState(false);
 
   async function handleSubmit() {
-    if (!email) { setError("Email is required"); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError("Enter a valid email address"); return; }
-    setError(null);
+    if (!email) { updateState({ error: "Email is required" }); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { updateState({ error: "Enter a valid email address" }); return; }
+    updateState({ error: null, submitting: true });
     try {
-      setSubmitting(true);
       const password = generateTemporaryPassword();
       await onSubmit({ email, role, password });
-      setGeneratedPassword(password);
+      updateState({ generatedPassword: password });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Invite failed");
+      updateState({ error: err instanceof Error ? err.message : "Invite failed" });
     } finally {
-      setSubmitting(false);
+      updateState({ submitting: false });
     }
   }
 
@@ -145,11 +152,9 @@ function InviteModal({
     return (
       <div
         className="fixed inset-0 z-50 bg-ink/40 backdrop-blur-sm flex items-center justify-center p-6"
-        onClick={onClose}
       >
         <div
           className="bg-surface rounded-lg shadow-pop border border-line w-[480px] max-w-full"
-          onClick={(e) => e.stopPropagation()}
         >
           <div className="px-5 py-4 border-b border-line">
             <h3 className="text-[15px] font-medium text-ink tracking-tight">Invite created</h3>
@@ -158,13 +163,30 @@ function InviteModal({
             </p>
           </div>
           <div className="p-5 space-y-3">
-            <div className="rounded border border-line bg-paper-2 p-3 font-mono text-[12.5px] break-all text-ink">
-              {generatedPassword}
+            <div className="flex items-center gap-2">
+              <input
+                readOnly
+                aria-label="Generated temporary password"
+                value={generatedPassword}
+                className="h-9 flex-1 rounded border border-line bg-paper-2 px-3 font-mono text-[12.5px] text-ink"
+                onFocus={(e) => e.currentTarget.select()}
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(generatedPassword);
+                  setCopied(true);
+                }}
+                className="h-9 px-3 rounded border border-line bg-surface text-[12.5px] font-medium text-text hover:bg-surface-2"
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
             </div>
             <div className="flex justify-end">
               <button
+                type="button"
                 onClick={onClose}
-                className="h-8 px-3 rounded bg-ink text-paper-2 text-[12.5px] font-medium hover:bg-black"
+                className="h-8 px-3 rounded bg-ink text-paper-2 text-[12.5px] font-medium hover:bg-ink-2"
               >
                 Close
               </button>
@@ -178,22 +200,21 @@ function InviteModal({
   return (
     <div
       className="fixed inset-0 z-50 bg-ink/40 backdrop-blur-sm flex items-center justify-center p-6"
-      onClick={onClose}
     >
       <div
         className="bg-surface rounded-lg shadow-pop border border-line w-[480px] max-w-full"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-line">
           <div className="flex items-center gap-2.5">
-            <UserPlus className="w-4 h-4 text-text-3" strokeWidth={1.5} />
+            <UserPlus className="size-4 text-text-3" strokeWidth={1.5} />
             <h3 className="text-[15px] font-medium text-ink tracking-tight">Invite teammate</h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="w-7 h-7 rounded hover:bg-surface-2 flex items-center justify-center"
+            className="size-7 rounded hover:bg-surface-2 flex items-center justify-center"
           >
-            <X className="w-3.5 h-3.5 text-text-3" />
+            <X className="size-3.5 text-text-3" />
           </button>
         </div>
 
@@ -204,14 +225,15 @@ function InviteModal({
             </div>
           )}
           <div>
-            <label className="block text-[12px] font-medium text-text-2 mb-1.5">Email</label>
+            <label htmlFor="invite-email" className="block text-[12px] font-medium text-text-2 mb-1.5">Email</label>
             <div className="relative">
-              <Mail className="absolute left-3 top-2.5 w-3.5 h-3.5 text-text-3" strokeWidth={1.5} />
+              <Mail className="absolute left-3 top-2.5 size-3.5 text-text-3" strokeWidth={1.5} />
               <input
-                type="email"
-                autoFocus
+	                id="invite-email"
+	                type="email"
+	                aria-label="Invite email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => updateState({ email: e.target.value })}
                 placeholder="name@company.com"
                 className="w-full h-9 pl-9 pr-3 rounded border border-line bg-surface text-[13.5px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/15"
               />
@@ -219,12 +241,14 @@ function InviteModal({
           </div>
 
           <div>
-            <label className="block text-[12px] font-medium text-text-2 mb-1.5">Role</label>
+            <div id="invite-role-label" className="block text-[12px] font-medium text-text-2 mb-1.5">Role</div>
             <div className="grid grid-cols-2 gap-2">
               {(["pilot_user", "admin"] as const).map((r) => (
                 <button
                   key={r}
-                  onClick={() => setRole(r)}
+                  type="button"
+                  aria-label={`Select ${r === "pilot_user" ? "viewer" : r} role`}
+                  onClick={() => updateState({ role: r })}
                   className={`h-9 rounded border text-[12.5px] font-medium capitalize transition-colors ${
                     role === r
                       ? "border-ink bg-paper-2 text-ink"
@@ -244,15 +268,17 @@ function InviteModal({
 
         <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-line bg-surface-2 rounded-b-lg">
           <button
+            type="button"
             onClick={onClose}
             className="h-8 px-3 rounded border border-line bg-surface text-[12.5px] font-medium text-text hover:bg-surface-2"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={!email || submitting}
-            className="h-8 px-3.5 rounded bg-ink text-paper-2 text-[12.5px] font-medium disabled:opacity-40 hover:bg-black"
+            className="h-8 px-3.5 rounded bg-ink text-paper-2 text-[12.5px] font-medium disabled:opacity-40 hover:bg-ink-2"
           >
             {submitting ? "Sending…" : "Send invite"}
           </button>
@@ -276,8 +302,8 @@ function DeactivateModal({
     <div className="fixed inset-0 z-50 bg-ink/40 backdrop-blur-sm flex items-center justify-center p-6">
       <div className="bg-surface rounded-lg shadow-pop border border-line w-[400px] max-w-full p-6">
         <div className="flex items-center gap-3 mb-3">
-          <div className="w-8 h-8 rounded-full bg-danger/10 flex items-center justify-center">
-            <UserX className="w-4 h-4 text-danger" />
+          <div className="size-8 rounded-full bg-danger/10 flex items-center justify-center">
+            <UserX className="size-4 text-danger" />
           </div>
           <h3 className="text-[15px] font-medium text-ink">Deactivate user?</h3>
         </div>
@@ -286,12 +312,14 @@ function DeactivateModal({
         </p>
         <div className="flex gap-2 justify-end">
           <button
+            type="button"
             onClick={onClose}
             className="h-8 px-3 rounded border border-line bg-surface text-[12.5px] font-medium text-text hover:bg-surface-2"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={onConfirm}
             className="h-8 px-3.5 rounded bg-danger text-white text-[12.5px] font-medium hover:bg-danger/90"
           >
@@ -334,14 +362,15 @@ export default function UsersPage() {
     },
   });
 
-  const filtered = users
-    .filter((u) => filter === "all" || (filter === "active" ? u.is_active : !u.is_active))
-    .filter(
-      (u) =>
-        !query ||
-        u.email.toLowerCase().includes(query.toLowerCase()) ||
-        nameFromEmail(u.email).toLowerCase().includes(query.toLowerCase())
-    );
+  const normalizedQuery = query.toLowerCase();
+  const filtered = users.filter((u) => {
+    const matchesFilter = filter === "all" || (filter === "active" ? u.is_active : !u.is_active);
+    const matchesQuery =
+      !normalizedQuery ||
+      u.email.toLowerCase().includes(normalizedQuery) ||
+      nameFromEmail(u.email).toLowerCase().includes(normalizedQuery);
+    return matchesFilter && matchesQuery;
+  });
 
   const counts = {
     all: users.length,
@@ -359,13 +388,15 @@ export default function UsersPage() {
             <h1 className="text-[19px] font-medium text-ink tracking-snug">Team</h1>
             <p className="text-[12.5px] text-text-2">
               {counts.active} active · {counts.inactive} inactive
+              {users.length >= USER_LIST_LIMIT ? " · showing first 1,000" : ""}
             </p>
           </div>
           <button
+            type="button"
             onClick={() => setShowInvite(true)}
-            className="inline-flex items-center gap-1.5 h-8 px-3 rounded bg-ink text-paper-2 text-[12.5px] font-medium hover:bg-black"
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded bg-ink text-paper-2 text-[12.5px] font-medium hover:bg-ink-2"
           >
-            <Plus className="w-3 h-3" strokeWidth={2} />
+            <Plus className="size-3" strokeWidth={2} />
             Invite teammate
           </button>
         </header>
@@ -374,9 +405,10 @@ export default function UsersPage() {
         <div className="px-7 py-3 border-b border-line flex items-center gap-3">
           <div className="flex items-center gap-1 bg-paper-2 rounded-md p-0.5">
             {(["all", "active", "inactive"] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFilter(f)}
                 className={`h-7 px-3 rounded text-[12px] font-medium capitalize transition-colors ${
                   filter === f ? "bg-surface shadow-sm text-ink" : "text-text-2 hover:text-ink"
                 }`}
@@ -387,8 +419,9 @@ export default function UsersPage() {
           </div>
 
           <div className="relative ml-auto">
-            <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-text-3" strokeWidth={1.5} />
+            <Search className="absolute left-2.5 top-2.5 size-3.5 text-text-3" strokeWidth={1.5} />
             <input
+              aria-label="Search users"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search name or email…"
@@ -444,12 +477,13 @@ export default function UsersPage() {
               <div className="flex justify-end">
                 {u.is_active && u.role !== "admin" && (
                   <button
+                    type="button"
                     onClick={() => setConfirmDeactivate(u)}
                     aria-label={`Deactivate ${u.email}`}
                     title="Deactivate"
-                    className="w-7 h-7 rounded hover:bg-paper-2 flex items-center justify-center"
+                    className="size-7 rounded hover:bg-paper-2 flex items-center justify-center"
                   >
-                    <MoreHorizontal className="w-3.5 h-3.5 text-text-3" strokeWidth={1.5} />
+                    <MoreHorizontal className="size-3.5 text-text-3" strokeWidth={1.5} />
                   </button>
                 )}
               </div>
@@ -465,7 +499,7 @@ export default function UsersPage() {
 
           {/* Audit footer */}
           <div className="px-7 py-4 flex items-center gap-2 text-[11px] font-mono text-text-3 border-t border-line">
-            <Shield className="w-3 h-3" strokeWidth={1.5} />
+            <Shield className="size-3" strokeWidth={1.5} />
             User changes are logged to the audit stream and retained for{" "}
             {appSettings?.security?.auditRetentionDays ?? 90} days.
           </div>

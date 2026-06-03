@@ -222,6 +222,84 @@ def test_chat_stream_merges_langgraph_partial_updates(authed_client: TestClient)
     assert f'"sessionId": "{session_id}"' in body
 
 
+def test_chat_stream_done_event_reports_chat_model_name(authed_client: TestClient) -> None:
+    class _SingleChunkGraph:
+        async def astream(self, _state: PrivateAIState) -> Any:
+            yield {
+                "respond": {
+                    "status": "completed",
+                    "draft_answer": "Done",
+                    "current_step": "respond",
+                }
+            }
+
+    session_id = "sess-model"
+    with patch("app.services.conversation.ConversationManager.new_session", return_value=session_id), patch(
+        "app.services.conversation.ConversationManager.load_session",
+        return_value=PrivateAIState(session_id=session_id, user_id="u1"),
+    ), patch("app.api.chat_routes.finalize_chat_run"), patch(
+        "app.api.chat_routes.load_runtime_config",
+        return_value=MagicMock(
+            sse_done_mode="strict",
+            provider_type="ollama",
+            chat_model="qwen3.5:9b",
+        ),
+    ):
+        authed_client.app.state.graph = _SingleChunkGraph()  # type: ignore[union-attr]
+        with authed_client.stream(
+            "POST",
+            "/chat/stream",
+            json={"question": "Which model?"},
+        ) as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert '"model": "qwen3.5:9b"' in body
+
+
+def test_chat_stream_async_finalization_uses_thread(authed_client: TestClient) -> None:
+    class _SingleChunkGraph:
+        async def astream(self, _state: PrivateAIState) -> Any:
+            yield {
+                "respond": {
+                    "status": "completed",
+                    "draft_answer": "Done",
+                    "current_step": "respond",
+                }
+            }
+
+    session_id = "sess-async-finalize"
+
+    def _close_task(coro: Any) -> MagicMock:
+        coro.close()
+        return MagicMock()
+
+    with patch("app.services.conversation.ConversationManager.new_session", return_value=session_id), patch(
+        "app.services.conversation.ConversationManager.load_session",
+        return_value=PrivateAIState(session_id=session_id, user_id="u1"),
+    ), patch("app.api.chat_routes.finalize_chat_run"), patch(
+        "app.api.chat_routes.load_runtime_config",
+        return_value=MagicMock(
+            sse_done_mode="async",
+            provider_type="ollama",
+            chat_model="qwen3.5:9b",
+        ),
+    ), patch("app.api.chat_routes.asyncio.create_task", side_effect=_close_task), patch(
+        "app.api.chat_routes.asyncio.to_thread",
+        return_value=MagicMock(),
+    ) as mock_to_thread:
+        authed_client.app.state.graph = _SingleChunkGraph()  # type: ignore[union-attr]
+        with authed_client.stream(
+            "POST",
+            "/chat/stream",
+            json={"question": "Finalize async"},
+        ) as response:
+            _body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    mock_to_thread.assert_called_once()
+
+
 def test_chat_rejects_when_projected_request_cost_exceeds_daily_ceiling(
     authed_client: TestClient,
 ) -> None:

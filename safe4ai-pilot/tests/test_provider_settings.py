@@ -16,7 +16,7 @@ from app.services.settings_exceptions import SettingsValidationError
 
 _GEN = "qwen3.5:9b"
 _EMB = "nomic-embed-text"
-_VIS = "qwen2.5vl:7b"
+_VIS = "test-vision-model:latest"
 _DEFAULTS = dict(
     default_generation_model=_GEN,
     default_embedding_model=_EMB,
@@ -139,7 +139,7 @@ def test_sanitize_hybrid_no_updates_when_vision_available() -> None:
 def test_sanitize_hybrid_raises_422_when_vision_default_unavailable() -> None:
     """Hybrid: raises 422 when stale vision model's default is also not in Ollama."""
     cfg = {"embedding_model": _EMB, "vision_model": "qwen-vl-plus"}
-    available = {_EMB}  # vision default qwen2.5vl:7b NOT present
+    available = {_EMB}  # vision default NOT present
     with pytest.raises(SettingsValidationError) as exc_info:
         sanitize_ollama_role_models("hybrid", cfg, available, **_DEFAULTS)
     assert _VIS in exc_info.value.detail

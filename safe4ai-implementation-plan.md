@@ -1,5 +1,7 @@
 # Safe4AI Private AI Pilot — Implementation Plan
 
+> Superseded on 2026-06-03. Use `safe4ai-pilot/docs/superpowers/plans/2026-06-03-unified-readiness-pilot-roadmap.md` as the canonical plan. This file remains as historical implementation input only.
+
 ## Why Two Vector Stores (pgvector + Qdrant)?
 
 Both exist for distinct purposes — they are not redundant:

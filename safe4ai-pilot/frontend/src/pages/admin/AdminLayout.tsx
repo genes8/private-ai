@@ -46,12 +46,12 @@ export default function AdminLayout({ children }: Props) {
     <div className="flex h-screen bg-paper">
       {/* Sidebar */}
       <nav className="w-52 shrink-0 flex flex-col border-r border-line bg-surface-2">
-        <div className="px-4 py-4 border-b border-line">
+        <div className="p-4 border-b border-line">
           <div className="flex items-center gap-2.5">
             <Logo size={20} />
             <span className="font-medium text-[13px] text-ink tracking-tight">private·ai</span>
           </div>
-          <p className="font-mono text-[10.5px] uppercase text-text-mute mt-1" style={{ paddingLeft: 30, letterSpacing: "0.06em" }}>
+          <p className="font-mono text-[10.5px] uppercase tracking-kicker text-text-mute mt-1" style={{ paddingLeft: 30 }}>
             admin
           </p>
         </div>

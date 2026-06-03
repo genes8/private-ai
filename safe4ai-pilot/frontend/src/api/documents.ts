@@ -30,7 +30,7 @@ interface RawDoc {
 }
 
 function formatBytes(bytes: number | null): string {
-  if (bytes === null || bytes === undefined || bytes <= 0) return "—";
+  if (bytes === null || bytes === undefined || bytes < 0) return "—";
   const units = ["B", "KB", "MB", "GB"];
   let idx = 0;
   let size = bytes;

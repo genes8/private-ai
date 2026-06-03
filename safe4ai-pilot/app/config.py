@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:3000"
     enforce_https: bool = False
     audit_log_retention_days: int = 90
+    audit_archive_dir: str = "data/audit-archive"
     cache_retention_days: int = 30
     semantic_cache_threshold: float = 0.92
     cost_per_1k_tokens: float = 0.0

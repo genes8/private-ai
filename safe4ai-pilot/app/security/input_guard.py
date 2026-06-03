@@ -39,6 +39,11 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 class InputGuard:
     MAX_CHARS = 2048  # ~512 tokens at 4 chars/token
 
+    def __init__(self, blocked_terms: list[str] | None = None) -> None:
+        self._blocked_terms = [
+            term.strip().lower() for term in (blocked_terms or []) if term.strip()
+        ]
+
     def check(self, query: str) -> GuardResult:
         # 1. Decode HTML entities, normalize Unicode homoglyphs (NFKC), strip HTML tags
         decoded = html.unescape(query)
@@ -52,7 +57,13 @@ class InputGuard:
         if len(cleaned) > self.MAX_CHARS:
             return GuardResult(allowed=False, reason="Query too long")
 
-        # 3. Injection pattern check
+        # 3. Configured policy term check
+        cleaned_lower = cleaned.lower()
+        matched = next((term for term in self._blocked_terms if term in cleaned_lower), None)
+        if matched:
+            return GuardResult(allowed=False, reason=f"Blocked term detected: {matched}")
+
+        # 4. Injection pattern check
         for pattern in _INJECTION_PATTERNS:
             if pattern.search(cleaned):
                 return GuardResult(allowed=False, reason="Potential prompt injection detected")

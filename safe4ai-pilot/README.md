@@ -25,7 +25,6 @@ The first run can take a while because `ollama-init` pulls these models:
 
 - `qwen3.5:9b`
 - `nomic-embed-text`
-- `qwen2.5vl:7b`
 
 ### 3. Open the app
 
@@ -126,6 +125,10 @@ pytest tests/
 ```
 
 More deployment and smoke-test details are in [`docs/deployment.md`](docs/deployment.md).
+
+## Pilot operations
+
+The repeatable templates for selling, running, and closing a Safe4AI readiness pilot — discovery, workflow selection, data intake, security review, runbook, final report, scorecard, and rollout scope — live in [`docs/pilot/`](docs/pilot/README.md).
 
 ## Production TODO
 

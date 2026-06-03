@@ -85,7 +85,12 @@ def _smart_ollama_handler(
     return handler
 
 
-def _build_graph(handler: Any, *, chunks: list[RankedChunk] | None = None) -> Any:
+def _build_graph(
+    handler: Any,
+    *,
+    chunks: list[RankedChunk] | None = None,
+    blocked_terms: list[str] | None = None,
+) -> Any:
     from app.agents.graph import build_graph
     from app.components.hybrid_retriever import HybridRetriever
     from app.components.reranker import Reranker
@@ -107,6 +112,7 @@ def _build_graph(handler: Any, *, chunks: list[RankedChunk] | None = None) -> An
         ollama_url="http://mock",
         ollama_model="test",
         http_client=client,
+        blocked_terms=blocked_terms,
     )
     return graph, client
 
@@ -135,6 +141,38 @@ async def test_scenario_single_turn_grounded_answer() -> None:
     assert final.draft_answer == "Employees get 20 days annual leave."
     assert len(final.citations) > 0
     assert final.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_retrieval_blocks_configured_terms_before_generation() -> None:
+    graph, client = _build_graph(
+        _smart_ollama_handler(
+            grade_relevant=True,
+            grade_decision="generate",
+            quality_gate_decision="respond",
+            answer="The public leave policy allows 20 days.",
+        ),
+        chunks=[
+            _make_ranked_chunk(
+                chunk_id="blocked",
+                content="CONFIDENTIAL patient identifier policy.",
+            ),
+            _make_ranked_chunk(
+                chunk_id="clean",
+                content="The public leave policy allows 20 days.",
+            ),
+        ],
+        blocked_terms=["patient identifier"],
+    )
+    async with client:
+        state = _make_state()
+        result = await graph.ainvoke(state)
+
+    final = result if isinstance(result, PrivateAIState) else PrivateAIState(**result)
+    assert final.grounded is True
+    assert final.citations
+    assert all("patient identifier" not in c.excerpt.lower() for c in final.citations)
+    assert all(c.chunk_id != "blocked" for c in final.retrieved_chunks)
 
 
 # ---------------------------------------------------------------------------

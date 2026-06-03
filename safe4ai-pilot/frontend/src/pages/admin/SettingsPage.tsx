@@ -1,14 +1,14 @@
-import { useRef, useState, useEffect } from "react";
-import { Brain, Search as SearchIcon, Folder, Lock, Activity, AlertCircle, Plug } from "lucide-react";
-import { type AppSettings } from "../../api/settings";
+import { useRef, useState, useEffect, useLayoutEffect } from "react";
+import { Brain, Search as SearchIcon, Folder, Lock, Activity, AlertCircle, Plug, BadgeCheck } from "lucide-react";
+import { type AppSettings, type TierName } from "../../api/settings";
 import AdminLayout from "./AdminLayout";
 import ProviderSettingsSection from "../../components/admin/ProviderSettingsSection";
-import { Section, Row, Toggle, Select, NumberInput } from "../../components/admin/SettingsAtoms";
+import { Section, Row, Toggle, Select, NumberInput, TextInput, PasswordInput } from "../../components/admin/SettingsAtoms";
 import { useSettings } from "../../hooks/useSettings";
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 
-type SectionId = "provider" | "models" | "retrieval" | "sources" | "security" | "cost";
+type SectionId = "provider" | "tier" | "models" | "retrieval" | "sources" | "security" | "cost";
 
 const NAV: Array<{
   id: SectionId;
@@ -16,6 +16,7 @@ const NAV: Array<{
   icon: React.ComponentType<{ className?: string; strokeWidth?: string | number }>;
 }> = [
   { id: "provider",  label: "Provider",         icon: Plug },
+  { id: "tier",      label: "Tier",             icon: BadgeCheck },
   { id: "models",    label: "Models",           icon: Brain },
   { id: "retrieval", label: "Retrieval",        icon: SearchIcon },
   { id: "sources",   label: "Document sources", icon: Folder },
@@ -28,7 +29,7 @@ const NAV: Array<{
 function SourceCard({ s }: { s: AppSettings["sources"][number] }) {
   return (
     <div className="px-5 py-4 flex items-center gap-4">
-      <div className="w-8 h-8 rounded-md bg-paper-2 flex items-center justify-center text-[10px] font-mono font-semibold text-text-2 uppercase">
+      <div className="size-8 rounded-md bg-paper-2 flex items-center justify-center text-[10px] font-mono font-semibold text-text-2 uppercase">
         fs
       </div>
       <div className="flex-1 min-w-0">
@@ -38,6 +39,100 @@ function SourceCard({ s }: { s: AppSettings["sources"][number] }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function SettingsLoadingState() {
+  return (
+    <AdminLayout>
+      <div className="h-full flex items-center justify-center bg-paper">
+        <span className="text-[13px] text-text-mute font-mono">Loading settings…</span>
+      </div>
+    </AdminLayout>
+  );
+}
+
+function SettingsErrorState({ message }: { message?: string }) {
+  return (
+    <AdminLayout>
+      <div className="h-full flex items-center justify-center bg-paper">
+        <div className="text-center">
+          <AlertCircle className="size-6 text-danger mx-auto mb-2" strokeWidth={1.5} />
+          <p className="text-[13px] text-danger font-mono mb-1">Failed to load settings</p>
+          <p className="text-[12px] text-text-3 font-mono max-w-sm">
+            {message ?? "The server returned an error. Please try again later."}
+          </p>
+        </div>
+      </div>
+    </AdminLayout>
+  );
+}
+
+function compactLimit(value: number, unit: string) {
+  return value > 0 ? `${value.toLocaleString()} ${unit}` : `Unlimited ${unit}`;
+}
+
+function TermsInput({
+  value,
+  onCommit,
+  placeholder = "mrn\npatient identifier",
+}: {
+  value: string[];
+  onCommit: (terms: string[]) => void;
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState(value.join("\n"));
+
+  useLayoutEffect(() => {
+    setDraft(value.join("\n"));
+  }, [value]);
+
+  const commit = () => {
+    const next = Array.from(
+      new Set(
+        draft
+          .split(/[\n,]/)
+          .map((term) => term.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+    if (next.join("\n") !== value.join("\n")) onCommit(next);
+  };
+
+  return (
+    <textarea
+      aria-label="Blocked terms"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      rows={4}
+      className="w-80 max-w-full resize-y rounded border border-line bg-surface px-2.5 py-2 text-[12.5px] font-mono text-text outline-none focus:border-accent"
+      placeholder={placeholder}
+    />
+  );
+}
+
+function DateTimeInput({
+  value,
+  onCommit,
+}: {
+  value: string | null;
+  onCommit: (value: string | null) => void;
+}) {
+  const localValue = value ? value.slice(0, 16) : "";
+
+  return (
+    <input
+      type="datetime-local"
+      aria-label="Tier expiry"
+      key={localValue}
+      defaultValue={localValue}
+      onBlur={(e) => {
+        const raw = e.currentTarget.value;
+        onCommit(raw ? new Date(raw).toISOString() : null);
+      }}
+      className="h-8 w-52 px-2.5 rounded border border-line bg-surface text-[12.5px] font-mono outline-none focus:border-accent"
+    />
   );
 }
 
@@ -87,29 +182,11 @@ export default function SettingsPage() {
   }, []);
 
   if (isLoading) {
-    return (
-      <AdminLayout>
-        <div className="h-full flex items-center justify-center bg-paper">
-          <span className="text-[13px] text-text-mute font-mono">Loading settings…</span>
-        </div>
-      </AdminLayout>
-    );
+    return <SettingsLoadingState />;
   }
 
   if (isError || !s) {
-    return (
-      <AdminLayout>
-        <div className="h-full flex items-center justify-center bg-paper">
-          <div className="text-center">
-            <AlertCircle className="w-6 h-6 text-danger mx-auto mb-2" strokeWidth={1.5} />
-            <p className="text-[13px] text-danger font-mono mb-1">Failed to load settings</p>
-            <p className="text-[12px] text-text-3 font-mono max-w-sm">
-              {error?.message ?? "The server returned an error. Please try again later."}
-            </p>
-          </div>
-        </div>
-      </AdminLayout>
-    );
+    return <SettingsErrorState message={error?.message} />;
   }
 
   const allOllamaModels = s.availableModels?.ollama ?? [];
@@ -121,6 +198,7 @@ export default function SettingsPage() {
   const chatModelOptions = Array.from(
     new Set([...baseModels, s.generationModel, s.generationFallback].filter(Boolean)),
   );
+  const tierOptions: TierName[] = ["evaluation", "team", "enterprise"];
 
   return (
     <AdminLayout>
@@ -135,11 +213,10 @@ export default function SettingsPage() {
               const Ic = item.icon;
               const on = item.id === active;
               return (
-                <a
+                <button
                   key={item.id}
-                  href={`#${item.id}`}
-                  onClick={(e) => {
-                    e.preventDefault();
+                  type="button"
+                  onClick={() => {
                     setActive(item.id);
                     scrollingRef.current = true;
                     document
@@ -150,9 +227,9 @@ export default function SettingsPage() {
                   className={`flex items-center gap-2.5 h-7 px-2 rounded text-[12.5px] font-medium transition-colors
                     ${on ? "bg-surface shadow-sm text-ink ring-1 ring-line" : "text-text-2 hover:bg-surface-2"}`}
                 >
-                  <Ic className={`w-3.5 h-3.5 ${on ? "text-ink" : "text-text-3"}`} strokeWidth={1.5} />
+                  <Ic className={`size-3.5 ${on ? "text-ink" : "text-text-3"}`} strokeWidth={1.5} />
                   {item.label}
-                </a>
+                </button>
               );
             })}
           </nav>
@@ -163,7 +240,7 @@ export default function SettingsPage() {
 
         {/* Content */}
         <div className="overflow-auto" ref={contentRef}>
-          <div className="max-w-3xl mx-auto px-8 py-8">
+          <div className="max-w-3xl mx-auto p-8">
             <header className="mb-8">
               <div className="text-[10.5px] font-mono uppercase tracking-[.06em] text-text-3 mb-1.5">
                 configuration
@@ -184,15 +261,65 @@ export default function SettingsPage() {
               onSaveError={(msg) => console.error("settings_save_error", msg)}
             />
 
+            {/* TIER */}
+            <Section id="tier" title="Tier" subtitle="License limits enforced before user creation and chat execution.">
+              <Row label="Current tier" hint="Controls default seat and monthly query policy." saving={isSavingField("tier")}>
+                <Select<TierName>
+                  value={s.tier.name}
+                  options={tierOptions}
+                  onChange={(v) => set("tier", { ...s.tier, name: v })}
+                  className="w-40"
+                />
+              </Row>
+              <Row label="Seats" hint={compactLimit(s.tier.maxSeats, "seats")} saving={isSavingField("maxSeats")}>
+                <NumberInput
+                  value={s.tier.maxSeats}
+                  min={0}
+                  max={10000}
+                  onChange={(v) => set("tier", { ...s.tier, maxSeats: v })}
+                />
+              </Row>
+              <Row
+                label="Monthly queries"
+                hint={compactLimit(s.tier.monthlyQueryLimit, "queries")}
+                saving={isSavingField("monthlyQueryLimit")}
+              >
+                <NumberInput
+                  value={s.tier.monthlyQueryLimit}
+                  min={0}
+                  max={10000000}
+                  step={100}
+                  onChange={(v) => set("tier", { ...s.tier, monthlyQueryLimit: v })}
+                />
+              </Row>
+              <Row label="Tier expiry" hint="Leave empty for no expiry." saving={isSavingField("tierExpiresAt")}>
+                <DateTimeInput
+                  value={s.tier.tierExpiresAt}
+                  onCommit={(v) => set("tier", { ...s.tier, tierExpiresAt: v })}
+                />
+              </Row>
+              <Row label="Current usage" hint="Read from active users and this month's audit entries.">
+                <div className="flex flex-wrap items-center justify-end gap-2 text-[12px] font-mono text-text-2">
+                  <span className="rounded border border-line px-2 py-1">
+                    {s.tier.seatsUsed.toLocaleString()} seats
+                  </span>
+                  <span className="rounded border border-line px-2 py-1">
+                    {s.tier.monthlyQueriesUsed.toLocaleString()} queries
+                  </span>
+                </div>
+              </Row>
+            </Section>
+
             {/* Reindex warning */}
             {reindexRequired && (
               <div className="flex items-center gap-3 mb-6 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-[12.5px] text-amber-900">
-                <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" strokeWidth={1.5} />
+                <AlertCircle className="size-4 shrink-0 text-amber-600" strokeWidth={1.5} />
                 <span className="flex-1">
-                  Embedding configuration changed — reindex all documents to apply the new
+                  Embedding configuration changed, reindex all documents to apply the new
                   embedding model.
                 </span>
                 <button
+                  type="button"
                   className="shrink-0 text-[12px] underline hover:no-underline"
                   onClick={dismissReindexWarning}
                 >
@@ -269,24 +396,120 @@ export default function SettingsPage() {
             <Section
               id="sources"
               title="Document sources"
-              subtitle="Read-only — the local filesystem watch path is configured at deployment time."
+              subtitle="Read-only; the local filesystem watch path is configured at deployment time."
             >
               {s.sources.map((src) => <SourceCard key={src.id} s={src} />)}
             </Section>
 
             {/* SECURITY */}
             <Section id="security" title="Security" subtitle="Auth, session lifetime and audit log retention.">
-              <Row label="SSO only" hint="Disables password login; all sign-ins go through your IdP." saving={isSavingField("ssoOnly")}>
+              <Row label="SSO only" hint="Disables password login after OIDC is configured." saving={isSavingField("ssoOnly")}>
                 <Toggle value={s.security.ssoOnly}
                   onChange={(v) => set("security", { ...s.security, ssoOnly: v })} />
+              </Row>
+              <Row
+                label="OIDC provider"
+                hint={s.security.oidc.configured ? "Ready for browser SSO login." : "Issuer, client ID, secret and redirect URI are required."}
+                saving={isSavingField("oidcEnabled")}
+              >
+                <div className="flex items-center gap-3">
+                  <Toggle
+                    value={s.security.oidc.enabled}
+                    onChange={(v) =>
+                      set("security", {
+                        ...s.security,
+                        oidc: { ...s.security.oidc, enabled: v },
+                      })
+                    }
+                  />
+                  <span className="rounded border border-line px-2 py-1 text-[11px] font-mono text-text-2">
+                    {s.security.oidc.configured ? "configured" : "incomplete"}
+                  </span>
+                </div>
+              </Row>
+              <Row label="Issuer URL" hint="OIDC discovery URL root." saving={isSavingField("oidcIssuerUrl")}>
+                <TextInput
+                  value={s.security.oidc.issuerUrl}
+                  onCommit={(v) =>
+                    set("security", {
+                      ...s.security,
+                      oidc: { ...s.security.oidc, issuerUrl: v },
+                    })
+                  }
+                />
+              </Row>
+              <Row label="Client ID" hint="Registered OIDC application client ID." saving={isSavingField("oidcClientId")}>
+                <TextInput
+                  value={s.security.oidc.clientId}
+                  onCommit={(v) =>
+                    set("security", {
+                      ...s.security,
+                      oidc: { ...s.security.oidc, clientId: v },
+                    })
+                  }
+                />
+              </Row>
+              <Row label="Client secret" hint={s.security.oidc.clientSecretConfigured ? "Secret is configured; enter a new value to rotate." : "Required before SSO can be used."} saving={isSavingField("oidcClientSecret")}>
+                <PasswordInput
+                  placeholder={s.security.oidc.clientSecretConfigured ? "configured" : "not configured"}
+                  onCommit={(v) => queueSave({ oidcClientSecret: v })}
+                />
+              </Row>
+              <Row label="Redirect URI" hint="Must match the IdP app registration callback." saving={isSavingField("oidcRedirectUri")}>
+                <TextInput
+                  value={s.security.oidc.redirectUri}
+                  onCommit={(v) =>
+                    set("security", {
+                      ...s.security,
+                      oidc: { ...s.security.oidc, redirectUri: v },
+                    })
+                  }
+                />
+              </Row>
+              <Row
+                label="Allowed domains"
+                hint="Empty allows any verified OIDC email domain."
+                saving={isSavingField("oidcAllowedDomains")}
+              >
+                <TermsInput
+                  value={s.security.oidc.allowedDomains}
+                  placeholder={"example.com\nsubsidiary.example"}
+                  onCommit={(domains) =>
+                    set("security", {
+                      ...s.security,
+                      oidc: { ...s.security.oidc, allowedDomains: domains },
+                    })
+                  }
+                />
+              </Row>
+              <Row label="Auto-provision users" hint="Creates pilot users after verified OIDC login when no local user exists." saving={isSavingField("oidcAutoProvision")}>
+                <Toggle
+                  value={s.security.oidc.autoProvision}
+                  onChange={(v) =>
+                    set("security", {
+                      ...s.security,
+                      oidc: { ...s.security.oidc, autoProvision: v },
+                    })
+                  }
+                />
               </Row>
               <Row label="Session lifetime" hint="How long a JWT cookie is valid before re-auth." saving={isSavingField("sessionHours")}>
                 <NumberInput value={s.security.sessionHours} unit="hours" min={1} max={720}
                   onChange={(v) => set("security", { ...s.security, sessionHours: v })} />
               </Row>
-              <Row label="Audit retention" hint="After this, events are archived to immutable storage." saving={isSavingField("auditRetentionDays")}>
+              <Row label="Audit retention" hint="Cleanup removes expired rows after archive export is configured." saving={isSavingField("auditRetentionDays")}>
                 <NumberInput value={s.security.auditRetentionDays} unit="days" min={30} max={3650}
                   onChange={(v) => set("security", { ...s.security, auditRetentionDays: v })} />
+              </Row>
+              <Row
+                label="Blocked terms"
+                hint="Queries and retrieved chunks containing these terms are blocked from generation."
+                saving={isSavingField("blockedTerms")}
+              >
+                <TermsInput
+                  value={s.security.blockedTerms ?? []}
+                  onCommit={(terms) => set("security", { ...s.security, blockedTerms: terms })}
+                />
               </Row>
               <Row label="Redact PII in audit log" hint="Emails, phone numbers and names are hashed before the audit stream." saving={isSavingField("redactPII")}>
                 <Toggle value={s.security.redactPII}
@@ -304,7 +527,7 @@ export default function SettingsPage() {
                   <span className="font-mono text-[15px] tabular-nums text-ink font-medium">
                     ${s.cost.todayUsd.toFixed(2)}
                   </span>
-                  <div className="w-32 h-1.5 rounded-full bg-paper-2 overflow-hidden">
+	                <div className="h-1.5 w-32 rounded-full bg-paper-2 overflow-hidden">
                     <div
                       className="h-full bg-ink"
                       style={{
@@ -326,9 +549,9 @@ export default function SettingsPage() {
 
             {saveErrorText && (
               <div className="flex items-center gap-2 p-3 rounded bg-danger-soft text-danger text-[12.5px]">
-                <AlertCircle className="w-4 h-4 shrink-0" strokeWidth={1.5} />
+                <AlertCircle className="size-4 shrink-0" strokeWidth={1.5} />
                 <span className="flex-1">{saveErrorText}</span>
-                <button className="text-[12px] underline hover:no-underline shrink-0" onClick={retryUnsaved}>
+                <button type="button" className="text-[12px] underline hover:no-underline shrink-0" onClick={retryUnsaved}>
                   Retry
                 </button>
               </div>

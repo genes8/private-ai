@@ -37,7 +37,11 @@ def list_audit_logs(
         raise HTTPException(status_code=422, detail="limit must be positive")
     if offset < 0:
         raise HTTPException(status_code=422, detail="offset cannot be negative")
-    q = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
+    q = (
+        db.query(AuditLog, User.email)
+        .outerjoin(User, AuditLog.user_id == User.id)
+        .order_by(AuditLog.timestamp.desc())
+    )
     if start:
         q = q.filter(AuditLog.timestamp >= start)
     if end:
@@ -45,20 +49,28 @@ def list_audit_logs(
     if user_id:
         q = q.filter(AuditLog.user_id == user_id)
     rows = q.offset(offset).limit(min(limit, 1000)).all()
-    return [
-        {
-            "id": r.id,
-            "user_id": r.user_id,
-            "session_id": r.session_id,
-            "timestamp": r.timestamp,
-            "action_type": r.action_type,
-            "query_text": r.query_text,
-            "latency_ms": r.latency_ms,
-            "model_used": r.model_used,
-            "trace_id": r.trace_id,
-        }
-        for r in rows
-    ]
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, tuple):
+            r, user_email = row
+        else:
+            r = row
+            user_email = None
+        result.append(
+            {
+                "id": r.id,
+                "user_id": r.user_id,
+                "user_email": user_email,
+                "session_id": r.session_id,
+                "timestamp": r.timestamp,
+                "action_type": r.action_type,
+                "query_text": r.query_text,
+                "latency_ms": r.latency_ms,
+                "model_used": r.model_used,
+                "trace_id": r.trace_id,
+            }
+        )
+    return result
 
 
 @router.get("/admin/audit-logs/export.csv")

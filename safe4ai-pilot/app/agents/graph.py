@@ -17,6 +17,7 @@ from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
 from app.models import NO_ANSWER, Citation, GradedChunk, PrivateAIState
 from app.prompts.registry import get_prompt
+from app.security.content_filter import ContentFilter
 from app.security.input_guard import InputGuard
 from app.security.output_filter import OutputFilter
 
@@ -50,9 +51,11 @@ def build_graph(
     retrieval_top_k: int = 6,
     rerank_threshold: float = 0.45,
     http_client: httpx.AsyncClient | None = None,
+    blocked_terms: list[str] | None = None,
 ) -> Any:
     """Build and compile the LangGraph StateGraph for the RAG pipeline."""
-    guard = InputGuard()
+    guard = InputGuard(blocked_terms=blocked_terms)
+    content_filter = ContentFilter(blocked_terms=blocked_terms)
     output_filter = OutputFilter()
 
     # Resolve fallback Ollama coordinates for nodes that don't yet use chat_client
@@ -105,10 +108,13 @@ def build_graph(
             try:
                 raw_chunks = await retriever.retrieve(query, top_k=effective_top_k)
                 ranked: list[RankedChunk] = await reranker.arerank(query, raw_chunks, top_n=effective_top_k)
-                max_score = max((c.rerank_score for c in ranked), default=0.0)
-                span.set_attribute("chunk_count", len(ranked))
+                filtered = content_filter.filter_chunks(ranked)
+                filtered = content_filter.filter_blocked_sections(filtered)
+                max_score = max((c.rerank_score for c in filtered), default=0.0)
+                span.set_attribute("chunk_count", len(filtered))
+                span.set_attribute("filtered_chunk_count", len(ranked) - len(filtered))
                 return {
-                    "retrieved_chunks": ranked,
+                    "retrieved_chunks": filtered,
                     "retrieval_score_max": max_score,
                     "retrieval_attempts": state.retrieval_attempts + 1,
                     "current_step": "grade",
@@ -157,6 +163,8 @@ def build_graph(
                 try:
                     raw = await retriever.retrieve(sub_q, top_k=retrieval_top_k)
                     ranked: list[RankedChunk] = await reranker.arerank(sub_q, raw, top_n=min(3, retrieval_top_k))
+                    ranked = content_filter.filter_chunks(ranked)
+                    ranked = content_filter.filter_blocked_sections(ranked)
                     graded = await grade_chunks(
                         sub_q,
                         ranked,

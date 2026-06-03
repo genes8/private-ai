@@ -77,6 +77,15 @@ def test_input_guard_blocks_injection_act_as() -> None:
     assert result.allowed is False
 
 
+def test_input_guard_blocks_configured_terms() -> None:
+    from app.security.input_guard import InputGuard
+
+    guard = InputGuard(blocked_terms=["patient identifier", "mrn"])
+    result = guard.check("Please summarize policy exceptions for this MRN.")
+    assert result.allowed is False
+    assert "blocked term" in result.reason.lower()
+
+
 def test_input_guard_strips_html() -> None:
     from app.security.input_guard import InputGuard
 
