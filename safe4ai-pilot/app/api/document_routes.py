@@ -293,12 +293,9 @@ def delete_document(
     doc = db.get(Document, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    tasks_by_doc = getattr(request.app.state, "ingestion_tasks_by_doc", {})
-    ingestion_task = tasks_by_doc.get(doc_id)
-    if ingestion_task is not None and not ingestion_task.done():
-        ingestion_task.cancel()
-        tasks_by_doc.pop(doc_id, None)
     try:
+        # Check for an active ingestion job BEFORE cancelling anything, so a
+        # rejected delete (409) never leaves the ingestion half-cancelled.
         active_job = _lock_query(
             db.query(IngestionJob).filter(
                 IngestionJob.document_id == doc_id,
@@ -312,6 +309,12 @@ def delete_document(
                 status_code=409,
                 detail="Document is currently being ingested. Wait for completion before deleting.",
             )
+        # No active job — safe to cancel any lingering task and proceed with delete.
+        tasks_by_doc = getattr(request.app.state, "ingestion_tasks_by_doc", {})
+        ingestion_task = tasks_by_doc.get(doc_id)
+        if ingestion_task is not None and not ingestion_task.done():
+            ingestion_task.cancel()
+            tasks_by_doc.pop(doc_id, None)
         invalidate_cache_for_document(db, doc_id, commit=False)
         db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
         db.query(IngestionJob).filter(IngestionJob.document_id == doc_id).delete()

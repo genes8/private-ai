@@ -240,6 +240,7 @@ async def chat_stream(
         final: PrivateAIState | None = None
         stream_state = run_state
         active_step: str | None = None
+        trace_id = run_state.trace_id
 
         try:
             # Stream node-by-node via LangGraph astream

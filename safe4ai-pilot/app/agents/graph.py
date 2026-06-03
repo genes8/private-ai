@@ -15,7 +15,7 @@ from app.agents.llm_caller import call_llm
 from app.agents.query_decomposer import decompose_query
 from app.components.hybrid_retriever import HybridRetriever
 from app.components.reranker import Reranker
-from app.models import NO_ANSWER, Citation, GradedChunk, PrivateAIState
+from app.models import NO_ANSWER, Citation, GradedChunk, PrivateAIState, RankedChunk
 from app.prompts.registry import get_prompt
 from app.security.content_filter import ContentFilter
 from app.security.input_guard import InputGuard

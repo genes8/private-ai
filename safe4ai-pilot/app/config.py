@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     model_config = {
         "env_file": str(Path(__file__).resolve().parents[1] / ".env"),
         "env_file_encoding": "utf-8",
+        # The .env is shared with Docker Compose, which reads deploy-only keys
+        # (e.g. POSTGRES_HOST_PORT) that are not application settings. Ignore them
+        # instead of failing app import/startup.
+        "extra": "ignore",
     }
 
 
