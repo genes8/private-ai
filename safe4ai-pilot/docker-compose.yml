@@ -6,7 +6,9 @@ services:
       POSTGRES_PASSWORD: safe4ai
       POSTGRES_DB: safe4ai
     ports:
-      - "5432:5432"
+      # Host port is configurable so it never collides with a native PostgreSQL
+      # on 5432. Default stays 5432 for delivery; local dev sets POSTGRES_HOST_PORT.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

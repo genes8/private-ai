@@ -1,11 +1,7 @@
 services:
-  # safe4ai Postgres is exposed on host port 5433 so it never collides with a
-  # native PostgreSQL on 5432 (which may host other projects). Inside the compose
-  # network the app still reaches it as postgres:5432.
-  postgres:
-    ports:
-      - "5433:5432"
-
+  # safe4ai Postgres host port is set via POSTGRES_HOST_PORT in .env (5433) so it
+  # never collides with a native PostgreSQL on 5432. The mapping lives in the base
+  # compose file (parameterized) to avoid Compose appending a second published port.
   app:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     # Reach the host's Ollama from inside the container.
