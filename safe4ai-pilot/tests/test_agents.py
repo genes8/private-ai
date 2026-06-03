@@ -432,6 +432,74 @@ async def test_generation_context_captured_in_final_state() -> None:
     assert all(c.relevant for c in final.generation_context), "only relevant chunks in context"
 
 
+@pytest.mark.asyncio
+async def test_partial_evidence_labeled_inference_answer_survives() -> None:
+    """A properly labeled document-fact + general-inference answer stays grounded."""
+    labeled_answer = (
+        "The documents do not state the Alliance headquarters city. "
+        "From the documents: the Alliance is UK-based and was launched at the "
+        "Houses of Parliament [1]. "
+        "General inference: this is not stated directly in the documents; it is "
+        "general model knowledge that the Houses of Parliament are in London."
+    )
+    graph, client = _build_graph(
+        _smart_ollama_handler(
+            grade_relevant=True,
+            grade_decision="generate",
+            quality_gate_decision="respond",
+            answer=labeled_answer,
+        )
+    )
+    async with client:
+        result = await graph.ainvoke(_make_state())
+
+    final = result if isinstance(result, PrivateAIState) else PrivateAIState(**result)
+    assert final.grounded is True
+    assert final.draft_answer == labeled_answer
+    assert len(final.citations) > 0
+    assert final.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_generate_prompt_uses_real_user_question_not_hyde_rewrite() -> None:
+    """The rag_answer prompt must carry the original user question, not the HyDE rewrite."""
+    captured: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompt: str = body.get("prompt", "")
+        if "search query optimizer" in prompt:
+            # HyDE rewrite — deliberately unlike the user's question.
+            return httpx.Response(200, json={"response": "hypothetical leave entitlement excerpt"})
+        if "Answer the following question" in prompt:
+            captured.append(prompt)
+            return httpx.Response(200, json={"response": "Grounded answer."})
+        return httpx.Response(200, json={"response": ""})
+
+    graph, client = _build_graph(handler)
+    user_question = "How many leave days do employees get?"
+    async with client:
+        await graph.ainvoke(_make_state(messages=[Message(role="user", content=user_question)]))
+
+    assert captured, "answer LLM was never called"
+    answer_prompt = captured[0]
+    assert user_question in answer_prompt
+    assert "hypothetical leave entitlement excerpt" not in answer_prompt
+
+
+def test_rag_answer_v2_contract_content() -> None:
+    """v2 prompt ships the labeling instruction and forbidden entity-specific categories."""
+    from app.prompts.registry import get_prompt
+
+    template = get_prompt("rag_answer", "v2").template.lower()
+    # Inference labeling instruction
+    assert "not stated directly in the documents" in template
+    assert "general model knowledge" in template
+    # Forbidden entity-specific categories
+    for category in ("headquarters", "founders", "website", "prices"):
+        assert category in template
+
+
 class TestRoutingThreshold:
     def test_route_after_grade_two_relevant_goes_to_generate(self) -> None:
         chunks = [_make_graded_chunk(True), _make_graded_chunk(True)]
@@ -520,7 +588,9 @@ class TestRuntimeSafety:
             result = await graph.ainvoke(_make_state())
 
         final = result if isinstance(result, PrivateAIState) else PrivateAIState(**result)
-        assert len(final.sub_queries) > 0, "decompose must run when score grading finds no relevant chunks"
+        assert len(final.sub_queries) > 0, (
+            "decompose must run when score grading finds no relevant chunks"
+        )
         assert final.status == "completed"
 
     @pytest.mark.asyncio

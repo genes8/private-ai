@@ -29,6 +29,7 @@
 - Expanded state management with enhanced PrivateAIState model
 - Strengthened safety gates with improved input validation and output filtering
 - Enhanced semantic caching with vector similarity and hit tracking
+- **Updated** Resolved NameError in agent graph component by adding RankedChunk import to enable proper type annotations for hybrid retrieval and query decomposition functions
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -45,7 +46,7 @@
 ## Introduction
 This document explains the AI agent pipeline built with LangGraph State Machine for a Retrieval-Augmented Generation (RAG) workflow. The pipeline features a sophisticated graph-based architecture with adaptive routing, query decomposition, document grading, and intelligent state management. It orchestrates intelligent query processing through a state machine that manages complex decision-making processes, self-correction loops, and safety gates powered by external LLM services via Ollama. The system provides comprehensive observability, human review integration, and performance optimization through semantic caching.
 
-**Updated** Enhanced with intelligent entity boosting capabilities that improve fact-extraction query performance by recognizing URL and email entity patterns while maintaining strict context constraints.
+**Updated** Enhanced with intelligent entity boosting capabilities that improve fact-extraction query performance by recognizing URL and email entity patterns while maintaining strict context constraints. **Resolved** NameError in agent graph component through proper RankedChunk type annotation imports.
 
 ## Project Structure
 The enhanced agent pipeline spans multiple modules with a sophisticated layered architecture:
@@ -142,6 +143,8 @@ The enhanced pipeline introduces several sophisticated components:
 
 **Semantic Caching**: Advanced vector similarity caching with cosine distance calculations, hit tracking, and automatic invalidation for document updates.
 
+**Type Safety Enhancement**: **Updated** Resolved NameError in agent graph component by adding RankedChunk import to enable proper type annotations for hybrid retrieval and query decomposition functions, ensuring consistent type checking across all pipeline components.
+
 **Section sources**
 - [graph.py:43-353](file://safe4ai-pilot/app/agents/graph.py#L43-L353)
 - [adaptive_router.py:11-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L11-L65)
@@ -156,7 +159,7 @@ The enhanced pipeline introduces several sophisticated components:
 ## Architecture Overview
 The pipeline implements a sophisticated LangGraph StateGraph with deterministic and conditional edges, featuring self-correction loops and adaptive routing. The architecture emphasizes safety, performance, and extensibility through a well-defined state machine that manages complex decision-making processes.
 
-**Updated** Enhanced document grading now includes intelligent entity boosting that improves fact-extraction query performance while maintaining strict context constraints.
+**Updated** Enhanced document grading now includes intelligent entity boosting that improves fact-extraction query performance while maintaining strict context constraints. **Resolved** NameError in agent graph component through proper RankedChunk type annotations.
 
 ```mermaid
 graph TB
@@ -519,6 +522,8 @@ The enhanced pipeline implements several performance optimization strategies:
 
 **Entity Boosting Optimization**: **New Feature** Entity boosting uses efficient pattern matching with minimal computational overhead while significantly improving fact-extraction query performance.
 
+**Type Safety Optimization**: **Updated** Proper RankedChunk type annotations eliminate NameError exceptions and improve IDE support and static analysis across all pipeline components.
+
 **Section sources**
 - [document_grader.py:12-12](file://safe4ai-pilot/app/agents/document_grader.py#L12-L12)
 - [graph.py:39-40](file://safe4ai-pilot/app/agents/graph.py#L39-L40)
@@ -542,6 +547,8 @@ Enhanced debugging and monitoring capabilities:
 
 **Entity Boosting Issues**: **New Feature** Monitor entity boost effectiveness through rerank_score improvements and context matching patterns.
 
+**Type Safety Issues**: **Updated** Resolve NameError exceptions by ensuring RankedChunk import is present in all components that use it for type annotations in hybrid retrieval and query decomposition functions.
+
 **Section sources**
 - [graph.py:28-36](file://safe4ai-pilot/app/agents/graph.py#L28-L36)
 - [graph.py:128-128](file://safe4ai-pilot/app/agents/graph.py#L128-L128)
@@ -549,7 +556,7 @@ Enhanced debugging and monitoring capabilities:
 - [agent_runner.py:38-52](file://safe4ai-pilot/app/services/agent_runner.py#L38-L52)
 
 ## Conclusion
-The enhanced LangGraph State Machine provides a robust, scalable, and secure RAG pipeline with sophisticated adaptive routing, intelligent query decomposition, advanced document grading, and comprehensive safety measures. **Updated** The new entity boosting capabilities significantly improve fact-extraction query performance by intelligently recognizing URL and email entity patterns while maintaining strict context constraints. The modular architecture enables easy extension and customization while maintaining high performance through semantic caching, concurrent processing, and intelligent resource management. The system's observability and human review integration ensure reliability and accountability in production environments.
+The enhanced LangGraph State Machine provides a robust, scalable, and secure RAG pipeline with sophisticated adaptive routing, intelligent query decomposition, advanced document grading, and comprehensive safety measures. **Updated** The new entity boosting capabilities significantly improve fact-extraction query performance by intelligently recognizing URL and email entity patterns while maintaining strict context constraints. **Resolved** NameError in agent graph component through proper RankedChunk type annotations, enabling seamless integration across hybrid retrieval and query decomposition functions. The modular architecture enables easy extension and customization while maintaining high performance through semantic caching, concurrent processing, and intelligent resource management. The system's observability and human review integration ensure reliability and accountability in production environments.
 
 ## Appendices
 
@@ -565,6 +572,8 @@ Adding new components follows established patterns:
 **New Retrieval Components**: Integrate custom retrievers through HybridRetriever interface.
 
 **Entity Boosting Enhancements**: **New Feature** Extend entity_booster with additional entity recognition patterns while maintaining context constraints and minimal score increases.
+
+**Type Safety Extensions**: **Updated** Ensure all new components import RankedChunk for proper type annotations in hybrid retrieval and query decomposition functions.
 
 **Section sources**
 - [graph.py:43-353](file://safe4ai-pilot/app/agents/graph.py#L43-L353)
@@ -585,6 +594,8 @@ Adjust pipeline parameters and behaviors:
 
 **Entity Boosting Configuration**: **New Feature** Adjust entity boost thresholds and context matching parameters for domain-specific optimization.
 
+**Type Safety Configuration**: **Updated** Ensure RankedChunk type annotations are maintained consistently across all components for reliable type checking and IDE support.
+
 **Section sources**
 - [adaptive_router.py:11-65](file://safe4ai-pilot/app/agents/adaptive_router.py#L11-L65)
 - [graph.py:264-295](file://safe4ai-pilot/app/agents/graph.py#L264-L295)
@@ -602,6 +613,8 @@ Comprehensive monitoring implementation:
 **Audit Trails**: Complete session history with all pipeline operations and decisions.
 
 **Entity Boosting Metrics**: **New Feature** Monitor entity boost effectiveness through rerank_score improvements and context matching success rates.
+
+**Type Safety Monitoring**: **Updated** Monitor for NameError exceptions and ensure consistent RankedChunk type annotations across all pipeline components.
 
 **Section sources**
 - [graph.py:28-36](file://safe4ai-pilot/app/agents/graph.py#L28-L36)

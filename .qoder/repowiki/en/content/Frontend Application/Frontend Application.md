@@ -6,12 +6,14 @@
 - [main.tsx](file://safe4ai-pilot/frontend/src/main.tsx)
 - [package.json](file://safe4ai-pilot/frontend/package.json)
 - [vite.config.ts](file://safe4ai-pilot/frontend/vite.config.ts)
+- [nginx.conf](file://safe4ai-pilot/frontend/nginx.conf)
 - [tailwind.config.ts](file://safe4ai-pilot/frontend/tailwind.config.ts)
 - [ChatPage.tsx](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx)
 - [LoginPage.tsx](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx)
 - [ErrorBoundary.tsx](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx)
 - [useAuth.ts](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts)
 - [useChat.ts](file://safe4ai-pilot/frontend/src/hooks/useChat.ts)
+- [useSettings.ts](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts)
 - [ActivityPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx)
 - [DocumentsPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/DocumentsPage.tsx)
 - [FeedbackPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/FeedbackPage.tsx)
@@ -24,18 +26,17 @@
 - [chat.ts](file://safe4ai-pilot/frontend/src/api/chat.ts)
 - [account.ts](file://safe4ai-pilot/frontend/src/api/account.ts)
 - [settings.ts](file://safe4ai-pilot/frontend/src/api/settings.ts)
+- [client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
 - [AnswerBlock.tsx](file://safe4ai-pilot/frontend/src/components/chat/AnswerBlock.tsx)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added comprehensive user settings frontend implementation with dedicated SettingsPage.tsx component
-- Integrated account API client for user account management and password changes
-- Implemented authenticated /settings route with RequireAuth guard
-- Added password change form validation with comprehensive security requirements
-- Integrated TanStack Query for data fetching and state management in settings
-- Enhanced routing with proper navigation integration for user settings
-- Added usage statistics and knowledge base monitoring in user settings
+- Updated proxy configuration documentation to reflect the addition of `/settings` endpoint routing
+- Enhanced API client documentation to explain proper API communication patterns
+- Added comprehensive explanation of SPA bypass mechanism for proper routing
+- Updated troubleshooting guide to address proxy configuration issues
+- Enhanced development workflow documentation with proxy configuration details
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -47,14 +48,17 @@
 7. [Admin Dashboard Features](#admin-dashboard-features)
 8. [Enhanced Chat Interface](#enhanced-chat-interface)
 9. [User Settings Implementation](#user-settings-implementation)
-10. [Dependency Analysis](#dependency-analysis)
-11. [Performance Considerations](#performance-considerations)
-12. [Troubleshooting Guide](#troubleshooting-guide)
-13. [Conclusion](#conclusion)
-14. [Appendices](#appendices)
+10. [Proxy Configuration and API Communication](#proxy-configuration-and-api-communication)
+11. [Dependency Analysis](#dependency-analysis)
+12. [Performance Considerations](#performance-considerations)
+13. [Troubleshooting Guide](#troubleshooting-guide)
+14. [Conclusion](#conclusion)
+15. [Appendices](#appendices)
 
 ## Introduction
 This document describes the frontend application for a React TypeScript single-page application built with modern web tooling. The application features a complete frontend overhaul with a new design system integration, comprehensive admin dashboard implementation, enhanced chat interface with streaming capabilities, and improved component architecture following React Query patterns. It focuses on component architecture, routing, state management, design system via Tailwind CSS, API integration patterns, error handling, and loading states. The application includes system monitoring and user management capabilities, along with an advanced AI chat interface featuring real-time streaming and citation management, plus comprehensive user settings management.
+
+**Updated** Enhanced with improved proxy configuration for proper API communication routing and SPA fallback handling.
 
 ## Project Structure
 The frontend is organized around a clear separation of concerns with enhanced admin capabilities and user settings:
@@ -105,6 +109,12 @@ CHAT["chat.ts"]
 AUTH["auth.ts"]
 ACC["account.ts"]
 SET["settings.ts"]
+CLIENT["api/client.ts"]
+end
+subgraph "Proxy Configuration"
+PROXY["Vite Proxy Config"]
+NGINX["Nginx Config"]
+SPA["SPA Bypass Mechanism"]
 end
 subgraph "Design System"
 TW["tailwind.config.ts"]
@@ -135,21 +145,27 @@ R4 --> USP
 USP --> ACCT
 M --> TW
 TW --> TOKENS
+PROXY --> CLIENT
+NGINX --> PROXY
+SPA --> PROXY
 ```
 
 **Diagram sources**
 - [main.tsx:1-33](file://safe4ai-pilot/frontend/src/main.tsx#L1-L33)
-- [App.tsx:1-121](file://safe4ai-pilot/frontend/src/App.tsx#L1-L121)
+- [App.tsx:1-123](file://safe4ai-pilot/frontend/src/App.tsx#L1-L123)
 - [AdminLayout.tsx:1-200](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L1-L200)
 - [ChatPage.tsx:1-217](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L1-L217)
-- [SettingsPage.tsx:1-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L274)
+- [SettingsPage.tsx:1-279](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L279)
 - [useAuth.ts:1-36](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L36)
 - [useChat.ts:1-114](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L114)
-- [tailwind.config.ts:1-44](file://safe4ai-pilot/frontend/tailwind.config.ts#L1-L44)
+- [useSettings.ts:1-359](file://safe4ai-pilot/frontend/src/hooks/useSettings.ts#L1-L359)
+- [vite.config.ts:15-35](file://safe4ai-pilot/frontend/vite.config.ts#L15-L35)
+- [nginx.conf:16-31](file://safe4ai-pilot/frontend/nginx.conf#L16-L31)
+- [spaBypass:9-13](file://safe4ai-pilot/frontend/vite.config.ts#L9-L13)
 
 **Section sources**
 - [main.tsx:1-33](file://safe4ai-pilot/frontend/src/main.tsx#L1-L33)
-- [App.tsx:1-121](file://safe4ai-pilot/frontend/src/App.tsx#L1-L121)
+- [App.tsx:1-123](file://safe4ai-pilot/frontend/src/App.tsx#L1-L123)
 
 ## Core Components
 - Advanced routing and guards:
@@ -174,7 +190,7 @@ Practical examples:
 - Add new user settings by extending the SettingsPage component and account API client
 
 **Section sources**
-- [App.tsx:20-32](file://safe4ai-pilot/frontend/src/App.tsx#L20-L32)
+- [App.tsx:22-34](file://safe4ai-pilot/frontend/src/App.tsx#L22-L34)
 - [main.tsx:10-20](file://safe4ai-pilot/frontend/src/main.tsx#L10-L20)
 - [tailwind.config.ts:3-43](file://safe4ai-pilot/frontend/tailwind.config.ts#L3-L43)
 
@@ -200,6 +216,8 @@ MAIN --> QUERY
 MAIN --> ERR["Enhanced ErrorBoundary"]
 QUERY --> CACHE["Smart Caching & Invalidation"]
 CACHE --> RETRY["Intelligent Retry Logic"]
+API --> PROXY["Enhanced Proxy Configuration"]
+PROXY --> BACKEND["Backend API Services"]
 ```
 
 **Diagram sources**
@@ -207,8 +225,9 @@ CACHE --> RETRY["Intelligent Retry Logic"]
 - [useAuth.ts:1-36](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L1-L36)
 - [useChat.ts:1-114](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L114)
 - [account.ts:1-44](file://safe4ai-pilot/frontend/src/api/account.ts#L1-L44)
-- [settings.ts:1-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L1-L103)
-- [tailwind.config.ts:40-43](file://safe4ai-pilot/frontend/tailwind.config.ts#L40-L43)
+- [settings.ts:1-135](file://safe4ai-pilot/frontend/src/api/settings.ts#L1-L135)
+- [client.ts:1-60](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L60)
+- [vite.config.ts:15-35](file://safe4ai-pilot/frontend/vite.config.ts#L15-L35)
 
 ## Detailed Component Analysis
 
@@ -339,7 +358,7 @@ Refresh --> UI
 - [ErrorBoundary.tsx:1-43](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx#L1-L43)
 - [LoginPage.tsx:1-147](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx#L1-L147)
 - [ChatPage.tsx:1-217](file://safe4ai-pilot/frontend/src/pages/ChatPage.tsx#L1-L217)
-- [SettingsPage.tsx:1-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L274)
+- [SettingsPage.tsx:1-279](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L279)
 
 ## Design System Implementation
 The application features a comprehensive design system with custom token-driven theming:
@@ -356,7 +375,7 @@ The application features a comprehensive design system with custom token-driven 
 - **Sans**: Geist font family for body text
 - **Mono**: Geist Mono for code and technical content
 - **Serif**: Instrument Serif for headings and emphasis
-- **Letter Spacing**: Tight, snug, body, and kicker variations
+- - **Letter Spacing**: Tight, snug, body, and kicker variations
 
 ### Component Design Principles
 - **Consistent Spacing**: Grid-based layout system with 4px baseline
@@ -503,9 +522,58 @@ SP->>SP : "Navigate to /login with replace"
 - [useAuth.ts:16-20](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L16-L20)
 
 **Section sources**
-- [SettingsPage.tsx:1-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L274)
+- [SettingsPage.tsx:1-279](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L1-L279)
 - [account.ts:1-44](file://safe4ai-pilot/frontend/src/api/account.ts#L1-L44)
-- [App.tsx:108-115](file://safe4ai-pilot/frontend/src/App.tsx#L108-L115)
+- [App.tsx:109-116](file://safe4ai-pilot/frontend/src/App.tsx#L109-L116)
+
+## Proxy Configuration and API Communication
+
+### Enhanced Proxy Configuration
+The frontend now features a comprehensive proxy configuration that ensures proper routing of API requests and prevents JavaScript errors when accessing settings endpoints:
+
+#### Vite Development Proxy
+The Vite development server includes sophisticated proxy configuration that routes different API endpoints to the backend:
+- **Authentication Endpoints**: `/auth`, `/me` - Direct routing for login and user profile
+- **Account Management**: `/account` - Dedicated routing for user account operations
+- **Feedback System**: `/feedback` - Separate routing for feedback submissions
+- **Chat Streaming**: `/chat/stream` - Special handling for streaming chat responses
+- **Admin Routes**: `/admin/*` - Protected admin endpoints with SPA bypass
+- **Settings Endpoint**: `/settings` - Critical endpoint routing with SPA bypass
+
+#### SPA Bypass Mechanism
+The proxy configuration includes a sophisticated `spaBypass` function that intelligently routes requests:
+- **Browser Navigation Detection**: Checks `Accept` header for `text/html` to serve SPA
+- **API Request Detection**: Allows non-HTML requests to reach backend API
+- **Prevents JavaScript Errors**: Ensures settings endpoints don't trigger SPA fallback
+
+#### Nginx Production Configuration
+The production nginx configuration complements the Vite proxy with:
+- **Static Asset Serving**: Proper SPA fallback with `try_files $uri $uri/ /index.html`
+- **API Proxying**: Routes `/auth`, `/chat`, `/me`, `/account`, `/admin`, `/feedback`, `/settings`, `/health` to backend
+- **Streaming Support**: Enables SSE with `proxy_buffering off` and appropriate timeouts
+- **Security Headers**: Removes hop-by-hop headers to prevent desync issues
+
+### API Client Integration
+The API client (`client.ts`) works seamlessly with the proxy configuration:
+- **Base URL Resolution**: Uses `import.meta.env.VITE_API_URL` for dynamic backend configuration
+- **CSRF Protection**: Automatically includes CSRF tokens for non-GET requests
+- **Error Handling**: Comprehensive error handling with unauthorized event emission
+- **Credential Management**: Maintains session cookies across requests
+
+### Development Workflow
+The proxy configuration enables smooth development workflow:
+- **Local Development**: Vite proxy routes to local backend API
+- **Environment Flexibility**: Configurable API URL through environment variables
+- **Hot Reload**: Proper API routing maintains development experience
+- **Testing**: Consistent API behavior across development and production
+
+**Updated** Enhanced proxy configuration ensures proper routing of user account API requests, preventing JavaScript errors when accessing settings endpoints and ensuring reliable API communication.
+
+**Section sources**
+- [vite.config.ts:15-35](file://safe4ai-pilot/frontend/vite.config.ts#L15-L35)
+- [nginx.conf:16-31](file://safe4ai-pilot/frontend/nginx.conf#L16-L31)
+- [client.ts:1-60](file://safe4ai-pilot/frontend/src/api/client.ts#L1-L60)
+- [spaBypass:9-13](file://safe4ai-pilot/frontend/vite.config.ts#L9-L13)
 
 ## Dependency Analysis
 - **Build and Toolchain**: Enhanced with comprehensive development workflow
@@ -542,7 +610,7 @@ TW --> TOKENS["Custom Design Tokens"]
 
 **Section sources**
 - [package.json:1-32](file://safe4ai-pilot/frontend/package.json#L1-L32)
-- [vite.config.ts:1-25](file://safe4ai-pilot/frontend/vite.config.ts#L1-L25)
+- [vite.config.ts:1-35](file://safe4ai-pilot/frontend/vite.config.ts#L1-L35)
 - [tailwind.config.ts:1-44](file://safe4ai-pilot/frontend/tailwind.config.ts#L1-L44)
 
 ## Performance Considerations
@@ -554,6 +622,7 @@ TW --> TOKENS["Custom Design Tokens"]
 - **Network Efficiency**: Intelligent retry logic with exponential backoff
 - **Rendering Performance**: Virtualized lists for large datasets in admin pages
 - **Settings Performance**: Optimized query caching for account settings and usage statistics
+- **Proxy Efficiency**: Optimized request routing reducing unnecessary API calls
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -562,9 +631,13 @@ Common issues and resolutions:
 - **Admin page access**: Verify user role is admin, check RequireAdmin guard implementation
 - **User settings access**: Verify authentication status, check RequireAuth guard for /settings route
 - **Password change failures**: Validate password complexity requirements, check security permissions, ensure network connectivity
+- **JavaScript errors on settings**: Verify proxy configuration includes `/settings` with proper bypass, check SPA bypass function
+- **API routing issues**: Confirm Vite proxy targets correct backend URL, verify nginx configuration for production
 - **UI crashes**: Enhanced ErrorBoundary will present recovery interface with refresh option
 - **Performance issues**: Monitor React Query cache effectiveness, check for memory leaks in streaming components
-- **Design inconsistencies**: Verify Tailwind token usage, check for custom CSS conflicts
+- **Development proxy errors**: Verify VITE_API_URL environment variable, check spaBypass function logic
+
+**Updated** Added troubleshooting guidance for proxy configuration issues and settings endpoint routing problems.
 
 **Section sources**
 - [LoginPage.tsx:26-35](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx#L26-L35)
@@ -573,9 +646,12 @@ Common issues and resolutions:
 - [App.tsx:18-23](file://safe4ai-pilot/frontend/src/App.tsx#L18-L23)
 - [ErrorBoundary.tsx:20-22](file://safe4ai-pilot/frontend/src/components/ErrorBoundary.tsx#L20-L22)
 - [SettingsPage.tsx:25-33](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L25-L33)
+- [vite.config.ts:19-31](file://safe4ai-pilot/frontend/vite.config.ts#L19-L31)
 
 ## Conclusion
 The frontend application demonstrates a sophisticated, enterprise-grade implementation with comprehensive design system integration, advanced admin dashboard capabilities, enhanced chat interface with streaming technologies, and comprehensive user settings management. The application leverages modern React patterns with React Query for robust state management, implements a custom token-driven design system, provides extensive monitoring and management features, and includes secure user account management with comprehensive password validation. The modular architecture supports easy extension and maintenance while delivering exceptional user experience across all interaction scenarios.
+
+**Updated** Enhanced with improved proxy configuration ensuring proper API communication routing and preventing JavaScript errors when accessing settings endpoints.
 
 ## Appendices
 
@@ -586,12 +662,14 @@ The frontend application demonstrates a sophisticated, enterprise-grade implemen
 - **Account Management**: User-specific account settings, password changes, and usage statistics
 - **Feedback Integration**: Real-time feedback submission with optimistic UI updates
 - **Settings Management**: Comprehensive application configuration with optimistic updates
+- **Proxy Integration**: Seamless API routing through Vite proxy and nginx configuration
 
 **Section sources**
 - [chat.ts:21-76](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L76)
 - [useChat.ts:93-100](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L93-L100)
 - [account.ts:36-44](file://safe4ai-pilot/frontend/src/api/account.ts#L36-L44)
-- [settings.ts:90-103](file://safe4ai-pilot/frontend/src/api/settings.ts#L90-L103)
+- [settings.ts:122-135](file://safe4ai-pilot/frontend/src/api/settings.ts#L122-L135)
+- [client.ts:31-59](file://safe4ai-pilot/frontend/src/api/client.ts#L31-59)
 
 ### Extending Components and Adding Pages
 - **Admin Page Addition**: Create new admin page under pages/admin, import in App routing, protect with RequireAdmin
@@ -600,22 +678,27 @@ The frontend application demonstrates a sophisticated, enterprise-grade implemen
 - **API Integration**: Define API functions in src/api with proper error handling and integrate via hooks
 - **User Settings Enhancement**: Extend SettingsPage component with additional account management features
 - **Route Addition**: Add new protected routes with appropriate guards in App.tsx routing configuration
+- **Proxy Configuration**: Add new API endpoints to Vite proxy configuration with proper bypass logic
 
 **Section sources**
-- [App.tsx:25-121](file://safe4ai-pilot/frontend/src/App.tsx#L25-L121)
+- [App.tsx:25-123](file://safe4ai-pilot/frontend/src/App.tsx#L25-L123)
 - [useAuth.ts:8-12](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts#L8-L12)
 - [useChat.ts:17-103](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L17-L103)
-- [SettingsPage.tsx:53-274](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L53-L274)
+- [SettingsPage.tsx:53-279](file://safe4ai-pilot/frontend/src/pages/SettingsPage.tsx#L53-L279)
+- [vite.config.ts:19-31](file://safe4ai-pilot/frontend/vite.config.ts#L19-L31)
 
 ### Build Process, Development Workflow, and Deployment
 - **Development Environment**: Vite dev server with API proxy configuration for seamless backend integration
 - **Production Build**: TypeScript transpilation followed by optimized Vite build with asset optimization
 - **Preview Mode**: Local serving of production builds for quality assurance
 - **Environment Configuration**: API URL configuration through environment variables
+- **Deployment**: Nginx configuration with proper SPA fallback and API proxying
+- **Proxy Configuration**: Development and production proxy settings for optimal API routing
 
 **Section sources**
 - [package.json:6-10](file://safe4ai-pilot/frontend/package.json#L6-L10)
 - [vite.config.ts:6-16](file://safe4ai-pilot/frontend/vite.config.ts#L6-L16)
+- [nginx.conf:16-31](file://safe4ai-pilot/frontend/nginx.conf#L16-L31)
 
 ### Responsive Design, Accessibility, and Cross-Browser Compatibility
 - **Responsive Architecture**: Mobile-first design with progressive enhancement for larger screens
@@ -624,3 +707,8 @@ The frontend application demonstrates a sophisticated, enterprise-grade implemen
 - **Performance Optimization**: Optimized loading strategies and efficient resource utilization
 - **Form Accessibility**: Comprehensive form validation with accessible error messaging
 - **Navigation Accessibility**: Clear focus states and keyboard navigation for all interactive elements
+- **Proxy Compatibility**: Cross-platform proxy configuration for consistent development experience
+
+**Section sources**
+- [vite.config.ts:19-31](file://safe4ai-pilot/frontend/vite.config.ts#L19-L31)
+- [nginx.conf:16-31](file://safe4ai-pilot/frontend/nginx.conf#L16-L31)

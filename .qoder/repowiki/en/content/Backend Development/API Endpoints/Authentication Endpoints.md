@@ -4,6 +4,7 @@
 **Referenced Files in This Document**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
 - [auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
@@ -13,16 +14,18 @@
 - [chat_routes.py](file://safe4ai-pilot/app/api/chat_routes.py)
 - [config.py](file://safe4ai-pilot/app/config.py)
 - [test_auth.py](file://safe4ai-pilot/tests/test_auth.py)
+- [test_oidc.py](file://safe4ai-pilot/tests/test_oidc.py)
 - [pyproject.toml](file://safe4ai-pilot/pyproject.toml)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added new GET /auth/csrf endpoint for CSRF token generation
-- Enhanced authentication flow with CSRF token requirements
-- Updated frontend integration to automatically fetch CSRF tokens before login attempts
-- Added CSRF protection middleware with double-submit token validation
-- Updated security considerations to include CSRF protection measures
+- Added comprehensive OIDC Single Sign-On (SSO) authentication system with three new endpoints
+- Integrated OIDC client implementation with authorization flow handling and automatic user provisioning
+- Enhanced authentication flow to support both traditional password login and OIDC SSO
+- Added SSO status checking, authorization initiation, and callback processing endpoints
+- Updated frontend integration to support OIDC login options alongside password authentication
+- Implemented state parameter validation and CSRF protection for OIDC flows
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -37,10 +40,10 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document provides comprehensive API documentation for authentication endpoints focused on user login, logout, token management, and access control. It covers JWT token generation, refresh mechanisms, session handling, middleware for authentication and authorization, CSRF protection, request/response schemas, authentication flow, security considerations, rate limiting policies, error handling patterns, and practical client-side examples for token storage and renewal. It also documents CORS policies, CSRF protection posture, and security headers applied during authentication.
+This document provides comprehensive API documentation for authentication endpoints focused on user login, logout, token management, and access control. It covers JWT token generation, refresh mechanisms, session handling, middleware for authentication and authorization, CSRF protection, OIDC Single Sign-On (SSO) integration, request/response schemas, authentication flow, security considerations, rate limiting policies, error handling patterns, and practical client-side examples for token storage and renewal. It also documents CORS policies, CSRF protection posture, and security headers applied during authentication.
 
 ## Project Structure
-Authentication is implemented in the backend FastAPI application under app/auth, with supporting database models and middleware. Frontend client-side integration is implemented in the React SPA under frontend/src/api and frontend/src/hooks.
+Authentication is implemented in the backend FastAPI application under app/auth, with supporting database models and middleware. Frontend client-side integration is implemented in the React SPA under frontend/src/api and frontend/src/hooks. The system now includes comprehensive OIDC SSO support with dedicated configuration and flow handling.
 
 ```mermaid
 graph TB
@@ -48,29 +51,32 @@ subgraph "Backend"
 A["app/main.py"]
 B["app/auth/router.py"]
 C["app/auth/middleware.py"]
-D["app/db/models.py"]
-E["app/api/chat_routes.py"]
+D["app/auth/oidc.py"]
+E["app/db/models.py"]
+F["app/api/chat_routes.py"]
 end
 subgraph "Frontend"
-F["frontend/src/api/auth.ts"]
-G["frontend/src/api/client.ts"]
-H["frontend/src/hooks/useAuth.ts"]
-I["frontend/src/pages/LoginPage.tsx"]
+G["frontend/src/api/auth.ts"]
+H["frontend/src/api/client.ts"]
+I["frontend/src/hooks/useAuth.ts"]
+J["frontend/src/pages/LoginPage.tsx"]
 end
 A --> B
 A --> C
 B --> C
-C --> D
-E --> C
-F --> G
-H --> F
-I --> F
+B --> D
+C --> E
+F --> C
+G --> H
+I --> G
+J --> G
 ```
 
 **Diagram sources**
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
 - [chat_routes.py](file://safe4ai-pilot/app/api/chat_routes.py)
 - [auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
@@ -82,6 +88,7 @@ I --> F
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
 - [chat_routes.py](file://safe4ai-pilot/app/api/chat_routes.py)
 - [auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
@@ -90,23 +97,25 @@ I --> F
 - [LoginPage.tsx](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx)
 
 ## Core Components
-- Authentication router: Provides /auth/login, /auth/logout, and /auth/csrf endpoints with rate limiting and brute-force protections.
+- Authentication router: Provides /auth/login, /auth/logout, /auth/csrf, /auth/sso/status, /auth/sso/start, and /auth/sso/callback endpoints with rate limiting and brute-force protections.
+- OIDC SSO system: Comprehensive OpenID Connect implementation with authorization flow, token exchange, user provisioning, and session management.
 - JWT middleware: Encodes/decodes tokens, verifies passwords, extracts current user, and enforces role-based access control.
 - CSRF protection middleware: Implements double-submit token validation for all authenticated requests and login attempts.
 - Protected routes: Chat endpoints depend on authenticated users via middleware.
-- Frontend auth API: Wraps fetch with credentials and exposes login/logout/me helpers with automatic CSRF token fetching.
+- Frontend auth API: Wraps fetch with credentials and exposes login/logout/me helpers with automatic CSRF token fetching and SSO integration.
 - Security headers and CORS: Enforced globally via middleware and configured origins.
 
 **Section sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [chat_routes.py](file://safe4ai-pilot/app/api/chat_routes.py)
 - [auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
 - [client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
 
 ## Architecture Overview
-The authentication flow integrates backend endpoints, middleware, and frontend client with enhanced CSRF protection. Tokens are stored as HTTP-only cookies to mitigate XSS risks. Access to protected resources depends on a valid, non-expired JWT present in the cookie, with CSRF double-submit tokens for additional security.
+The authentication flow integrates backend endpoints, middleware, OIDC SSO system, and frontend client with enhanced CSRF protection. Tokens are stored as HTTP-only cookies to mitigate XSS risks. Access to protected resources depends on a valid, non-expired JWT present in the cookie, with CSRF double-submit tokens for additional security. The system now supports both traditional password authentication and OIDC Single Sign-On with automatic user provisioning.
 
 ```mermaid
 sequenceDiagram
@@ -114,21 +123,28 @@ participant FE as "Frontend Client"
 participant API as "FastAPI App"
 participant CSRF as "CSRF Middleware"
 participant Auth as "Auth Router"
+participant OIDC as "OIDC Module"
 participant MW as "JWT Middleware"
-participant DB as "Database"
-FE->>API : "GET /auth/csrf"
-API->>CSRF : "protect_csrf()"
-CSRF->>Auth : "get_csrf_token()"
-Auth-->>FE : "Set-Cookie : csrf_token=token; HttpOnly=false; SameSite=Strict"
-FE->>API : "POST /auth/login" with {email,password} and X-CSRF-Token header
-API->>CSRF : "protect_csrf()"
-CSRF->>CSRF : "validate CSRF token match"
-CSRF->>Auth : "login()"
-Auth->>DB : "query user by email"
-Auth->>Auth : "verify password (timing-safe)"
-Auth->>Auth : "update lockout counters if needed"
-Auth-->>FE : "Set-Cookie : access_token=JWT; HttpOnly; SameSite=Strict; Secure"
-note over FE,API : "Tokens stored in browser cookies"
+participant DB as "Database
+FE->>API : "GET /auth/sso/status"
+API->>Auth : "sso_status()"
+Auth->>DB : "load_app_config()"
+Auth-->>FE : "SSO availability status"
+FE->>API : "GET /auth/sso/start"
+API->>Auth : "sso_start()"
+Auth->>OIDC : "build_authorization_url()"
+OIDC-->>Auth : "Authorization URL with state"
+Auth-->>FE : "302 Redirect to OIDC provider"
+FE->>API : "GET /auth/sso/callback?code=&state="
+API->>Auth : "sso_callback()"
+Auth->>OIDC : "exchange_code_for_userinfo()"
+OIDC->>DB : "auto_provision_user()"
+DB-->>OIDC : "User created/provisioned"
+OIDC-->>Auth : "User info with email"
+Auth->>DB : "lookup/update user"
+Auth->>Auth : "reset failed attempts"
+Auth-->>FE : "302 Redirect with session cookies"
+note over FE,API : "OIDC flow completes with JWT cookies"
 FE->>API : "Protected request with Cookie and X-CSRF-Token"
 API->>CSRF : "protect_csrf()"
 CSRF->>CSRF : "validate CSRF token match"
@@ -142,6 +158,7 @@ API-->>FE : "200 OK or 401/403"
 **Diagram sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
 
@@ -160,8 +177,9 @@ API-->>FE : "200 OK or 401/403"
   - CSRF requirement: Requires X-CSRF-Token header matching csrf_token cookie.
   - Password policy: Rejects passwords shorter than 12 characters.
   - Brute-force protection: Tracks failed attempts and locks accounts temporarily.
+  - SSO policy: Returns 403 if sso_only is enabled and OIDC is configured.
   - Response: 200 with message; sets access_token and csrf_token cookies with max age, HttpOnly for JWT, SameSite=Strict, and Secure based on HTTPS enforcement.
-  - Errors: 401 for invalid credentials; 429 when account locked; 403 for CSRF validation failure.
+  - Errors: 401 for invalid credentials; 429 when account locked; 403 for CSRF validation failure or SSO-only policy.
 
 - Route: POST /auth/logout
   - Purpose: Clear JWT and CSRF cookies to log out.
@@ -173,12 +191,42 @@ API-->>FE : "200 OK or 401/403"
   - Access: Requires valid access_token cookie and CSRF token.
   - Implementation: Uses get_current_user dependency.
 
-**Updated** Added CSRF token generation endpoint and enhanced CSRF requirements for all authentication endpoints.
+**Updated** Enhanced with SSO policy enforcement and integrated OIDC SSO capabilities.
 
 **Section sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
 - [useAuth.ts](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts)
+
+### OIDC Single Sign-On (SSO) Endpoints
+- Route: GET /auth/sso/status
+  - Purpose: Return public OIDC login availability without exposing secrets.
+  - Response: JSON object with enabled (boolean), configured (boolean), ssoOnly (boolean), and loginUrl (string or null).
+  - Implementation: Loads application configuration and OIDC settings to determine SSO availability.
+
+- Route: GET /auth/sso/start
+  - Purpose: Start OIDC authorization-code login flow.
+  - Rate limiting: 20 per minute via SlowAPI.
+  - State management: Generates cryptographically secure state parameter and stores it in HttpOnly cookie.
+  - Redirect: Redirects to OIDC provider's authorization endpoint with proper parameters.
+  - Validation: Returns 404 if SSO is not configured.
+  - Security: Uses Lax SameSite policy for state cookie to work across redirects.
+
+- Route: GET /auth/sso/callback
+  - Purpose: Complete OIDC authorization-code login and issue application session cookies.
+  - Rate limiting: 20 per minute via SlowAPI.
+  - State validation: Verifies state parameter matches the stored state cookie using constant-time comparison.
+  - Code exchange: Exchanges authorization code for user information via OIDC provider.
+  - User provisioning: Automatically creates or updates user records based on OIDC user info.
+  - Session creation: Issues JWT access_token and CSRF cookies upon successful authentication.
+  - Error handling: Returns 403 for invalid state, 404 for unconfigured SSO, 502 for provider errors.
+
+**New Section** Added comprehensive OIDC SSO authentication system with three dedicated endpoints.
+
+**Section sources**
+- [router.py](file://safe4ai-pilot/app/auth/router.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
+- [test_oidc.py](file://safe4ai-pilot/tests/test_oidc.py)
 
 ### CSRF Protection System
 - Double-submit token pattern: CSRF tokens are stored in both cookies and headers for validation.
@@ -186,6 +234,7 @@ API-->>FE : "200 OK or 401/403"
 - Origin validation: Login requests require valid Origin header matching allowed origins list.
 - Middleware enforcement: protect_csrf middleware validates CSRF tokens for all authenticated requests and login attempts.
 - Token lifecycle: CSRF tokens are cleared on logout and have shorter expiration (300 seconds) than JWT tokens.
+- OIDC state protection: OIDC state parameters are validated using constant-time comparison to prevent timing attacks.
 
 ```mermaid
 flowchart TD
@@ -211,11 +260,12 @@ ValidateCSRF2 --> Continue["Proceed with requests"]
 - [main.py](file://safe4ai-pilot/app/main.py)
 
 ### JWT Token Management
-- Encoding: HS256-signed JWT with subject (user ID), role, issued-at, and expiration (hours).
+- Encoding: HS256-signed JWT with subject (user ID), role, issued-at, and expiration (8 hours).
 - Decoding: Validates signature and claims; rejects tampered tokens.
 - Storage: Cookies only (not localStorage/sessionStorage) to reduce XSS exposure.
 - Expiration: 8 hours; no built-in refresh endpoint; clients should re-authenticate after expiry.
 - Dual cookie strategy: Separate access_token (HttpOnly) and csrf_token (non-HttpOnly) cookies for different security properties.
+- Session management: OIDC authentication follows the same token storage and validation patterns as password authentication.
 
 ```mermaid
 flowchart TD
@@ -241,6 +291,7 @@ Expire --> |Yes| Reauth["Redirect to login"]
 - Current user extraction: get_current_user validates token and ensures the user is active.
 - Protected endpoints: Chat routes depend on get_current_user to authorize requests.
 - Token revocation: logout endpoint updates user.token_valid_after to invalidate previously issued tokens.
+- SSO policy enforcement: When sso_only is enabled, password login is blocked even if credentials are valid.
 
 ```mermaid
 classDiagram
@@ -259,12 +310,22 @@ class JWTMiddleware {
 +get_current_user(request) User
 +require_role(role) callable
 }
+class OIDCConfig {
++bool enabled
++string issuer_url
++string client_id
++string client_secret
++string redirect_uri
++string[] allowed_domains
++bool auto_provision
+}
 JWTMiddleware --> User : "loads active user"
 ```
 
 **Diagram sources**
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 
 **Section sources**
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
@@ -275,6 +336,20 @@ JWTMiddleware --> User : "loads active user"
 - CSRF Token Request (GET /auth/csrf)
   - Response: {"csrf_token": "string"}
   - Headers/Cookies: Set-Cookie: csrf_token=...; HttpOnly=false; SameSite=Strict; Secure=<enforce_https>
+
+- SSO Status Response (GET /auth/sso/status)
+  - Response: {"enabled": boolean, "configured": boolean, "ssoOnly": boolean, "loginUrl": string|null}
+  - No cookies set; returns public configuration status.
+
+- SSO Start Response (GET /auth/sso/start)
+  - Response: 302 Redirect to OIDC provider authorization URL
+  - Cookie: Sets _OIDC_STATE_COOKIE_NAME with state parameter (HttpOnly=true, SameSite=lax)
+  - Errors: 404 if SSO is not configured.
+
+- SSO Callback Response (GET /auth/sso/callback)
+  - Response: 302 Redirect to frontend with session cookies set
+  - Cookies: Sets access_token and csrf_token cookies for successful authentication
+  - Errors: 403 for invalid state, 404 for unconfigured SSO, 502 for provider errors.
 
 - LoginRequest (JSON body)
   - Fields: email (string), password (string)
@@ -297,12 +372,13 @@ JWTMiddleware --> User : "loads active user"
   - Success: 200 with resource data
   - Errors: 401 Not authenticated, 403 Forbidden (CSRF/validation failure)
 
-**Updated** Added CSRF token requirements and dual cookie strategy for enhanced security.
+**Updated** Added comprehensive OIDC SSO endpoint schemas and enhanced error handling.
 
 **Section sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [auth.ts](file://safe4ai-pilot/frontend/src/api/auth.ts)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 
 ### Authentication Flow
 - Client-side login flow
@@ -310,6 +386,14 @@ JWTMiddleware --> User : "loads active user"
   - Posts to /auth/login with both cookie and X-CSRF-Token header.
   - On success, invalidates local queries and navigates to chat.
   - On failure, displays a user-friendly error.
+
+- OIDC SSO flow
+  - Checks SSO availability via GET /auth/sso/status.
+  - Initiates SSO by navigating to GET /auth/sso/start.
+  - User authenticates with OIDC provider and returns to /auth/sso/callback.
+  - Backend validates state parameter and exchanges code for user info.
+  - Automatic user provisioning creates or updates user record.
+  - Session cookies are set and user is redirected to frontend.
 
 - Protected resource access
   - Frontend fetches /me and protected endpoints with credentials: include.
@@ -351,27 +435,33 @@ API-->>Page : "navigate('/chat')"
 - Token storage: Cookies only (HttpOnly for JWT, non-HttpOnly for CSRF); SameSite=Strict, Secure when enforced.
 - Password hashing: bcrypt for storage; timing-safe verification to prevent timing attacks.
 - Brute-force protection: Tracks failed attempts and locks accounts for a fixed period.
-- Rate limiting: 10/minute on /auth/login; global rate-limit exceeded handler.
+- Rate limiting: 10/minute on /auth/login; 20/minute on /auth/sso endpoints; global rate-limit exceeded handler.
 - CSRF protection: Double-submit token pattern with middleware validation; pre-login token generation.
 - Origin validation: Login requests require valid Origin header matching allowed origins list.
 - CORS: Configured origins list; credentials allowed; Content-Type and X-CSRF-Token allowed.
 - Security headers: Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy applied via middleware.
 - Token revocation: Logout updates token_valid_after to invalidate previously issued tokens.
+- OIDC security: State parameter validation using constant-time comparison; provider discovery with SSRF protection; secure cookie handling for state parameters.
+- SSO policy enforcement: When sso_only is enabled, password login is completely blocked regardless of credentials.
 
-**Updated** Enhanced with comprehensive CSRF protection measures and dual-cookie strategy.
+**Updated** Enhanced with comprehensive OIDC SSO security measures and SSO policy enforcement.
 
 **Section sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [config.py](file://safe4ai-pilot/app/config.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 
 ### Rate Limiting Policies
 - /auth/login: 10 requests per minute per remote address.
+- /auth/sso/status: No rate limiting (public endpoint).
+- /auth/sso/start: 20 requests per minute per remote address.
+- /auth/sso/callback: 20 requests per minute per remote address.
 - Chat endpoints: 30 per minute per IP.
 - Exceeded limits return 429 with a standardized error handled by the application.
 
-**Updated** Increased rate limit from 5 to 10 requests per minute for login endpoint.
+**Updated** Added OIDC SSO endpoints with appropriate rate limiting and removed rate limiting from status endpoint.
 
 **Section sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
@@ -384,23 +474,30 @@ API-->>Page : "navigate('/chat')"
 - CSRF validation failure: 403 with "CSRF validation failed" message.
 - Missing/invalid/expired token: 401 Not authenticated.
 - Role mismatch: 403 Forbidden.
+- SSO not configured: 404 for /auth/sso endpoints.
+- Invalid SSO state: 403 for state parameter mismatch.
+- OIDC provider errors: 502 for authentication failures.
+- SSO-only policy violation: 403 when password login attempted with SSO-only enabled.
 - Frontend catches errors and surfaces user-friendly messages.
 
-**Updated** Added CSRF validation failure handling and enhanced error responses.
+**Updated** Added comprehensive OIDC SSO error handling patterns and SSO policy enforcement errors.
 
 **Section sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
 - [LoginPage.tsx](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx)
 - [test_auth.py](file://safe4ai-pilot/tests/test_auth.py)
+- [test_oidc.py](file://safe4ai-pilot/tests/test_oidc.py)
 
 ### Practical Client-Side Examples
 - Token storage: Dual cookie strategy - cookies only; credentials: include ensures cookies are sent automatically.
 - CSRF integration: Automatic CSRF token fetching before login attempts; X-CSRF-Token header management.
+- SSO integration: Check /auth/sso/status to determine if OIDC login should be offered; handle redirects for SSO flow.
 - Renewal strategy: No automatic refresh; upon 401, redirect to login page and re-authenticate.
 - Logout: Call /auth/logout; client clears local cache and navigates to login.
+- SSO user experience: Display both password login and OIDC login options based on SSO availability; handle OIDC redirects seamlessly.
 
-**Updated** Enhanced with automatic CSRF token fetching and dual-cookie management.
+**Updated** Enhanced with OIDC SSO integration patterns and dual authentication approach.
 
 **Section sources**
 - [client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
@@ -415,6 +512,8 @@ API-->>Page : "navigate('/chat')"
   - SlowAPI for rate limiting.
   - Secure headers library for HTTP security headers.
   - SQLAlchemy models for user and session persistence.
+  - OIDC library for OpenID Connect protocol implementation.
+  - HTTP client for OIDC provider communication.
 
 - Frontend dependencies
   - React Query for caching and invalidation.
@@ -428,6 +527,7 @@ BCrypt["bcrypt"] --> MW
 Slow["SlowAPI"] --> AR["Auth Router"]
 Sec["Secure Headers"] --> APP["FastAPI App"]
 SQL["SQLAlchemy Models"] --> MW
+OIDC["OIDC Library"] --> AR
 RQ["@tanstack/react-query"] --> Hooks["useAuth.ts"]
 RR["react-router-dom"] --> Hooks
 Zod["zod"] --> LoginPage["LoginPage.tsx"]
@@ -439,6 +539,7 @@ CSRF["CSRF Protection"] --> APP
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 - [useAuth.ts](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts)
 - [LoginPage.tsx](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx)
 - [pyproject.toml](file://safe4ai-pilot/pyproject.toml)
@@ -449,6 +550,7 @@ CSRF["CSRF Protection"] --> APP
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
 - [useAuth.ts](file://safe4ai-pilot/frontend/src/hooks/useAuth.ts)
 - [LoginPage.tsx](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx)
 
@@ -457,6 +559,8 @@ CSRF["CSRF Protection"] --> APP
 - Rate limiting prevents abuse but may impact legitimate users under load; tune thresholds as needed.
 - Using cookies avoids extra headers and reduces payload sizes for protected requests.
 - CSRF validation adds minimal overhead but significantly improves security.
+- OIDC provider calls add network latency; consider implementing caching for provider metadata.
+- User provisioning adds database overhead; optimize user lookup and creation operations.
 - Consider moving to short-lived access tokens plus a separate long-lived refresh mechanism if extended sessions are required.
 
 ## Troubleshooting Guide
@@ -465,35 +569,52 @@ CSRF["CSRF Protection"] --> APP
   - Action: Ensure password meets minimum length; retry login.
 
 - 429 Too Many Requests
-  - Cause: Account locked due to repeated failures.
-  - Action: Wait for lock window to expire; avoid repeated attempts.
+  - Cause: Account locked due to repeated failures or exceeded rate limits.
+  - Action: Wait for lock window to expire; check rate limit thresholds; avoid repeated attempts.
 
 - 403 CSRF validation failed
   - Cause: Missing or mismatched X-CSRF-Token header; CSRF token cookie not present.
   - Action: Ensure GET /auth/csrf is called before login; verify CSRF token cookie and header match.
+
+- 403 Forbidden on SSO
+  - Cause: Invalid state parameter or SSO-only policy violation.
+  - Action: Check that state parameter matches stored state cookie; verify SSO configuration and policy settings.
+
+- 404 SSO Not Configured
+  - Cause: OIDC provider not properly configured in application settings.
+  - Action: Verify OIDC issuer URL, client ID, and client secret are set; check allowed domains configuration.
+
+- 404 Not Found on SSO endpoints
+  - Cause: SSO feature not enabled or OIDC configuration missing.
+  - Action: Enable SSO in application settings; ensure OIDC provider is reachable.
+
+- 502 OIDC Provider Error
+  - Cause: OIDC provider unavailable or authentication failed.
+  - Action: Check OIDC provider status; verify network connectivity; review provider logs.
 
 - 401 Not authenticated on protected routes
   - Cause: Missing or expired access_token cookie.
   - Action: Re-login; ensure cookies are enabled and SameSite policy allows cross-site subdomains if applicable.
 
 - 403 Forbidden
-  - Cause: Insufficient role for the requested endpoint.
-  - Action: Verify user role; contact administrator if incorrect.
+  - Cause: Insufficient role for the requested endpoint or SSO policy violation.
+  - Action: Verify user role; check SSO-only configuration; contact administrator if incorrect.
 
 - CORS or CSRF issues
   - Cause: Origins mismatch or missing credentials support.
   - Action: Confirm allowed_origins and credentials inclusion; ensure SameSite=Strict is acceptable.
 
-**Updated** Added CSRF validation failure troubleshooting and enhanced error diagnosis.
+**Updated** Added comprehensive OIDC SSO troubleshooting scenarios and SSO policy enforcement issues.
 
 **Section sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
 - [main.py](file://safe4ai-pilot/app/main.py)
 - [test_auth.py](file://safe4ai-pilot/tests/test_auth.py)
+- [test_oidc.py](file://safe4ai-pilot/tests/test_oidc.py)
 
 ## Conclusion
-The authentication system provides robust login/logout flows with JWT cookies, CSRF protection, brute-force protections, and role-based access control. It leverages FastAPI middleware and rate limiting to maintain security and reliability. Frontend integration uses cookies and React Query for seamless user experience with automatic CSRF token management. The enhanced CSRF protection through double-submit tokens significantly improves defense against cross-site request forgery attacks while maintaining usability.
+The authentication system provides robust login/logout flows with JWT cookies, CSRF protection, brute-force protections, role-based access control, and comprehensive OIDC Single Sign-On (SSO) integration. The OIDC SSO system includes full authorization flow handling, automatic user provisioning, state parameter validation, and seamless integration with existing authentication patterns. It leverages FastAPI middleware and rate limiting to maintain security and reliability. Frontend integration uses cookies and React Query for seamless user experience with automatic CSRF token management and dual authentication options (password and SSO). The enhanced CSRF protection through double-submit tokens and OIDC-specific security measures significantly improves defense against cross-site request forgery attacks while maintaining usability and supporting enterprise identity management requirements.
 
 ## Appendices
 
@@ -522,10 +643,34 @@ The authentication system provides robust login/logout flows with JWT cookies, C
 - Origin validation: Login requests require valid Origin header.
 - Middleware enforcement: protect_csrf middleware validates CSRF tokens for all requests.
 - Token lifecycle: CSRF tokens cleared on logout with 300-second expiration.
+- OIDC state protection: Constant-time state parameter validation prevents timing attacks.
 
-**New Section** Added comprehensive CSRF protection documentation.
+**Updated** Added OIDC state protection and enhanced CSRF validation details.
 
 **Section sources**
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [main.py](file://safe4ai-pilot/app/main.py)
+- [test_auth.py](file://safe4ai-pilot/tests/test_auth.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
+
+### OIDC Configuration Parameters
+- enabled: Boolean flag to enable/disable OIDC SSO.
+- issuer_url: OpenID Connect provider discovery endpoint URL.
+- client_id: Registered application client identifier.
+- client_secret: Client secret for OIDC authentication.
+- redirect_uri: Application callback URL for OIDC authorization responses.
+- allowed_domains: List of email domains permitted for OIDC authentication.
+- auto_provision: Boolean flag to automatically create users from OIDC user info.
+
+**Section sources**
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
+- [test_oidc.py](file://safe4ai-pilot/tests/test_oidc.py)
+
+### SSO Policy Enforcement
+- sso_only: When enabled, password login is completely blocked regardless of credentials.
+- Combined with OIDC configuration, this enables enterprise Single Sign-On requirements.
+- Frontend should detect SSO-only mode and hide password login options.
+
+**Section sources**
+- [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [test_auth.py](file://safe4ai-pilot/tests/test_auth.py)

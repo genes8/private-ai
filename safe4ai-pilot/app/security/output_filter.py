@@ -14,6 +14,27 @@ logger = structlog.get_logger(__name__)
 
 _LONG_ANSWER_THRESHOLD = 4000
 
+# Rule 3 — inference labeling guard.
+# If the answer uses general-inference / model-knowledge language, it must
+# carry a clear disclaimer that the information is not stated in the documents.
+# This checks labeling only; it does NOT verify factuality and cannot catch a
+# fabricated entity-specific fact stated with no marker at all.
+_INFERENCE_MARKERS = (
+    "general knowledge",
+    "general inference",
+    "general model knowledge",
+    "general world knowledge",
+    "model knowledge",
+    "common knowledge",
+)
+_DISCLAIMER_MARKERS = (
+    "not stated directly in the documents",
+    "not stated in the documents",
+    "not confirmed in the documents",
+    "documents do not state",
+    "not found in the documents",
+)
+
 
 def _find_pii_matches(text: str) -> list[str]:
     """Return all PII substrings found in *text*."""
@@ -40,6 +61,8 @@ class OutputFilter:
            code path that skipped citation population.
         1. If the answer contains PII that is absent from every source chunk,
            block the response.
+        3. If the answer uses general-inference / model-knowledge language but
+           lacks a clear "not in the documents" disclaimer, block the response.
         2. If the answer exceeds 4 000 chars, log a warning (still allowed).
         """
         # Rule 0: Citation presence check
@@ -61,6 +84,19 @@ class OutputFilter:
                         allowed=False,
                         reason="Output contains PII not in source documents",
                     )
+
+        # Rule 3: Inference labeling check
+        # When the answer uses general-inference / model-knowledge language but
+        # carries no "not in the documents" disclaimer, block it. Only enforced
+        # when inference language is present — grounded answers are unaffected.
+        lowered = answer.lower()
+        if any(m in lowered for m in _INFERENCE_MARKERS) and not any(
+            m in lowered for m in _DISCLAIMER_MARKERS
+        ):
+            return GuardResult(
+                allowed=False,
+                reason="Inference answer missing required disclaimer",
+            )
 
         # Rule 2: Suspicious length heuristic
         if len(answer) > _LONG_ANSWER_THRESHOLD:

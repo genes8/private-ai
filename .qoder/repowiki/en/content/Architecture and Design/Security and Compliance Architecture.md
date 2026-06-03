@@ -1,3 +1,6 @@
+Now I have a comprehensive understanding of the new security components. Let me update the security and compliance architecture documentation to reflect these changes:
+
+<docs>
 # Security and Compliance Architecture
 
 <cite>
@@ -7,11 +10,19 @@
 - [content_filter.py](file://safe4ai-pilot/app/security/content_filter.py)
 - [output_filter.py](file://safe4ai-pilot/app/security/output_filter.py)
 - [upload_validator.py](file://safe4ai-pilot/app/security/upload_validator.py)
+- [pinned_http.py](file://safe4ai-pilot/app/security/pinned_http.py)
+- [url_validator.py](file://safe4ai-pilot/app/security/url_validator.py)
 - [models.py](file://safe4ai-pilot/app/models.py)
 - [config.py](file://safe4ai-pilot/app/config.py)
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
-- [admin_audit.tsx](file://design/components/AdminAudit.tsx)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
+- [provider_settings.py](file://safe4ai-pilot/app/services/provider_settings.py)
+- [settings_service.py](file://safe4ai-pilot/app/services/settings_service.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
+- [provider_clients.py](file://safe4ai-pilot/app/services/provider_clients.py)
+- [runtime_config.py](file://safe4ai-pilot/app/services/runtime_config.py)
+- [AdminAudit.tsx](file://design/components/AdminAudit.tsx)
 - [AdminShell.tsx](file://design/components/AdminShell.tsx)
 - [chat_routes.py](file://safe4ai-pilot/app/api/chat_routes.py)
 - [admin_routes.py](file://safe4ai-pilot/app/api/admin_routes.py)
@@ -31,11 +42,11 @@
 
 ## Update Summary
 **Changes Made**
-- Enhanced authentication security section with password strength requirements
-- Added real-time validation feedback mechanisms
-- Updated admin password generation with dynamic SEED_ADMIN_PASSWORD environment variable
-- Expanded security controls documentation with comprehensive password policy enforcement
-- Added frontend password validation feedback system
+- Added new security layer for HTTP transport hardening against DNS rebinding attacks
+- Integrated URL validator with SSRF protection mechanisms
+- Enhanced provider URL validation with IP address pinning for outbound connections
+- Updated security architecture to include transport-level security controls
+- Added comprehensive SSRF protection through URL validation and transport pinning
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -50,10 +61,10 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document describes the security and compliance architecture of the Private AI system. It focuses on the three-tier security architecture: input validation, content filtering, and output validation. It also documents audit logging, compliance reporting, data privacy measures, access control, threat detection, PII detection and masking, content safety filters, human review workflows, regulatory compliance posture, data retention, and incident response capabilities. The system now implements enhanced password security measures including 12+ character minimum requirements with mixed case, digits, and special characters, real-time validation feedback, and dynamic admin password generation via SEED_ADMIN_PASSWORD environment variable. The goal is to provide a clear, actionable understanding of how the system protects data, ensures responsible AI usage, and remains compliant with applicable regulations.
+This document describes the security and compliance architecture of the Private AI system. It focuses on the three-tier security architecture: input validation, content filtering, and output validation. It also documents audit logging, compliance reporting, data privacy measures, access control, threat detection, PII detection and masking, content safety filters, human review workflows, regulatory compliance posture, data retention, and incident response capabilities. The system now implements enhanced authentication security measures including 12+ character minimum requirements with mixed case, digits, and special characters, real-time validation feedback, and dynamic admin password generation via SEED_ADMIN_PASSWORD environment variable. **The system has been enhanced with new transport-level security controls that prevent DNS rebinding attacks and provide comprehensive SSRF protection through URL validation and IP address pinning mechanisms.** The goal is to provide a clear, actionable understanding of how the system protects data, ensures responsible AI usage, and remains compliant with applicable regulations.
 
 ## Project Structure
-The security and compliance features are implemented across backend services, security guards, audit and observability modules, and administrative UI components. The backend pipeline integrates security checks early and often, while the frontend provides administrative dashboards for auditing and compliance oversight. Enhanced authentication security now includes comprehensive password validation at both frontend and backend levels.
+The security and compliance features are implemented across backend services, security guards, audit and observability modules, and administrative UI components. The backend pipeline integrates security checks early and often, while the frontend provides administrative dashboards for auditing and compliance oversight. Enhanced authentication security now includes comprehensive password validation at both frontend and backend levels. **The system now includes transport-level security controls that provide additional protection against DNS rebinding attacks and SSRF vulnerabilities through URL validation and IP address pinning.**
 
 ```mermaid
 graph TB
@@ -68,12 +79,19 @@ ChatRoutes["chat_routes.py"]
 AdminRoutes["admin_routes.py"]
 ObsRoutes["observability_routes.py"]
 AuthRouter["router.py"]
+SettingsRoutes["settings_routes.py"]
 end
 subgraph "Security Guards"
 InputGuard["input_guard.py"]
 ContentFilter["content_filter.py"]
 OutputFilter["output_filter.py"]
 UploadValidator["upload_validator.py"]
+URLValidator["url_validator.py"]
+end
+subgraph "Transport Security"
+PinnedHTTP["pinned_http.py"]
+ProviderClients["provider_clients.py"]
+RuntimeConfig["runtime_config.py"]
 end
 subgraph "Auth & Access Control"
 Middleware["middleware.py"]
@@ -98,6 +116,10 @@ ChatRoutes --> InputGuard
 ChatRoutes --> ContentFilter
 ChatRoutes --> OutputFilter
 ChatRoutes --> UploadValidator
+SettingsRoutes --> URLValidator
+SettingsRoutes --> PinnedHTTP
+ProviderClients --> PinnedHTTP
+RuntimeConfig --> URLValidator
 AdminRoutes --> Middleware
 AuthRouter --> Middleware
 InputGuard --> Models
@@ -115,10 +137,15 @@ SeedScript --> AuthRouter
 - [content_filter.py:1-64](file://safe4ai-pilot/app/security/content_filter.py#L1-L64)
 - [output_filter.py:1-61](file://safe4ai-pilot/app/security/output_filter.py#L1-L61)
 - [upload_validator.py:1-73](file://safe4ai-pilot/app/security/upload_validator.py#L1-L73)
+- [url_validator.py:1-75](file://safe4ai-pilot/app/security/url_validator.py#L1-L75)
+- [pinned_http.py:1-117](file://safe4ai-pilot/app/security/pinned_http.py#L1-L117)
 - [models.py:1-95](file://safe4ai-pilot/app/models.py#L1-L95)
 - [config.py:1-48](file://safe4ai-pilot/app/config.py#L1-L48)
 - [middleware.py:1-83](file://safe4ai-pilot/app/auth/middleware.py#L1-L83)
 - [router.py:1-170](file://safe4ai-pilot/app/auth/router.py#L1-L170)
+- [settings_routes.py:16-17](file://safe4ai-pilot/app/api/settings_routes.py#L16-L17)
+- [provider_clients.py:8](file://safe4ai-pilot/app/services/provider_clients.py#L8)
+- [runtime_config.py:12](file://safe4ai-pilot/app/services/runtime_config.py#L12)
 - [admin_audit.tsx:1-200](file://design/components/AdminAudit.tsx#L1-L200)
 - [AdminShell.tsx:1-200](file://design/components/AdminShell.tsx#L1-L200)
 - [chat_routes.py:1-200](file://safe4ai-pilot/app/api/chat_routes.py#L1-L200)
@@ -142,6 +169,7 @@ This section outlines the core security and compliance building blocks and their
 - Output Validation Layer (OutputFilter): Ensures generated answers do not contain hallucinated PII and meet length heuristics.
 - Upload Validation (UploadValidator): Enforces allowed file types, MIME types, magic bytes, and size limits.
 - **Enhanced Authentication Security**: Implements comprehensive password strength requirements (12+ characters with mixed case, digits, special characters), real-time validation feedback, and dynamic admin password generation via SEED_ADMIN_PASSWORD environment variable.
+- **Transport-Level Security Controls**: Prevents DNS rebinding attacks through IP address pinning and provides SSRF protection via URL validation with private/reserved IP range blocking.
 - Access Control (JWT Auth, RBAC): Authenticates users via signed JWT cookies and enforces role-based access.
 - Audit Logging and Retention: Logs security-relevant events and retains audit logs per policy.
 - Observability and Compliance Reporting: Tracing, cost tracking, and feedback capture support compliance reporting.
@@ -152,6 +180,8 @@ This section outlines the core security and compliance building blocks and their
 - [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
+- [url_validator.py:11-21](file://safe4ai-pilot/app/security/url_validator.py#L11-L21)
+- [pinned_http.py:17-108](file://safe4ai-pilot/app/security/pinned_http.py#L17-L108)
 - [router.py:32](file://safe4ai-pilot/app/auth/router.py#L32)
 - [admin_routes.py:103-115](file://safe4ai-pilot/app/api/admin_routes.py#L103-L115)
 - [middleware.py:25-83](file://safe4ai-pilot/app/auth/middleware.py#L25-L83)
@@ -165,6 +195,7 @@ The system employs a layered security architecture integrated into the RAG pipel
 - Input Guard: Validates and sanitizes queries before rewriting and retrieval.
 - Content Filter: Removes PII-containing chunks from the retrieval context.
 - Output Filter: Reviews generated answers for hallucinated PII and suspicious length.
+- **Transport Security**: Validates provider URLs and pins resolved IP addresses to prevent DNS rebinding attacks.
 
 ```mermaid
 graph LR
@@ -181,6 +212,12 @@ IG["InputGuard"]
 CF["ContentFilter"]
 OF["OutputFilter"]
 end
+subgraph "Transport Security"
+URLV["URL Validator"]
+PH["Pinned HTTP Transport"]
+end
+URLV --> PH
+PH --> GEN
 ```
 
 **Diagram sources**
@@ -188,6 +225,8 @@ end
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
 - [content_filter.py:29-64](file://safe4ai-pilot/app/security/content_filter.py#L29-L64)
 - [output_filter.py:32-61](file://safe4ai-pilot/app/security/output_filter.py#L32-L61)
+- [url_validator.py:54-75](file://safe4ai-pilot/app/security/url_validator.py#L54-L75)
+- [pinned_http.py:95-117](file://safe4ai-pilot/app/security/pinned_http.py#L95-L117)
 
 ## Detailed Component Analysis
 
@@ -342,6 +381,62 @@ Note over Seed,DB : Dynamic password generation
 - [seed.py:134-136](file://safe4ai-pilot/scripts/seed.py#L134-L136)
 - [LoginPage.tsx:11-14](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx#L11-L14)
 
+### Transport-Level Security Controls
+**Updated** The system now includes comprehensive transport-level security controls to prevent DNS rebinding attacks and provide SSRF protection.
+
+#### URL Validator (SSRF Protection)
+The URL validator enforces:
+- **Scheme Validation**: Only allows http and https schemes
+- **Hostname Resolution**: Resolves hostnames to IP addresses
+- **Private Network Blocking**: Blocks private/reserved IP ranges including:
+  - RFC1918 private networks (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+  - Loopback addresses (127.0.0.0/8, ::1/128)
+  - Link-local addresses (169.254.0.0/16, fe80::/10)
+  - Zero addresses (0.0.0.0/8)
+  - Unique-local IPv6 addresses (fc00::/7)
+- **DNS Rebinding Prevention**: Returns the first resolved IP to prevent DNS rebinding attacks
+
+#### Pinned HTTP Transport System
+The pinned HTTP transport system provides:
+- **IP Address Pinning**: Binds resolved IP addresses to URLs to prevent DNS rebinding
+- **Dual Transport Support**: Provides both synchronous and asynchronous transport classes
+- **Network Backend Wrapping**: Wraps underlying network backends to intercept connections
+- **Hostname Matching**: Only redirects connections for the original hostname
+- **Connection Pool Management**: Uses httpcore ConnectionPool for efficient connection handling
+
+```mermaid
+flowchart TD
+Start(["validate_provider_url(url)"]) --> Parse["Parse URL<br/>scheme + hostname"]
+Parse --> Scheme{"Scheme ∈ {http, https}?"}
+Scheme --> |No| ErrScheme["HTTPException(422)<br/>Invalid scheme"]
+Scheme --> |Yes| Hostname{"Has hostname?"}
+Hostname --> |No| ErrHost["HTTPException(422)<br/>Missing hostname"]
+Hostname --> |Yes| Resolve["socket.getaddrinfo()<br/>Resolve hostname"]
+Resolve --> CheckIP{"IP in blocked networks?"}
+CheckIP --> |Yes| ErrIP["HTTPException(422)<br/>Private/reserved IP"]
+CheckIP --> |No| ReturnIP["Return (clean_url, resolved_ip)"]
+subgraph "Pinned Transport Flow"
+URLV["URL Validator"] --> Clean["Clean URL"]
+URLV --> IP["Resolved IP"]
+Clean --> PHT["Pinned HTTP Transport"]
+IP --> PHT
+PHT --> Connect["Connect TCP<br/>with IP pinning"]
+end
+```
+
+**Diagram sources**
+- [url_validator.py:54-75](file://safe4ai-pilot/app/security/url_validator.py#L54-L75)
+- [url_validator.py:26-51](file://safe4ai-pilot/app/security/url_validator.py#L26-L51)
+- [pinned_http.py:95-117](file://safe4ai-pilot/app/security/pinned_http.py#L95-L117)
+- [pinned_http.py:17-108](file://safe4ai-pilot/app/security/pinned_http.py#L17-L108)
+
+**Section sources**
+- [url_validator.py:11-21](file://safe4ai-pilot/app/security/url_validator.py#L11-L21)
+- [url_validator.py:26-51](file://safe4ai-pilot/app/security/url_validator.py#L26-L51)
+- [url_validator.py:54-75](file://safe4ai-pilot/app/security/url_validator.py#L54-L75)
+- [pinned_http.py:17-108](file://safe4ai-pilot/app/security/pinned_http.py#L17-L108)
+- [pinned_http.py:111-117](file://safe4ai-pilot/app/security/pinned_http.py#L111-L117)
+
 ### Access Control and Authentication
 Access control is enforced via:
 - JWT-based authentication with signed tokens stored in HTTP-only cookies.
@@ -411,6 +506,7 @@ Reports --> Retention
 - Strict cookie attributes (HTTP-only, SameSite, Secure) to mitigate XSS and CSRF risks.
 - Password hashing with bcrypt and secure JWT signing.
 - **Enhanced Password Security**: Comprehensive password validation and generation mechanisms.
+- **Transport Security**: URL validation and IP pinning prevent unauthorized network access and data exfiltration.
 
 **Section sources**
 - [content_filter.py:13-18](file://safe4ai-pilot/app/security/content_filter.py#L13-L18)
@@ -418,6 +514,8 @@ Reports --> Retention
 - [upload_validator.py:70-73](file://safe4ai-pilot/app/security/upload_validator.py#L70-L73)
 - [router.py:96-103](file://safe4ai-pilot/app/auth/router.py#L96-L103)
 - [middleware.py:25-48](file://safe4ai-pilot/app/auth/middleware.py#L25-L48)
+- [url_validator.py:11-21](file://safe4ai-pilot/app/security/url_validator.py#L11-L21)
+- [pinned_http.py:17-108](file://safe4ai-pilot/app/security/pinned_http.py#L17-L108)
 
 ### Human Review Workflows
 Low-confidence or flagged outputs trigger a human review flag in the state machine. Administrators can review flagged items via the admin interface.
@@ -441,16 +539,19 @@ Resolved --> Active : "continue"
 - Upload size limits and allowed formats reduce risk exposure.
 - Administrative dashboards enable compliance reporting and oversight.
 - **Enhanced Password Security**: Meets regulatory requirements for strong authentication practices.
+- **Transport Security**: Provides additional protection against network-based attacks and data exfiltration.
 
 **Section sources**
 - [config.py:16-21](file://safe4ai-pilot/app/config.py#L16-L21)
 - [upload_validator.py:21](file://safe4ai-pilot/app/security/upload_validator.py#L21)
+- [url_validator.py:11-21](file://safe4ai-pilot/app/security/url_validator.py#L11-L21)
 
 ### Integration with External Security Tools and Monitoring
 - Structured logging supports integration with SIEM and log aggregation platforms.
 - Tracing and cost tracking enable observability for compliance reporting.
 - Feedback collection supports continuous monitoring of content safety.
 - **Enhanced Authentication**: Strong password policies integrate with external identity management systems.
+- **Transport Security**: URL validation and IP pinning integrate with network security monitoring systems.
 
 **Section sources**
 - [tracer.py:1-200](file://safe4ai-pilot/observability/tracer.py#L1-L200)
@@ -468,7 +569,7 @@ Resolved --> Active : "continue"
 - [verify_deletion.py:1-200](file://safe4ai-pilot/scripts/verify_deletion.py#L1-L200)
 
 ## Dependency Analysis
-The security guards depend on shared models and configuration, while authentication depends on database-backed user records. Observability integrates with admin routes for reporting. Enhanced password security creates additional dependencies between frontend validation, backend enforcement, and seed script generation.
+The security guards depend on shared models and configuration, while authentication depends on database-backed user records. Observability integrates with admin routes for reporting. Enhanced password security creates additional dependencies between frontend validation, backend enforcement, and seed script generation. **The transport security components create dependencies across provider configuration, authentication flows, and runtime configuration management.**
 
 ```mermaid
 graph TB
@@ -485,6 +586,12 @@ Seed["Seed Script"] --> AR
 AdminRoutes["Admin Routes"] --> Tr["Tracer"]
 AdminRoutes --> CT["CostTracker"]
 AdminRoutes --> FB["Feedback"]
+URLV["URL Validator"] --> PH["Pinned HTTP Transport"]
+PH --> PC["Provider Clients"]
+PC --> RC["Runtime Config"]
+RC --> URLV
+SettingsRoutes["Settings Routes"] --> URLV
+SettingsRoutes --> PH
 ```
 
 **Diagram sources**
@@ -497,10 +604,17 @@ AdminRoutes --> FB["Feedback"]
 - [models.py:38](file://safe4ai-pilot/app/models.py#L38)
 - [config.py:7](file://safe4ai-pilot/app/config.py#L7)
 - [seed.py:134-136](file://safe4ai-pilot/scripts/seed.py#L134-L136)
+- [url_validator.py:12](file://safe4ai-pilot/app/security/url_validator.py#L12)
+- [pinned_http.py:6](file://safe4ai-pilot/app/security/pinned_http.py#L6)
+- [provider_clients.py:8](file://safe4ai-pilot/app/services/provider_clients.py#L8)
+- [runtime_config.py:12](file://safe4ai-pilot/app/services/runtime_config.py#L12)
+- [settings_routes.py:16-17](file://safe4ai-pilot/app/api/settings_routes.py#L16-L17)
 
 **Section sources**
 - [models.py:38-95](file://safe4ai-pilot/app/models.py#L38-L95)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
+- [url_validator.py:11-21](file://safe4ai-pilot/app/security/url_validator.py#L11-L21)
+- [pinned_http.py:17-108](file://safe4ai-pilot/app/security/pinned_http.py#L17-L108)
 
 ## Performance Considerations
 - Regex-based PII detection scales linearly with text size; keep queries and chunks reasonably sized.
@@ -508,6 +622,8 @@ AdminRoutes --> FB["Feedback"]
 - Rate limiting on authentication mitigates brute-force attacks without impacting legitimate users.
 - Cookie attributes improve security with minimal overhead.
 - **Enhanced Password Security**: Additional computational overhead for password validation is minimal and occurs only during user creation and authentication.
+- **Transport Security**: URL resolution and IP pinning add minimal overhead to provider configuration and authentication flows.
+- **SSRF Protection**: URL validation occurs during provider setup and OIDC configuration, with minimal impact on runtime performance.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -516,6 +632,8 @@ Common issues and resolutions:
 - Security guard denials: Review guard reasons and adjust patterns or thresholds if needed.
 - Audit gaps: Validate retention settings and scheduled cleanup jobs.
 - **Password validation issues**: Ensure passwords meet 12+ character requirement with mixed case, digits, and special characters. Check both frontend and backend validation messages.
+- **SSRF validation errors**: Verify provider URLs use allowed schemes (http/https) and resolve to public IP addresses. Check firewall and network configuration.
+- **DNS rebinding issues**: Ensure provider URLs resolve to stable IP addresses. Verify DNS configuration and network security policies.
 
 **Section sources**
 - [config.py:22-31](file://safe4ai-pilot/app/config.py#L22-L31)
@@ -523,9 +641,10 @@ Common issues and resolutions:
 - [upload_validator.py:39-68](file://safe4ai-pilot/app/security/upload_validator.py#L39-L68)
 - [test_security_guards.py:1-200](file://safe4ai-pilot/tests/test_security_guards.py#L1-L200)
 - [test_security_headers.py:1-200](file://safe4ai-pilot/tests/test_security_headers.py#L1-L200)
+- [url_validator.py:26-51](file://safe4ai-pilot/app/security/url_validator.py#L26-L51)
 
 ## Conclusion
-The Private AI system implements a robust, multi-layered security architecture integrated into the RAG pipeline. Input, content, and output guards protect against prompt injection, PII leakage, and hallucinations. Strong access control, structured audit logging, and configurable retention support compliance reporting. Human review workflows and observability tooling enable continuous monitoring and incident response. **The enhanced authentication security measures now provide comprehensive password validation, real-time feedback, and dynamic password generation capabilities that significantly strengthen the system's overall security posture.** Together, these controls form a comprehensive foundation for responsible AI deployment and regulatory compliance.
+The Private AI system implements a robust, multi-layered security architecture integrated into the RAG pipeline. Input, content, and output guards protect against prompt injection, PII leakage, and hallucinations. Strong access control, structured audit logging, and configurable retention support compliance reporting. Human review workflows and observability tooling enable continuous monitoring and incident response. **The enhanced authentication security measures now provide comprehensive password validation, real-time feedback, and dynamic password generation capabilities that significantly strengthen the system's overall security posture.** **The new transport-level security controls provide critical protection against DNS rebinding attacks and SSRF vulnerabilities through URL validation and IP address pinning mechanisms, ensuring secure outbound connections to provider services and external APIs.** Together, these controls form a comprehensive foundation for responsible AI deployment and regulatory compliance.
 
 ## Appendices
 
@@ -541,6 +660,8 @@ T4["Malicious Uploads"] --> M4["UploadValidator"]
 T5["Unauthorized Access"] --> M5["Auth Middleware + RBAC"]
 T6["Brute Force Login"] --> M6["Rate Limiting + Lockout"]
 T7["Weak Passwords"] --> M7["Password Strength Validation"]
+T8["DNS Rebinding Attack"] --> M8["URL Validator + Pinned Transport"]
+T9["SSRF via Private IPs"] --> M9["Private IP Blocking"]
 M1 --> R1["Sanitized Query"]
 M2 --> R2["PII-Free Context"]
 M3 --> R3["Verified Answer"]
@@ -548,6 +669,8 @@ M4 --> R4["Allowed File"]
 M5 --> R5["Authenticated User"]
 M6 --> R6["Locked Account"]
 M7 --> R7["Strong Password"]
+M8 --> R8["Secure Transport"]
+M9 --> R9["Blocked SSRF"]
 ```
 
 #### Enhanced Password Security Flow
@@ -563,11 +686,27 @@ style Backend fill:#f3e5f5
 style Hash fill:#e8f5e8
 ```
 
+#### Transport Security Flow
+```mermaid
+flowchart TD
+Start(["Provider Configuration"]) --> URLV["URL Validator<br/>Scheme + Hostname Check"]
+URLV --> Resolve["Resolve Hostname<br/>to IP Addresses"]
+Resolve --> BlockCheck{"IP in Blocked Networks?"}
+BlockCheck --> |Yes| Error["HTTPException(422)<br/>SSRF Protection"]
+BlockCheck --> |No| Pin["Pin First IP Address"]
+Pin --> PHT["Pinned HTTP Transport<br/>IP Address Binding"]
+PHT --> Connect["Secure Connection<br/>Prevent DNS Rebinding"]
+style URLV fill:#ffebee
+style PHT fill:#e8f5e8
+```
+
 **Diagram sources**
 - [router.py:63-65](file://safe4ai-pilot/app/auth/router.py#L63-L65)
 - [admin_routes.py:103-115](file://safe4ai-pilot/app/api/admin_routes.py#L103-L115)
 - [seed.py:134-136](file://safe4ai-pilot/scripts/seed.py#L134-L136)
 - [LoginPage.tsx:11-14](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx#L11-L14)
+- [url_validator.py:54-75](file://safe4ai-pilot/app/security/url_validator.py#L54-L75)
+- [pinned_http.py:95-117](file://safe4ai-pilot/app/security/pinned_http.py#L95-L117)
 
 ### Regulatory Compliance Checklist
 - Data minimization: Limit query and chunk sizes; retain audit logs per policy.
@@ -576,3 +715,7 @@ style Hash fill:#e8f5e8
 - Accountability: Structured logs and human review workflows.
 - Data subject rights: Deletion and backup scripts support data lifecycle.
 - **Enhanced Password Security**: Meets regulatory requirements for strong authentication practices including 12+ character minimum, complexity requirements, and real-time validation feedback.
+- **Transport Security**: Provides additional protection against network-based attacks and data exfiltration through URL validation and IP pinning mechanisms.
+- **SSRF Protection**: Complies with security standards requiring protection against server-side request forgery attacks targeting internal networks.
+- **DNS Rebinding Prevention**: Protects against modern attack vectors that exploit DNS resolution timing to bypass security controls.
+</existing_wiki_content>

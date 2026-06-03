@@ -284,6 +284,52 @@ def test_output_filter_pii_still_checked_when_citations_present() -> None:
 
 
 # ---------------------------------------------------------------------------
+# OutputFilter — inference labeling guard (Rule 3)
+# ---------------------------------------------------------------------------
+
+
+def test_output_filter_blocks_inference_without_disclaimer() -> None:
+    """Inference language without a 'not in the documents' disclaimer is blocked."""
+    from app.security.output_filter import OutputFilter
+
+    of = OutputFilter()
+    answer = "Based on general knowledge, the headquarters is in London."
+    chunk = _make_chunk("The Alliance is UK-based.")
+    result = of.check(answer, [chunk], citations=[_make_citation()])
+    assert result.allowed is False
+    assert "disclaimer" in result.reason.lower()
+
+
+def test_output_filter_allows_inference_with_disclaimer() -> None:
+    """The canonical labeled inference passes (inference + disclaimer markers)."""
+    from app.security.output_filter import OutputFilter
+
+    of = OutputFilter()
+    answer = (
+        "From the documents: the Alliance is UK-based. "
+        "General inference: this is not stated directly in the documents; it is "
+        "general model knowledge or an inference, but the Houses of Parliament "
+        "are in London."
+    )
+    chunk = _make_chunk("The Alliance is UK-based, launched at the Houses of Parliament.")
+    result = of.check(answer, [chunk], citations=[_make_citation()])
+    assert result.allowed is True
+    assert result.reason == "ok"
+
+
+def test_output_filter_allows_grounded_answer_without_inference_language() -> None:
+    """A plain grounded answer with no inference markers is unaffected by Rule 3."""
+    from app.security.output_filter import OutputFilter
+
+    of = OutputFilter()
+    answer = "The refund policy is 30 days per the documents."
+    chunk = _make_chunk("The refund policy is 30 days.")
+    result = of.check(answer, [chunk], citations=[_make_citation()])
+    assert result.allowed is True
+    assert result.reason == "ok"
+
+
+# ---------------------------------------------------------------------------
 # UploadValidator
 # ---------------------------------------------------------------------------
 

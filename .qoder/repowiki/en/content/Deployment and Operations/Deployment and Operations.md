@@ -4,6 +4,7 @@
 **Referenced Files in This Document**
 - [docker-compose.yml](file://safe4ai-pilot/docker-compose.yml)
 - [docker-compose.override.yml](file://safe4ai-pilot/docker-compose.override.yml)
+- [docker-compose.ollama.yml](file://safe4ai-pilot/docker-compose.ollama.yml)
 - [app/Dockerfile](file://safe4ai-pilot/app/Dockerfile)
 - [frontend/Dockerfile](file://safe4ai-pilot/frontend/Dockerfile)
 - [frontend/nginx.conf](file://safe4ai-pilot/frontend/nginx.conf)
@@ -12,9 +13,19 @@
 - [scripts/backup.py](file://safe4ai-pilot/scripts/backup.py)
 - [scripts/healthcheck.py](file://safe4ai-pilot/scripts/healthcheck.py)
 - [scripts/migrate.py](file://safe4ai-pilot/scripts/migrate.py)
+- [scripts/verify_airgap_package.py](file://safe4ai-pilot/scripts/verify_airgap_package.py)
 - [.github/workflows/ci.yml](file://safe4ai-pilot/.github/workflows/ci.yml)
 - [app/config.py](file://safe4ai-pilot/app/config.py)
+- [docs/air-gap-runbook.md](file://safe4ai-pilot/docs/air-gap-runbook.md)
+- [docs/deployment.md](file://safe4ai-pilot/docs/deployment.md)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive air-gap deployment section with step-by-step offline deployment instructions
+- Integrated air-gap verification procedures and artifact export processes
+- Updated deployment strategies to include air-gapped environment support
+- Enhanced operational procedures with offline validation and security considerations
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -22,21 +33,22 @@
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
-10. [Appendices](#appendices)
+6. [Air-Gap Deployment Strategy](#air-gap-deployment-strategy)
+7. [Dependency Analysis](#dependency-analysis)
+8. [Performance Considerations](#performance-considerations)
+9. [Troubleshooting Guide](#troubleshooting-guide)
+10. [Conclusion](#conclusion)
+11. [Appendices](#appendices)
 
 ## Introduction
-This document provides comprehensive deployment and operations guidance for the Private AI system. It covers containerized deployment with Docker Compose, orchestration of backend, frontend, database, vector store, and observability tools, production configuration, scaling considerations, backup and restore procedures, CI/CD automation, monitoring and alerting, security hardening, and operational best practices. The content is grounded in the repository’s actual deployment artifacts and operational scripts.
+This document provides comprehensive deployment and operations guidance for the Private AI system. It covers containerized deployment with Docker Compose, orchestration of backend, frontend, database, vector store, and observability tools, production configuration, scaling considerations, backup and restore procedures, CI/CD automation, monitoring and alerting, security hardening, and operational best practices. The content is grounded in the repository's actual deployment artifacts and operational scripts, including comprehensive air-gap deployment capabilities for fully isolated environments.
 
 ## Project Structure
 The deployment stack is orchestrated by Docker Compose with two primary service groups:
 - Data and model services: PostgreSQL with pgvector, Qdrant vector database, and Ollama local LLM service.
 - Application services: FastAPI backend application and Nginx-based frontend.
 
-Development overrides enable hot reload and live volume mounts for rapid iteration.
+Development overrides enable hot reload and live volume mounts for rapid iteration. The system now supports both standard online deployments and fully air-gapped offline deployments through comprehensive artifact packaging and verification procedures.
 
 ```mermaid
 graph TB
@@ -62,10 +74,10 @@ APP --> |"Ollama"| OL
 ```
 
 **Diagram sources**
-- [docker-compose.yml:1-119](file://safe4ai-pilot/docker-compose.yml#L1-L119)
+- [docker-compose.yml:1-87](file://safe4ai-pilot/docker-compose.yml#L1-L87)
 
 **Section sources**
-- [docker-compose.yml:1-119](file://safe4ai-pilot/docker-compose.yml#L1-L119)
+- [docker-compose.yml:1-87](file://safe4ai-pilot/docker-compose.yml#L1-L87)
 - [docker-compose.override.yml:1-11](file://safe4ai-pilot/docker-compose.override.yml#L1-L11)
 
 ## Core Components
@@ -79,22 +91,24 @@ APP --> |"Ollama"| OL
 - Data and Vector Stores
   - PostgreSQL with pgvector extension for embeddings and metadata.
   - Qdrant for vector similarity search.
-  - Ollama for local LLM inference.
+  - Ollama for local LLM inference with pre-warmed models.
 - Observability
   - Jaeger for tracing (OTLP enabled).
 - Operational Scripts
   - Backup: Postgres dump, Qdrant snapshot, and raw data archive.
   - Health check: Connectivity and readiness probes for Postgres, Qdrant, and Ollama.
   - Migration: Alembic upgrade to latest schema.
+  - Air-gap verification: Static package verifier for offline deployment validation.
 
 **Section sources**
 - [app/Dockerfile:1-23](file://safe4ai-pilot/app/Dockerfile#L1-L23)
 - [frontend/Dockerfile:1-14](file://safe4ai-pilot/frontend/Dockerfile#L1-L14)
 - [frontend/nginx.conf:1-29](file://safe4ai-pilot/frontend/nginx.conf#L1-L29)
-- [docker-compose.yml:75-114](file://safe4ai-pilot/docker-compose.yml#L75-L114)
+- [docker-compose.yml:46-83](file://safe4ai-pilot/docker-compose.yml#L46-L83)
 - [scripts/backup.py:1-92](file://safe4ai-pilot/scripts/backup.py#L1-L92)
 - [scripts/healthcheck.py:1-58](file://safe4ai-pilot/scripts/healthcheck.py#L1-L58)
 - [scripts/migrate.py:1-17](file://safe4ai-pilot/scripts/migrate.py#L1-L17)
+- [scripts/verify_airgap_package.py:1-59](file://safe4ai-pilot/scripts/verify_airgap_package.py#L1-L59)
 
 ## Architecture Overview
 The system is a microservice-style composition:
@@ -102,6 +116,7 @@ The system is a microservice-style composition:
 - Frontend serves a SPA and proxies authenticated routes to the backend.
 - Data plane: PostgreSQL stores relational data and embeddings metadata; Qdrant stores vectors; Ollama provides embeddings and generation.
 - Observability: Jaeger collects traces via OTLP.
+- Air-gap support: Complete offline deployment capability with artifact packaging and verification.
 
 ```mermaid
 graph TB
@@ -112,17 +127,20 @@ DB["PostgreSQL<br/>pgvector"]
 VS["Qdrant"]
 LLM["Ollama"]
 TRC["Jaeger"]
+AIRGAP["Air-Gap Verification<br/>Static Package Checker"]
 Client --> FE
 FE --> |"Proxy /auth /chat /me /admin /feedback"| APP
 APP --> DB
 APP --> VS
 APP --> LLM
 APP --> TRC
+APP --> AIRGAP
 ```
 
 **Diagram sources**
-- [docker-compose.yml:1-119](file://safe4ai-pilot/docker-compose.yml#L1-L119)
+- [docker-compose.yml:1-87](file://safe4ai-pilot/docker-compose.yml#L1-L87)
 - [frontend/nginx.conf:13-24](file://safe4ai-pilot/frontend/nginx.conf#L13-L24)
+- [scripts/verify_airgap_package.py:26-48](file://safe4ai-pilot/scripts/verify_airgap_package.py#L26-L48)
 
 ## Detailed Component Analysis
 
@@ -189,13 +207,13 @@ O-->>Init : "Models ready"
 ```
 
 **Diagram sources**
-- [docker-compose.yml:46-60](file://safe4ai-pilot/docker-compose.yml#L46-L60)
+- [docker-compose.ollama.yml:17-30](file://safe4ai-pilot/docker-compose.ollama.yml#L17-L30)
 
 **Section sources**
 - [docker-compose.yml:2-16](file://safe4ai-pilot/docker-compose.yml#L2-L16)
 - [docker-compose.yml:18-29](file://safe4ai-pilot/docker-compose.yml#L18-L29)
 - [docker-compose.yml:31-44](file://safe4ai-pilot/docker-compose.yml#L31-L44)
-- [docker-compose.yml:46-60](file://safe4ai-pilot/docker-compose.yml#L46-L60)
+- [docker-compose.ollama.yml:17-30](file://safe4ai-pilot/docker-compose.ollama.yml#L17-L30)
 
 ### Observability: Tracing with Jaeger
 - Jaeger all-in-one image with OTLP enabled.
@@ -208,10 +226,10 @@ JAE --> UI["Jaeger UI"]
 ```
 
 **Diagram sources**
-- [docker-compose.yml:62-74](file://safe4ai-pilot/docker-compose.yml#L62-L74)
+- [docker-compose.yml:33-44](file://safe4ai-pilot/docker-compose.yml#L33-L44)
 
 **Section sources**
-- [docker-compose.yml:62-74](file://safe4ai-pilot/docker-compose.yml#L62-L74)
+- [docker-compose.yml:33-44](file://safe4ai-pilot/docker-compose.yml#L33-L44)
 
 ### Operational Scripts
 
@@ -269,6 +287,33 @@ All --> |No| Fail["Exit 1"]
 - [scripts/migrate.py:1-17](file://safe4ai-pilot/scripts/migrate.py#L1-L17)
 - [alembic.ini:1-150](file://safe4ai-pilot/alembic.ini#L1-L150)
 
+#### Air-Gap Package Verification
+Static verification of air-gap deployment packages to ensure all required components are present and configured correctly:
+- Verifies required Ollama models are included
+- Confirms Docker Compose overlay presence
+- Validates audit archive volume mounting
+- Checks for complete runbook documentation
+
+```mermaid
+flowchart TD
+Start(["Run verify_airgap_package.py"]) --> ReadFiles["Read app/Dockerfile, docker-compose.yml, docker-compose.ollama.yml"]
+ReadFiles --> ParseYAML["Parse YAML configurations"]
+ParseYAML --> CheckModels["Verify required Ollama models present"]
+CheckModels --> CheckOverlay["Verify Ollama overlay excludes default compose"]
+CheckOverlay --> CheckVolume["Verify audit archive volume mounting"]
+CheckVolume --> CheckRunbook["Verify runbook documentation completeness"]
+CheckRunbook --> Report["Generate verification report"]
+Report --> Result{"All checks pass?"}
+Result --> |Yes| Pass["Exit 0 - Valid air-gap package"]
+Result --> |No| Fail["Exit 1 - Invalid air-gap package"]
+```
+
+**Diagram sources**
+- [scripts/verify_airgap_package.py:26-48](file://safe4ai-pilot/scripts/verify_airgap_package.py#L26-L48)
+
+**Section sources**
+- [scripts/verify_airgap_package.py:1-59](file://safe4ai-pilot/scripts/verify_airgap_package.py#L1-L59)
+
 ### CI/CD Pipeline
 - Job stages: checkout, setup Python, install system and Python dependencies, lint, format check, type check, tests with coverage, dependency audit, secrets scan.
 - Coverage minimum enforced via pytest configuration.
@@ -295,10 +340,58 @@ Audit-->>GH : "Job result"
 **Section sources**
 - [.github/workflows/ci.yml:1-51](file://safe4ai-pilot/.github/workflows/ci.yml#L1-L51)
 
+## Air-Gap Deployment Strategy
+
+### Overview
+The Private AI system now supports fully air-gapped deployments for environments with no outbound internet access. This capability ensures compliance with security requirements while maintaining full functionality through comprehensive artifact packaging and verification procedures.
+
+### Key Features
+- **Complete Offline Capability**: All required Docker images, models, and configuration packaged for offline deployment
+- **Static Verification**: Automated validation of air-gap packages before deployment
+- **Model Preservation**: Warm Ollama model volumes exported and restored for optimal performance
+- **Security Validation**: No-outbound connectivity checks to ensure true isolation
+
+### Deployment Workflow
+
+#### Phase 1: Build and Verification (Connected Environment)
+1. **Package Verification**: Run static verifier to ensure all components are present
+2. **Service Building**: Build application containers and pull required images
+3. **Model Preparation**: Initialize and warm Ollama with required models
+4. **Artifact Export**: Package all components for transfer
+
+#### Phase 2: Artifact Export
+1. **Image Packaging**: Export Docker images to tar archives
+2. **Model Volume Export**: Create compressed archive of warmed Ollama models
+3. **Configuration Packaging**: Bundle runtime configuration and documentation
+
+#### Phase 3: Import and Deployment (Air-Gapped Environment)
+1. **Image Import**: Load Docker images from tar archives
+2. **Model Restoration**: Extract and restore Ollama model volumes
+3. **Environment Setup**: Configure environment variables and start services
+4. **Validation**: Execute no-outbound connectivity checks
+
+### Required Components
+- **Docker Images**: Application, frontend, PostgreSQL, Qdrant, Jaeger, and Ollama
+- **Ollama Models**: `qwen3.5:9b`, `nomic-embed-text`, and `qwen2.5vl:7b`
+- **Configuration Files**: Docker Compose files, environment examples, and runbooks
+- **Verification Tools**: Static package verifier and health check scripts
+
+### Security and Compliance
+- **Network Isolation**: Verified no outbound connectivity from application container
+- **Audit Trail**: Configured audit archive volume for compliance requirements
+- **Immutable Packaging**: Complete deployment bundles prevent tampering
+- **Access Control**: Approved media transfer process for artifact movement
+
+**Section sources**
+- [docs/air-gap-runbook.md:1-130](file://safe4ai-pilot/docs/air-gap-runbook.md#L1-L130)
+- [docker-compose.ollama.yml:1-41](file://safe4ai-pilot/docker-compose.ollama.yml#L1-L41)
+- [scripts/verify_airgap_package.py:11-19](file://safe4ai-pilot/scripts/verify_airgap_package.py#L11-L19)
+
 ## Dependency Analysis
 - Backend runtime dependencies are declared in the Python project configuration.
 - Alembic configuration controls migration scripts location and logging.
 - Frontend Dockerfile and Nginx config define build-time and runtime behavior.
+- Air-gap deployment adds verification dependencies for package completeness.
 
 ```mermaid
 graph LR
@@ -306,6 +399,9 @@ PY["pyproject.toml"] --> APP["Backend App"]
 APP --> DEPS["Runtime Dependencies"]
 ALEMBIC["alembic.ini"] --> MIG["Migrations"]
 FE_DOCKER["frontend/Dockerfile"] --> FE_NGINX["frontend/nginx.conf"]
+AIRGAP["verify_airgap_package.py"] --> CHECKS["Package Verification"]
+CHECKS --> COMPOSE["docker-compose.ollama.yml"]
+CHECKS --> RUNBOOK["air-gap-runbook.md"]
 ```
 
 **Diagram sources**
@@ -313,12 +409,14 @@ FE_DOCKER["frontend/Dockerfile"] --> FE_NGINX["frontend/nginx.conf"]
 - [alembic.ini:1-150](file://safe4ai-pilot/alembic.ini#L1-L150)
 - [frontend/Dockerfile:1-14](file://safe4ai-pilot/frontend/Dockerfile#L1-L14)
 - [frontend/nginx.conf:1-29](file://safe4ai-pilot/frontend/nginx.conf#L1-L29)
+- [scripts/verify_airgap_package.py:26-48](file://safe4ai-pilot/scripts/verify_airgap_package.py#L26-L48)
 
 **Section sources**
 - [pyproject.toml:1-101](file://safe4ai-pilot/pyproject.toml#L1-L101)
 - [alembic.ini:1-150](file://safe4ai-pilot/alembic.ini#L1-L150)
 - [frontend/Dockerfile:1-14](file://safe4ai-pilot/frontend/Dockerfile#L1-L14)
 - [frontend/nginx.conf:1-29](file://safe4ai-pilot/frontend/nginx.conf#L1-L29)
+- [scripts/verify_airgap_package.py:1-59](file://safe4ai-pilot/scripts/verify_airgap_package.py#L1-L59)
 
 ## Performance Considerations
 - Resource sizing
@@ -330,11 +428,11 @@ FE_DOCKER["frontend/Dockerfile"] --> FE_NGINX["frontend/nginx.conf"]
 - Caching and pre-warming
   - Backend pre-bakes a cross-encoder model to reduce cold-start latency.
   - Ollama init job pulls foundational models to warm caches.
+  - Air-gap deployments benefit from pre-warmed model volumes for immediate performance.
 - Network and I/O
   - Persist volumes for databases and model caches to avoid repeated downloads and rebuilds.
   - Use SSD-backed storage for Qdrant and Postgres for I/O-heavy operations.
-
-[No sources needed since this section provides general guidance]
+  - Air-gap deployments eliminate network latency for model downloads.
 
 ## Troubleshooting Guide
 - Service readiness
@@ -348,21 +446,20 @@ FE_DOCKER["frontend/Dockerfile"] --> FE_NGINX["frontend/nginx.conf"]
   - Inspect container logs for backend and frontend; review Nginx access/error logs.
 - Secrets and configuration
   - Ensure .env is present and contains required keys; verify settings mapping in the backend configuration.
+- Air-gap deployment issues
+  - Use the static verifier to identify missing components in air-gap packages.
+  - Verify no outbound connectivity from application container using the no-outbound check procedure.
+  - Confirm all required Ollama models are present in the restored model volume.
 
 **Section sources**
 - [scripts/healthcheck.py:1-58](file://safe4ai-pilot/scripts/healthcheck.py#L1-L58)
 - [scripts/migrate.py:1-17](file://safe4ai-pilot/scripts/migrate.py#L1-L17)
 - [scripts/backup.py:1-92](file://safe4ai-pilot/scripts/backup.py#L1-L92)
-- [docker-compose.yml:12-16](file://safe4ai-pilot/docker-compose.yml#L12-L16)
-- [docker-compose.yml:25-29](file://safe4ai-pilot/docker-compose.yml#L25-L29)
-- [docker-compose.yml:39-44](file://safe4ai-pilot/docker-compose.yml#L39-L44)
-- [docker-compose.yml:98-103](file://safe4ai-pilot/docker-compose.yml#L98-L103)
-- [app/config.py:1-28](file://safe4ai-pilot/app/config.py#L1-L28)
+- [scripts/verify_airgap_package.py:26-48](file://safe4ai-pilot/scripts/verify_airgap_package.py#L26-L48)
+- [docs/air-gap-runbook.md:102-119](file://safe4ai-pilot/docs/air-gap-runbook.md#L102-L119)
 
 ## Conclusion
-The Private AI system is designed for containerized deployment with clear separation of concerns across backend, frontend, data, vector store, and observability. The provided Docker Compose setup, operational scripts, and CI/CD pipeline enable repeatable development and production workflows. By following the operational procedures and performance guidance herein, teams can deploy reliably, scale effectively, and maintain high availability.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The Private AI system is designed for containerized deployment with clear separation of concerns across backend, frontend, data, vector store, and observability. The provided Docker Compose setup, operational scripts, and CI/CD pipeline enable repeatable development and production workflows. The addition of comprehensive air-gap deployment capabilities ensures the system can operate in fully isolated environments while maintaining full functionality. By following the operational procedures and performance guidance herein, teams can deploy reliably, scale effectively, and maintain high availability across both online and offline environments.
 
 ## Appendices
 
@@ -370,58 +467,91 @@ The Private AI system is designed for containerized deployment with clear separa
 - Environment configuration
   - Define environment variables for database, vector store, and model gateway URLs.
   - Set allowed origins, secret key, HTTPS enforcement, and retention policies.
+  - For air-gap deployments, configure AUDIT_ARCHIVE_DIR and OLLAMA_URL appropriately.
 - Scaling
   - Backend: Horizontal pod scaling behind a reverse proxy; ensure stateless sessions and shared caches where applicable.
   - Frontend: Stateless; scale replicas behind Nginx or CDN.
   - Data plane: Tune PostgreSQL and Qdrant resources; consider read replicas for reporting.
+  - Air-gap deployments benefit from pre-warmed model volumes for optimal performance.
 - Resource requirements
   - Start with modest allocations and profile under realistic load; adjust CPU, memory, and disk IOPS accordingly.
+  - Air-gap deployments may require additional storage for model volumes and audit archives.
 
 **Section sources**
 - [app/config.py:5-24](file://safe4ai-pilot/app/config.py#L5-L24)
-- [docker-compose.yml:83-86](file://safe4ai-pilot/docker-compose.yml#L83-L86)
+- [docker-compose.yml:46-83](file://safe4ai-pilot/docker-compose.yml#L46-L83)
+- [docker-compose.ollama.yml:32-37](file://safe4ai-pilot/docker-compose.ollama.yml#L32-L37)
 
 ### Backup and Restore Procedures
 - Backup
   - Use the backup script to generate Postgres SQL dumps, Qdrant snapshots, and raw data archives.
+  - For air-gap deployments, include audit archive data in backup procedures.
 - Restore
   - Restore Postgres from SQL dump.
   - Restore Qdrant from snapshot.
   - Rehydrate raw data from archived directory.
+  - For air-gap deployments, restore Ollama model volumes from exported archives.
 - Automation
   - Schedule periodic backups and validate integrity regularly.
+  - Include air-gap package verification in backup validation procedures.
 
 **Section sources**
 - [scripts/backup.py:1-92](file://safe4ai-pilot/scripts/backup.py#L1-L92)
+- [docs/air-gap-runbook.md:36-66](file://safe4ai-pilot/docs/air-gap-runbook.md#L36-L66)
 
 ### Monitoring and Alerting
 - Health checks
   - Use the health check script and Docker Compose health checks to monitor service readiness.
+  - For air-gap deployments, include no-outbound connectivity checks in monitoring.
 - Tracing
   - Jaeger UI provides end-to-end visibility; configure SDKs to export OTLP spans.
 - Metrics
   - Instrument backend endpoints and integrate with Prometheus/Grafana for metrics collection.
+  - Monitor air-gap deployment health through static verification reports.
 
 **Section sources**
 - [scripts/healthcheck.py:1-58](file://safe4ai-pilot/scripts/healthcheck.py#L1-L58)
-- [docker-compose.yml:67-73](file://safe4ai-pilot/docker-compose.yml#L67-L73)
+- [docker-compose.yml:33-44](file://safe4ai-pilot/docker-compose.yml#L33-L44)
+- [scripts/verify_airgap_package.py:51-54](file://safe4ai-pilot/scripts/verify_airgap_package.py#L51-L54)
 
 ### Security Considerations
 - Secrets management
   - Store secrets in .env and restrict access; rotate secret keys periodically.
   - Enforce HTTPS in production and configure allowed origins carefully.
+  - For air-gap deployments, ensure all secrets are embedded in the deployment package.
 - Network isolation
   - Limit exposure of internal ports; use reverse proxies and firewalls.
+  - Air-gap deployments require complete network isolation verification.
 - Dependency hygiene
   - Regularly audit dependencies and scan for secrets in committed code.
+  - Use static verification to ensure all required components are present in air-gap packages.
+- Compliance
+  - Audit archive volume provides compliance-ready data export capabilities.
+  - Air-gap deployments support WORM (Write Once Read Many) retention requirements.
 
 **Section sources**
 - [app/config.py:11-13](file://safe4ai-pilot/app/config.py#L11-L13)
 - [.github/workflows/ci.yml:46-50](file://safe4ai-pilot/.github/workflows/ci.yml#L46-L50)
+- [docs/air-gap-runbook.md:121-129](file://safe4ai-pilot/docs/air-gap-runbook.md#L121-L129)
 
 ### CI/CD and Automated Testing
 - CI pipeline stages cover linting, formatting, type checking, testing with coverage, dependency auditing, and secrets scanning.
 - Tests include unit and integration suites; smoke tests rely on Docker Compose services.
+- Air-gap verification integrated into CI pipeline for deployment package validation.
+- Automated testing supports both online and offline deployment scenarios.
 
 **Section sources**
 - [.github/workflows/ci.yml:1-51](file://safe4ai-pilot/.github/workflows/ci.yml#L1-L51)
+- [scripts/verify_airgap_package.py:51-54](file://safe4ai-pilot/scripts/verify_airgap_package.py#L51-L54)
+
+### Air-Gap Deployment Procedures
+- **Preparation**: Run static verifier to validate air-gap package completeness
+- **Export**: Package Docker images, model volumes, and configuration files
+- **Transfer**: Move artifacts through approved media process
+- **Import**: Load images, restore model volumes, configure environment
+- **Validation**: Execute no-outbound connectivity checks and service health verification
+- **Monitoring**: Include air-gap-specific monitoring and alerting in operational procedures
+
+**Section sources**
+- [docs/air-gap-runbook.md:8-130](file://safe4ai-pilot/docs/air-gap-runbook.md#L8-L130)
+- [scripts/verify_airgap_package.py:26-48](file://safe4ai-pilot/scripts/verify_airgap_package.py#L26-L48)

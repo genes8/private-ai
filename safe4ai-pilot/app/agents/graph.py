@@ -107,7 +107,9 @@ def build_graph(
             effective_top_k = retrieval_top_k + state.retrieval_attempts * 4
             try:
                 raw_chunks = await retriever.retrieve(query, top_k=effective_top_k)
-                ranked: list[RankedChunk] = await reranker.arerank(query, raw_chunks, top_n=effective_top_k)
+                ranked: list[RankedChunk] = await reranker.arerank(
+                    query, raw_chunks, top_n=effective_top_k
+                )
                 filtered = content_filter.filter_chunks(ranked)
                 filtered = content_filter.filter_blocked_sections(filtered)
                 max_score = max((c.rerank_score for c in filtered), default=0.0)
@@ -162,7 +164,9 @@ def build_graph(
             for sub_q in sub_queries:
                 try:
                     raw = await retriever.retrieve(sub_q, top_k=retrieval_top_k)
-                    ranked: list[RankedChunk] = await reranker.arerank(sub_q, raw, top_n=min(3, retrieval_top_k))
+                    ranked: list[RankedChunk] = await reranker.arerank(
+                        sub_q, raw, top_n=min(3, retrieval_top_k)
+                    )
                     ranked = content_filter.filter_chunks(ranked)
                     ranked = content_filter.filter_blocked_sections(ranked)
                     graded = await grade_chunks(
@@ -191,7 +195,9 @@ def build_graph(
 
     async def generate_node(state: PrivateAIState) -> dict[str, Any]:
         with _node_span("generate", state):
-            query = state.effective_query
+            # Answer the user's actual question, not the HyDE retrieval rewrite
+            # (effective_query). Retrieval/grading already ran on the rewrite.
+            query = state.messages[-1].content if state.messages else state.effective_query
             relevant = [c for c in state.graded_chunks if c.relevant]
 
             if not relevant:
@@ -202,10 +208,13 @@ def build_graph(
                     "current_step": "output_filter",
                 }
 
+            # Numbered source labels [1], [2], ... aligned with the citation
+            # order below, which the SSE route and frontend render as chips.
             context = "\n\n".join(
-                f"[{c.filename} p.{c.page_number}]: {c.content}" for c in relevant
+                f"[{i}] {c.filename} p.{c.page_number}\n{c.content}"
+                for i, c in enumerate(relevant, start=1)
             )
-            template = get_prompt("rag_answer", "v1")
+            template = get_prompt("rag_answer", "v2")
             prompt = template.template.format(context=context, query=query)
 
             try:
@@ -275,11 +284,6 @@ def build_graph(
                 and state.draft_answer != _NO_ANSWER
                 and has_relevant
             )
-            if state.retrieval_attempts >= _MAX_RETRIEVAL_ATTEMPTS:
-                allowed = ["respond", "fallback"]
-            else:
-                allowed = ["respond", "retrieve", "fallback"]
-
             routing_state = state.model_copy(update={"grounded": grounded})
             decision = route_quality_gate(routing_state)
             no_answer_without_context = state.draft_answer == _NO_ANSWER and not has_relevant

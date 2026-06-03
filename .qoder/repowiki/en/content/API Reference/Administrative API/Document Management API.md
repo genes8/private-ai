@@ -3,6 +3,7 @@
 <cite>
 **Referenced Files in This Document**
 - [admin_routes.py](file://safe4ai-pilot/app/api/admin_routes.py)
+- [document_routes.py](file://safe4ai-pilot/app/api/document_routes.py)
 - [upload_validator.py](file://safe4ai-pilot/app/security/upload_validator.py)
 - [ingestion_service.py](file://safe4ai-pilot/app/services/ingestion_service.py)
 - [rag_pipeline.py](file://safe4ai-pilot/app/services/rag_pipeline.py)
@@ -12,8 +13,16 @@
 - [documents.ts](file://safe4ai-pilot/frontend/src/api/documents.ts)
 - [DocumentsPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/DocumentsPage.tsx)
 - [DocumentRow.tsx](file://safe4ai-pilot/frontend/src/components/admin/DocumentRow.tsx)
+- [useDocuments.ts](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts)
 - [test_admin.py](file://safe4ai-pilot/tests/test_admin.py)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Updated Delete Document Endpoint section to reflect enhanced transaction safety and active job checking improvements
+- Added new section on Transaction Safety and Race Condition Prevention
+- Updated troubleshooting guidance for improved deletion reliability
+- Enhanced error handling documentation for deletion operations
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -21,17 +30,18 @@
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
-10. [Appendices](#appendices)
+6. [Transaction Safety and Race Condition Prevention](#transaction-safety-and-race-condition-prevention)
+7. [Dependency Analysis](#dependency-analysis)
+8. [Performance Considerations](#performance-considerations)
+9. [Troubleshooting Guide](#troubleshooting-guide)
+10. [Conclusion](#conclusion)
+11. [Appendices](#appendices)
 
 ## Introduction
 This document provides comprehensive API documentation for administrative document management operations. It covers endpoints for uploading, listing, checking status, deleting, and reindexing documents, along with the complete ingestion lifecycle, validation rules, and administrative oversight capabilities. It also includes practical examples for multipart uploads, background job creation, status polling, and vector store synchronization with Qdrant.
 
 ## Project Structure
-The document management API is implemented in the backend FastAPI application under the admin routes module. Supporting components include:
+The document management API is implemented in the backend FastAPI application under both admin routes and document routes modules. Supporting components include:
 - Upload validation with file type, MIME, magic bytes, and size checks
 - Background ingestion orchestration with job tracking
 - Vector store integration via Qdrant and hybrid retrieval
@@ -41,6 +51,7 @@ The document management API is implemented in the backend FastAPI application un
 graph TB
 subgraph "Backend"
 AR["admin_routes.py<br/>Admin endpoints"]
+DR["document_routes.py<br/>Document operations"]
 UV["upload_validator.py<br/>Validation rules"]
 IS["ingestion_service.py<br/>Background ingestion"]
 RP["rag_pipeline.py<br/>Ingestion pipeline"]
@@ -52,23 +63,26 @@ subgraph "Frontend"
 FE_DocAPI["documents.ts<br/>API bindings"]
 FE_DocPage["DocumentsPage.tsx<br/>Upload UI"]
 FE_DocRow["DocumentRow.tsx<br/>Status UI"]
+FE_UseDocs["useDocuments.ts<br/>Status polling"]
 end
-FE_DocAPI --> AR
+FE_DocAPI --> DR
 FE_DocPage --> FE_DocAPI
 FE_DocRow --> FE_DocAPI
-AR --> UV
-AR --> IS
+FE_UseDocs --> FE_DocAPI
+DR --> UV
+DR --> IS
 IS --> RP
 RP --> HR
 RP --> DBM
-AR --> DBM
-CFG --> AR
+DR --> DBM
+CFG --> DR
 CFG --> IS
 CFG --> RP
 ```
 
 **Diagram sources**
 - [admin_routes.py:67-256](file://safe4ai-pilot/app/api/admin_routes.py#L67-L256)
+- [document_routes.py:285-339](file://safe4ai-pilot/app/api/document_routes.py#L285-L339)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [ingestion_service.py:21-88](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L88)
 - [rag_pipeline.py:34-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L150)
@@ -78,9 +92,11 @@ CFG --> RP
 - [documents.ts:43-67](file://safe4ai-pilot/frontend/src/api/documents.ts#L43-L67)
 - [DocumentsPage.tsx:17-69](file://safe4ai-pilot/frontend/src/pages/admin/DocumentsPage.tsx#L17-L69)
 - [DocumentRow.tsx:30-97](file://safe4ai-pilot/frontend/src/components/admin/DocumentRow.tsx#L30-L97)
+- [useDocuments.ts:1-66](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts#L1-L66)
 
 **Section sources**
 - [admin_routes.py:67-256](file://safe4ai-pilot/app/api/admin_routes.py#L67-L256)
+- [document_routes.py:285-339](file://safe4ai-pilot/app/api/document_routes.py#L285-L339)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 
 ## Core Components
@@ -88,7 +104,7 @@ CFG --> RP
   - Upload document with validation and background ingestion
   - List documents with chunk counts
   - Poll ingestion status per document
-  - Delete document (filesystem, vector store, DB, cache)
+  - Delete document (filesystem, vector store, DB, cache) with enhanced transaction safety
   - Reindex document (restart ingestion)
 - Validation:
   - Allowed extensions and MIME types
@@ -103,6 +119,7 @@ CFG --> RP
 
 **Section sources**
 - [admin_routes.py:67-256](file://safe4ai-pilot/app/api/admin_routes.py#L67-L256)
+- [document_routes.py:285-339](file://safe4ai-pilot/app/api/document_routes.py#L285-L339)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [ingestion_service.py:21-88](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L88)
 - [rag_pipeline.py:62-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L62-L150)
@@ -114,7 +131,7 @@ The document lifecycle spans frontend upload, backend validation, filesystem per
 ```mermaid
 sequenceDiagram
 participant FE as "Frontend"
-participant API as "Admin Routes"
+participant API as "Document Routes"
 participant VAL as "UploadValidator"
 participant FS as "Filesystem"
 participant DB as "Database"
@@ -193,18 +210,30 @@ Practical example (frontend):
 - [admin_routes.py:157-181](file://safe4ai-pilot/app/api/admin_routes.py#L157-L181)
 
 ### Delete Document Endpoint
+**Updated** Enhanced with improved transaction safety, active job checking, and proper resource cleanup to prevent race conditions and inconsistent states
+
 - Method: DELETE
 - URL: /admin/documents/{doc_id}
-- Behavior:
-  - Blocks deletion if an ingestion job is currently embedding
-  - Removes raw file if present
-  - Deletes Qdrant points for the document
-  - Clears semantic cache entries
-  - Removes chunks, jobs, and document record
-- Response: 204 No Content; returns 404 if not found, 409 if active ingestion
+- Enhanced Behavior:
+  - **Active Job Checking**: Performs atomic job status verification before any deletions using `_lock_query()` to prevent race conditions
+  - **Transaction Safety**: Uses database transaction rollback on errors to maintain consistency
+  - **Resource Cleanup**: Comprehensive cleanup order: cancel pending tasks → invalidate cache → delete DB records → remove raw files → delete Qdrant points → prune BM25 index
+  - **Error Handling**: Graceful handling of partial failures with logging and continued cleanup attempts
+- Response: 204 No Content; returns 404 if not found, 409 if active ingestion job detected
+- Safety Features:
+  - Atomic job status check prevents deletion during active ingestion
+  - Task cancellation prevents half-canceled ingestion states
+  - Database rollback ensures consistent state on errors
+  - Separate exception handling for Qdrant cleanup prevents deletion failures from blocking filesystem cleanup
+
+Practical example (frontend):
+- Simple DELETE request to /admin/documents/{doc_id}
+- Handle 204 responses for successful deletion
+- Handle 409 responses when ingestion is active
 
 **Section sources**
-- [admin_routes.py:184-222](file://safe4ai-pilot/app/api/admin_routes.py#L184-L222)
+- [document_routes.py:285-339](file://safe4ai-pilot/app/api/document_routes.py#L285-L339)
+- [test_admin.py:293-312](file://safe4ai-pilot/tests/test_admin.py#L293-L312)
 
 ### Reindex Document Endpoint
 - Method: POST
@@ -285,27 +314,65 @@ FailPath --> End
 - [admin_routes.py:224-256](file://safe4ai-pilot/app/api/admin_routes.py#L224-L256)
 - [admin_routes.py:184-222](file://safe4ai-pilot/app/api/admin_routes.py#L184-L222)
 
+## Transaction Safety and Race Condition Prevention
+**New Section** Enhanced deletion endpoint now includes comprehensive transaction safety measures to prevent race conditions and ensure consistent state management.
+
+### Active Job Detection
+The deletion endpoint performs atomic job status verification using `_lock_query()` before any destructive operations:
+- Checks for active ingestion jobs in `embedding` or `pending` states
+- Prevents deletion during active ingestion to avoid half-canceled states
+- Uses database locks to prevent race conditions between concurrent operations
+
+### Transaction Rollback Mechanism
+All deletion operations are wrapped in database transactions with automatic rollback on errors:
+- Database operations are grouped within single transaction
+- Automatic rollback on any exception maintains consistent state
+- Ensures partial deletions never leave the system in inconsistent state
+
+### Resource Cleanup Order
+Comprehensive cleanup follows strict order to prevent resource leaks:
+1. **Task Cancellation**: Cancel pending ingestion tasks first
+2. **Cache Invalidation**: Remove semantic cache entries
+3. **Database Cleanup**: Delete chunks, jobs, and document records
+4. **Filesystem Cleanup**: Remove raw files
+5. **Vector Store Cleanup**: Delete Qdrant points
+6. **Index Cleanup**: Prune BM25 index
+
+### Error Isolation
+Separate exception handling prevents cascading failures:
+- Qdrant cleanup failures don't block filesystem cleanup
+- Database errors trigger rollback but don't prevent other cleanup steps
+- Logging captures all cleanup attempts and failures
+
+**Section sources**
+- [document_routes.py:296-339](file://safe4ai-pilot/app/api/document_routes.py#L296-L339)
+- [test_admin.py:293-312](file://safe4ai-pilot/tests/test_admin.py#L293-L312)
+
 ## Dependency Analysis
 Key dependencies and relationships:
-- Admin routes depend on UploadValidator, SQLAlchemy models, Qdrant client, and background ingestion service
+- Document routes depend on UploadValidator, SQLAlchemy models, Qdrant client, and background ingestion service
 - Ingestion service depends on RagPipeline, HybridRetriever, and Qdrant
 - Frontend API bindings depend on backend endpoints and model shapes
+- Enhanced deletion endpoint includes transaction safety and race condition prevention logic
 
 ```mermaid
 graph LR
-FE["documents.ts"] --> AR["admin_routes.py"]
-AR --> UV["upload_validator.py"]
-AR --> IS["ingestion_service.py"]
+FE["documents.ts"] --> DR["document_routes.py"]
+DR --> UV["upload_validator.py"]
+DR --> IS["ingestion_service.py"]
 IS --> RP["rag_pipeline.py"]
 RP --> HR["hybrid_retriever.py"]
-AR --> DBM["models.py"]
-CFG["config.py"] --> AR
+DR --> DBM["models.py"]
+CFG["config.py"] --> DR
 CFG --> IS
 CFG --> RP
+FE --> UDH["useDocuments.ts"]
+UDH --> FE
 ```
 
 **Diagram sources**
 - [admin_routes.py:67-256](file://safe4ai-pilot/app/api/admin_routes.py#L67-L256)
+- [document_routes.py:285-339](file://safe4ai-pilot/app/api/document_routes.py#L285-L339)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [ingestion_service.py:21-88](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L88)
 - [rag_pipeline.py:34-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L150)
@@ -313,9 +380,11 @@ CFG --> RP
 - [models.py:75-167](file://safe4ai-pilot/app/db/models.py#L75-L167)
 - [config.py:7-48](file://safe4ai-pilot/app/config.py#L7-L48)
 - [documents.ts:43-67](file://safe4ai-pilot/frontend/src/api/documents.ts#L43-L67)
+- [useDocuments.ts:1-66](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts#L1-L66)
 
 **Section sources**
 - [admin_routes.py:67-256](file://safe4ai-pilot/app/api/admin_routes.py#L67-L256)
+- [document_routes.py:285-339](file://safe4ai-pilot/app/api/document_routes.py#L285-L339)
 - [models.py:75-167](file://safe4ai-pilot/app/db/models.py#L75-L167)
 
 ## Performance Considerations
@@ -323,8 +392,8 @@ CFG --> RP
 - Batch embedding reduces network overhead
 - Qdrant upsert and BM25 index updates occur after embedding
 - Stuck ingestion jobs are auto-recovered to prevent indefinite blocking
-
-[No sources needed since this section provides general guidance]
+- **Enhanced**: Transaction safety adds minimal overhead for improved reliability
+- **Enhanced**: Race condition prevention prevents costly recovery operations
 
 ## Troubleshooting Guide
 Common scenarios and resolutions:
@@ -335,23 +404,27 @@ Common scenarios and resolutions:
   - Document ID invalid or record deleted
 - 409 Conflict on delete:
   - Wait for active ingestion to finish or cancel/retry later
+  - **Enhanced**: Active job detection prevents deletion during ingestion
 - 409 Conflict on reindex:
   - Raw file missing; re-upload before reindex
 - Ingestion failures:
   - Check job_error in status response
   - Review backend logs for ingestion_failed
+- **Enhanced**: Deletion failures:
+  - Check backend logs for transaction rollback messages
+  - Verify cleanup order completed successfully
+  - Monitor Qdrant connectivity for cleanup failures
 
 **Section sources**
 - [admin_routes.py:83-84](file://safe4ai-pilot/app/api/admin_routes.py#L83-L84)
 - [admin_routes.py:167-168](file://safe4ai-pilot/app/api/admin_routes.py#L167-L168)
 - [admin_routes.py:203-207](file://safe4ai-pilot/app/api/admin_routes.py#L203-L207)
 - [admin_routes.py:237-238](file://safe4ai-pilot/app/api/admin_routes.py#L237-L238)
+- [document_routes.py:296-339](file://safe4ai-pilot/app/api/document_routes.py#L296-L339)
 - [ingestion_service.py:72-85](file://safe4ai-pilot/app/services/ingestion_service.py#L72-L85)
 
 ## Conclusion
-The document management API provides a robust, secure, and observable pathway for administrators to upload, monitor, and maintain document indices. Validation ensures safe ingestion, background tasks handle heavy workloads, and Qdrant-backed retrieval enables efficient search. Administrative controls support quality assurance and operational oversight.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The document management API provides a robust, secure, and observable pathway for administrators to upload, monitor, and maintain document indices. Validation ensures safe ingestion, background tasks handle heavy workloads, and Qdrant-backed retrieval enables efficient search. Administrative controls support quality assurance and operational oversight. **Enhanced** deletion operations now provide improved transaction safety, race condition prevention, and comprehensive resource cleanup to ensure reliable document lifecycle management.
 
 ## Appendices
 
@@ -366,19 +439,23 @@ The document management API provides a robust, secure, and observable pathway fo
 - GET /admin/documents/{doc_id}/status
   - Response: {doc_id, ingestion_status, job_status, job_error, ingestion_started_at}
 - DELETE /admin/documents/{doc_id}
-  - Response: 204 No Content; blocks during active ingestion
+  - Response: 204 No Content; blocks during active ingestion with enhanced transaction safety
+  - **Enhanced**: Atomic job checking, transaction rollback, and comprehensive cleanup
 - POST /admin/documents/{doc_id}/reindex
   - Response: 202 Accepted with {job_id}; requires raw file present
 
 **Section sources**
 - [admin_routes.py:67-256](file://safe4ai-pilot/app/api/admin_routes.py#L67-L256)
+- [document_routes.py:285-339](file://safe4ai-pilot/app/api/document_routes.py#L285-L339)
 
 ### Frontend Integration Notes
 - Upload UI supports drag-and-drop and multiple file selection
 - Status polling uses GET /admin/documents/{doc_id}/status
 - Reindex and delete actions are exposed via the Documents page
+- **Enhanced**: Improved error handling for 409 conflicts during deletion
 
 **Section sources**
 - [DocumentsPage.tsx:17-69](file://safe4ai-pilot/frontend/src/pages/admin/DocumentsPage.tsx#L17-L69)
 - [DocumentRow.tsx:30-97](file://safe4ai-pilot/frontend/src/components/admin/DocumentRow.tsx#L30-L97)
 - [documents.ts:43-67](file://safe4ai-pilot/frontend/src/api/documents.ts#L43-L67)
+- [useDocuments.ts:1-66](file://safe4ai-pilot/frontend/src/hooks/useDocuments.ts#L1-L66)

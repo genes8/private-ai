@@ -13,7 +13,16 @@
 - [app/services/semantic_cache.py](file://safe4ai-pilot/app/services/semantic_cache.py)
 - [tests/test_startup_schema.py](file://safe4ai-pilot/tests/test_startup_schema.py)
 - [tests/test_integration_containers.py](file://safe4ai-pilot/tests/test_integration_containers.py)
+- [docker-compose.yml](file://safe4ai-pilot/docker-compose.yml)
+- [docker-compose.override.yml](file://safe4ai-pilot/docker-compose.override.yml)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Updated PostgreSQL connection configuration to use configurable host and port settings
+- Added documentation for default port values (5432 for delivery, 5433 for local development)
+- Updated container orchestration documentation to reflect port mapping changes
+- Enhanced troubleshooting guidance for port conflict resolution
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -30,18 +39,22 @@
 ## Introduction
 This document describes the PostgreSQL database design for the project with pgvector integration. It covers the entity relationship model, schema design, data management strategies, and operational practices. The focus is on the User, Document, Session, AuditLog, and Feedback-related entities, along with supporting entities for ingestion, caching, and human review. It also documents the Alembic-based migration system, vector embedding storage, query patterns, constraints, and operational procedures for lifecycle management, backups, and disaster recovery.
 
+**Updated** The database now supports configurable PostgreSQL host and port settings to prevent conflicts with native PostgreSQL installations, with sensible defaults for different deployment environments.
+
 ## Project Structure
 The database layer is implemented with SQLAlchemy declarative models and Alembic migrations. The application initializes the database at startup, ensuring the pgvector extension is available before creating tables. Migrations are configured via Alembic and executed programmatically by a dedicated script.
 
 ```mermaid
 graph TB
-Config["app/config.py<br/>Settings with postgres_url"] --> DBInit["app/db/__init__.py<br/>Engine and SessionLocal"]
+Config["app/config.py<br/>Settings with postgres_url<br/>Host:Port configurable"] --> DBInit["app/db/__init__.py<br/>Engine and SessionLocal"]
 DBInit --> Models["app/db/models.py<br/>SQLAlchemy Declarative Base and ORM models"]
 Models --> MigrationsEnv["app/db/migrations/env.py<br/>Alembic env.py loads models and sets URL"]
 MigrationsEnv --> AlembicIni["safe4ai-pilot/alembic.ini<br/>script_location, logging"]
 Startup["app/main.py<br/>CREATE EXTENSION vector<br/>Base.metadata.create_all"] --> DBInit
 ScriptsMigrate["scripts/migrate.py<br/>alembic upgrade head"] --> MigrationsEnv
 ScriptsBackup["scripts/backup.py<br/>pg_dump, Qdrant snapshot, raw copy"] --> Config
+DockerCompose["docker-compose.yml<br/>Port mapping 5432:5432"] --> Config
+DockerOverride["docker-compose.override.yml<br/>Port mapping 5432:5433"] --> Config
 ```
 
 **Diagram sources**
@@ -53,6 +66,8 @@ ScriptsBackup["scripts/backup.py<br/>pg_dump, Qdrant snapshot, raw copy"] --> Co
 - [app/main.py:35-40](file://safe4ai-pilot/app/main.py#L35-L40)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
+- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
+- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
 
 **Section sources**
 - [app/db/models.py:18-175](file://safe4ai-pilot/app/db/models.py#L18-L175)
@@ -62,6 +77,8 @@ ScriptsBackup["scripts/backup.py<br/>pg_dump, Qdrant snapshot, raw copy"] --> Co
 - [app/main.py:35-40](file://safe4ai-pilot/app/main.py#L35-L40)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
+- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
+- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
 
 ## Core Components
 This section outlines the core entities and their relationships, highlighting constraints and indexes that underpin data integrity and query performance.
@@ -150,11 +167,13 @@ Indexes and constraints:
 ## Architecture Overview
 The database architecture integrates SQLAlchemy ORM models with Alembic migrations and pgvector. At startup, the application ensures the vector extension exists and creates all tables. Migrations are managed centrally and can be applied via a script. Backups capture PostgreSQL, Qdrant snapshots, and raw data.
 
+**Updated** The database connection now supports configurable host and port settings, with different defaults for delivery and development environments to avoid conflicts with existing PostgreSQL installations.
+
 ```mermaid
 graph TB
 subgraph "Application Layer"
 Main["app/main.py<br/>lifespan: CREATE EXTENSION vector<br/>Base.metadata.create_all"]
-Config["app/config.py<br/>postgres_url"]
+Config["app/config.py<br/>postgres_url<br/>Host:Port configurable"]
 DBInit["app/db/__init__.py<br/>engine, SessionLocal, Base"]
 Models["app/db/models.py<br/>ORM models"]
 MigrateScript["scripts/migrate.py<br/>alembic upgrade head"]
@@ -164,6 +183,7 @@ subgraph "Database Layer"
 PG["PostgreSQL"]
 VectorExt["pgvector Extension"]
 Schema["Tables and Indexes"]
+DockerPorts["Port Mapping<br/>5432:5432 (delivery)<br/>5432:5433 (local dev)"]
 end
 Config --> DBInit
 DBInit --> Models
@@ -174,6 +194,7 @@ VectorExt --> Schema
 MigrateScript --> PG
 BackupScript --> PG
 BackupScript --> VectorExt
+DockerPorts --> PG
 ```
 
 **Diagram sources**
@@ -183,6 +204,8 @@ BackupScript --> VectorExt
 - [app/db/models.py:18-175](file://safe4ai-pilot/app/db/models.py#L18-L175)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
+- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
+- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
 
 ## Detailed Component Analysis
 
@@ -309,7 +332,7 @@ DOCUMENTS ||--o{ SEMANTIC_CACHE : "referenced by"
 - [app/db/models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
 
 ### Migration System with Alembic
-The migration system is configured via Alembic and driven by the application’s configuration. The environment script imports the models to enable autogenerate detection and sets the database URL from settings. A dedicated script runs migrations to the latest version.
+The migration system is configured via Alembic and driven by the application's configuration. The environment script imports the models to enable autogenerate detection and sets the database URL from settings. A dedicated script runs migrations to the latest version.
 
 Key configuration and behavior:
 - Alembic configuration file sets script_location and logging.
@@ -430,12 +453,41 @@ Backup-->>Operator : Report success/failure per step
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
 - [app/config.py:14-18](file://safe4ai-pilot/app/config.py#L14-L18)
 
+### PostgreSQL Connection Configuration
+**Updated** The database connection now supports configurable host and port settings to prevent conflicts with native PostgreSQL installations.
+
+Connection URL format:
+```
+postgresql+psycopg2://username:password@host:port/database_name
+```
+
+Default configurations:
+- Delivery environment: `postgresql+psycopg2://safe4ai:safe4ai@localhost:5432/safe4ai`
+- Local development: `postgresql+psycopg2://safe4ai:safe4ai@localhost:5433/safe4ai`
+
+Container orchestration:
+- Production docker-compose maps PostgreSQL port 5432:5432
+- Development docker-compose override maps PostgreSQL port 5432:5433
+
+Environment variable support:
+- The application reads `postgres_url` from configuration
+- Connection pooling with pre-ping enabled for reliability
+- SSL mode can be configured via connection parameters
+
+**Section sources**
+- [app/config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
+- [app/db/__init__.py:3-22](file://safe4ai-pilot/app/db/__init__.py#L3-L22)
+- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
+- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
+
 ## Dependency Analysis
 The database layer depends on configuration for the connection URL, Alembic for schema evolution, and pgvector for vector operations. Startup order guarantees extension availability before table creation.
 
+**Updated** Connection configuration now supports environment-specific port settings to avoid conflicts with existing PostgreSQL installations.
+
 ```mermaid
 graph LR
-Settings["app/config.py"] --> DBInit["app/db/__init__.py"]
+Settings["app/config.py<br/>postgres_url<br/>Host:Port configurable"] --> DBInit["app/db/__init__.py"]
 DBInit --> Models["app/db/models.py"]
 Models --> MigrationsEnv["app/db/migrations/env.py"]
 MigrationsEnv --> AlembicIni["safe4ai-pilot/alembic.ini"]
@@ -443,6 +495,7 @@ Startup["app/main.py"] --> DBInit
 Startup --> PGVector["pgvector Extension"]
 ScriptsMigrate["scripts/migrate.py"] --> MigrationsEnv
 ScriptsBackup["scripts/backup.py"] --> Settings
+DockerPorts["Port Configuration<br/>5432 vs 5433"] --> Settings
 ```
 
 **Diagram sources**
@@ -454,6 +507,8 @@ ScriptsBackup["scripts/backup.py"] --> Settings
 - [app/main.py:35-37](file://safe4ai-pilot/app/main.py#L35-L37)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
+- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
+- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
 
 **Section sources**
 - [app/config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
@@ -463,6 +518,8 @@ ScriptsBackup["scripts/backup.py"] --> Settings
 - [app/main.py:35-37](file://safe4ai-pilot/app/main.py#L35-L37)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
+- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
+- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
 
 ## Performance Considerations
 - Vector similarity queries rely on GIN/HNSW indexes implicitly supported by pgvector; ensure appropriate indexing and consider partitioning for large datasets.
@@ -470,29 +527,37 @@ ScriptsBackup["scripts/backup.py"] --> Settings
 - Prefer batch operations for ingestion jobs and chunk inserts.
 - Monitor query plans for vector comparisons and adjust thresholds to balance recall and performance.
 - Pool configuration and pre-ping settings help maintain connection reliability.
-
-[No sources needed since this section provides general guidance]
+- **Updated** Connection pooling with configurable host/port reduces connection overhead and improves reliability across different deployment environments.
 
 ## Troubleshooting Guide
 Common issues and remedies:
 - pgvector extension missing: The application creates the extension at startup; verify the CREATE EXTENSION statement runs before schema creation.
 - Migration failures: Confirm the database URL in settings and that env.py imports models for autogenerate.
 - Backup failures: Validate pg_dump availability, Qdrant endpoint reachability, and filesystem permissions.
+- **Updated** Port conflicts: If PostgreSQL is already running on the default port 5432, use the development override configuration that maps to port 5433.
+
+**Updated** Port conflict resolution:
+- Check if PostgreSQL is running on port 5432: `netstat -an | grep 5432`
+- Use development configuration: `docker-compose -f docker-compose.yml -f docker-compose.override.yml up`
+- Verify connection: `psql "postgresql://safe4ai:safe4ai@localhost:5433/safe4ai"`
 
 Verification references:
 - Startup order ensures extension precedes table creation.
 - Container tests confirm pgvector presence.
 - Health checks validate PostgreSQL connectivity.
+- Port mapping verified in docker-compose configurations.
 
 **Section sources**
 - [tests/test_startup_schema.py:7-13](file://safe4ai-pilot/tests/test_startup_schema.py#L7-L13)
 - [tests/test_integration_containers.py:9-18](file://safe4ai-pilot/tests/test_integration_containers.py#L9-L18)
 - [app/main.py:35-40](file://safe4ai-pilot/app/main.py#L35-L40)
+- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
+- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
 
 ## Conclusion
 The database design leverages SQLAlchemy ORM and Alembic for robust schema evolution, with pgvector enabling efficient vector similarity search. Entities and constraints ensure referential integrity and operational correctness. The migration and backup scripts provide reliable lifecycle management, while startup-time extension provisioning guarantees runtime compatibility.
 
-[No sources needed since this section summarizes without analyzing specific files]
+**Updated** The configurable host and port settings ensure seamless integration with existing PostgreSQL installations by using different default ports for delivery (5432) and local development (5433) environments, preventing common port conflicts.
 
 ## Appendices
 
@@ -515,3 +580,28 @@ The database design leverages SQLAlchemy ORM and Alembic for robust schema evolu
 
 **Section sources**
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
+
+### Appendix D: Connection Configuration Reference
+**Updated** Complete reference for PostgreSQL connection configuration:
+
+**Delivery Environment Defaults:**
+```
+postgresql+psycopg2://safe4ai:safe4ai@localhost:5432/safe4ai
+```
+
+**Local Development Defaults:**
+```
+postgresql+psycopg2://safe4ai:safe4ai@localhost:5433/safe4ai
+```
+
+**Custom Configuration Options:**
+- Host: Any reachable PostgreSQL server hostname or IP
+- Port: Any available TCP port (default 5432 or 5433 for development)
+- Database: Any existing PostgreSQL database
+- SSL Mode: Can be configured via connection parameters
+- Connection Pooling: Pre-ping enabled for reliability
+
+**Section sources**
+- [app/config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
+- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
+- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)

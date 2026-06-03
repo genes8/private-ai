@@ -69,7 +69,7 @@ CR --> IG
 ```
 
 **Diagram sources**
-- [input_guard.py:1-48](file://safe4ai-pilot/app/security/input_guard.py#L1-L48)
+- [input_guard.py:1-72](file://safe4ai-pilot/app/security/input_guard.py#L1-L72)
 - [content_filter.py:1-63](file://safe4ai-pilot/app/security/content_filter.py#L1-L63)
 - [output_filter.py:1-60](file://safe4ai-pilot/app/security/output_filter.py#L1-L60)
 - [upload_validator.py:1-73](file://safe4ai-pilot/app/security/upload_validator.py#L1-L73)
@@ -79,7 +79,7 @@ CR --> IG
 - [chat_routes.py:109-142](file://safe4ai-pilot/app/api/chat_routes.py#L109-L142)
 
 **Section sources**
-- [input_guard.py:1-48](file://safe4ai-pilot/app/security/input_guard.py#L1-L48)
+- [input_guard.py:1-72](file://safe4ai-pilot/app/security/input_guard.py#L1-L72)
 - [models.py:38-41](file://safe4ai-pilot/app/models.py#L38-L41)
 - [chat_routes.py:109-142](file://safe4ai-pilot/app/api/chat_routes.py#L109-L142)
 
@@ -93,9 +93,9 @@ CR --> IG
 - **Security Middleware**: Comprehensive middleware stack for request validation, rate limiting, and access control.
 
 **Section sources**
-- [input_guard.py:26-48](file://safe4ai-pilot/app/security/input_guard.py#L26-L48)
+- [input_guard.py:39-72](file://safe4ai-pilot/app/security/input_guard.py#L39-L72)
 - [models.py:38-41](file://safe4ai-pilot/app/models.py#L38-L41)
-- [test_security_guards.py:32-83](file://safe4ai-pilot/tests/test_security_guards.py#L32-L83)
+- [test_security_guards.py:36-96](file://safe4ai-pilot/tests/test_security_guards.py#L36-L96)
 - [middleware.py:51-95](file://safe4ai-pilot/app/auth/middleware.py#L51-L95)
 
 ## Architecture Overview
@@ -130,13 +130,13 @@ end
 
 **Diagram sources**
 - [chat_routes.py:109-142](file://safe4ai-pilot/app/api/chat_routes.py#L109-L142)
-- [input_guard.py:29-47](file://safe4ai-pilot/app/security/input_guard.py#L29-L47)
+- [input_guard.py:47-71](file://safe4ai-pilot/app/security/input_guard.py#L47-L71)
 - [middleware.py:51-95](file://safe4ai-pilot/app/auth/middleware.py#L51-L95)
 
 ## Detailed Component Analysis
 
 ### InputGuard
-The InputGuard class implements a comprehensive sanitization pipeline with six primary steps:
+The InputGuard class implements a comprehensive sanitization pipeline with seven primary steps:
 
 **Enhanced** Improved with Unicode normalization, HTML entity decoding, and advanced whitespace handling to prevent sophisticated attacks.
 
@@ -163,34 +163,39 @@ StripHTML --> CleanCtrl["Remove non-printable control characters<br/>keep spaces
 CleanCtrl --> CollapseWS["Collapse whitespace<br/>Eliminate obfuscation"]
 CollapseWS --> LenCheck{"Length <= MAX_CHARS?"}
 LenCheck --> |No| BlockLen["Return GuardResult(allowed=False,<br/>reason='Query too long')"]
-LenCheck --> |Yes| PatternScan["Scan for injection patterns"]
+LenCheck --> |Yes| BlockedTerms["Check configured blocked terms"]
+BlockedTerms --> FoundTerm{"Blocked term matched?"}
+FoundTerm --> |Yes| BlockTerm["Return GuardResult(allowed=False,<br/>reason='Blocked term detected: {term}')"]
+FoundTerm --> |No| PatternScan["Scan for injection patterns"]
 PatternScan --> Found{"Pattern matched?"}
 Found --> |Yes| BlockInject["Return GuardResult(allowed=False,<br/>reason='Potential prompt injection detected')"]
 Found --> |No| Allow["Return GuardResult(allowed=True, reason='ok')"]
 ```
 
 **Diagram sources**
-- [input_guard.py:29-47](file://safe4ai-pilot/app/security/input_guard.py#L29-L47)
+- [input_guard.py:47-71](file://safe4ai-pilot/app/security/input_guard.py#L47-L71)
 
 Practical examples:
-- Normal query allowed: See [test_input_guard_allows_normal_query:32-38](file://safe4ai-pilot/tests/test_security_guards.py#L32-L38).
-- Too-long query blocked: See [test_input_guard_blocks_too_long:41-48](file://safe4ai-pilot/tests/test_security_guards.py#L41-L48).
-- Injection patterns blocked: See [test_input_guard_blocks_injection_ignore_previous:51-57](file://safe4ai-pilot/tests/test_security_guards.py#L51-L57), [test_input_guard_blocks_injection_you_are_now:60-66](file://safe4ai-pilot/tests/test_security_guards.py#L60-L66), [test_input_guard_blocks_injection_act_as:68-73](file://safe4ai-pilot/tests/test_security_guards.py#L68-L73).
-- HTML stripped: See [test_input_guard_strips_html:76-82](file://safe4ai-pilot/tests/test_security_guards.py#L76-L82).
+- Normal query allowed: See [test_input_guard_allows_normal_query:36-42](file://safe4ai-pilot/tests/test_security_guards.py#L36-L42).
+- Too-long query blocked: See [test_input_guard_blocks_too_long:45-52](file://safe4ai-pilot/tests/test_security_guards.py#L45-L52).
+- Injection patterns blocked: See [test_input_guard_blocks_injection_ignore_previous:55-61](file://safe4ai-pilot/tests/test_security_guards.py#L55-L61), [test_input_guard_blocks_injection_you_are_now:64-69](file://safe4ai-pilot/tests/test_security_guards.py#L64-L69), [test_input_guard_blocks_injection_act_as:72-77](file://safe4ai-pilot/tests/test_security_guards.py#L72-L77).
+- HTML stripped: See [test_input_guard_strips_html:89-95](file://safe4ai-pilot/tests/test_security_guards.py#L89-L95).
 
 Configuration and customization:
 - Maximum characters: Defined as a class constant and enforced in the check method. To change the limit, modify the constant and ensure downstream components align.
 - Injection patterns: Patterns are compiled once and reused. Extend the list to add new detection rules.
+- Blocked terms: Configurable list of terms that will block input regardless of other checks.
 - Preprocessing pipeline: The sanitization order is critical - HTML entities must be decoded before Unicode normalization, which must precede HTML tag stripping.
 
 Validation failure handling:
 - On length violation: GuardResult indicates the query is too long.
+- On blocked term detection: GuardResult indicates a blocked term was found.
 - On injection detection: GuardResult indicates potential prompt injection.
 - On success: GuardResult indicates the query is allowed.
 
 **Section sources**
-- [input_guard.py:26-48](file://safe4ai-pilot/app/security/input_guard.py#L26-L48)
-- [test_security_guards.py:32-83](file://safe4ai-pilot/tests/test_security_guards.py#L32-L83)
+- [input_guard.py:39-72](file://safe4ai-pilot/app/security/input_guard.py#L39-L72)
+- [test_security_guards.py:36-96](file://safe4ai-pilot/tests/test_security_guards.py#L36-L96)
 
 ### GuardResult Model
 GuardResult encapsulates the outcome of a security check:
@@ -237,7 +242,7 @@ Key features:
 - [middleware.py:98-109](file://safe4ai-pilot/app/auth/middleware.py#L98-L109)
 
 ### Comprehensive Sanitization Pipeline
-The sanitization pipeline now includes three critical security enhancements:
+The sanitization pipeline now includes four critical security enhancements:
 
 #### Unicode Normalization (NFKC)
 - Prevents homoglyph attacks by converting visually similar characters to their canonical forms
@@ -254,8 +259,12 @@ The sanitization pipeline now includes three critical security enhancements:
 - Converts irregular whitespace sequences to single spaces
 - Maintains readability while preventing encoding-based evasion
 
+#### HTML Tag Stripping
+- Removes angle-bracketed markup using compiled regex patterns
+- Prevents HTML injection attempts before further processing
+
 **Section sources**
-- [input_guard.py:30-36](file://safe4ai-pilot/app/security/input_guard.py#L30-L36)
+- [input_guard.py:47-54](file://safe4ai-pilot/app/security/input_guard.py#L47-L54)
 
 ### Regex-Based Security Patterns
 The InputGuard defines a set of compiled regex patterns to detect prompt injection attempts:
@@ -265,26 +274,28 @@ The InputGuard defines a set of compiled regex patterns to detect prompt injecti
 These patterns are compiled once and reused for performance.
 
 **Section sources**
-- [input_guard.py:11-21](file://safe4ai-pilot/app/security/input_guard.py#L11-L21)
+- [input_guard.py:20-34](file://safe4ai-pilot/app/security/input_guard.py#L20-L34)
 
 ### Character Limit Enforcement and Printable Character Validation
 - Maximum length: Enforced by comparing the sanitized query length to a fixed threshold.
 - Printable validation: Non-printable control characters are removed while preserving whitespace characters commonly used in text.
 
 **Section sources**
-- [input_guard.py:27](file://safe4ai-pilot/app/security/input_guard.py#L27)
-- [input_guard.py:35-36](file://safe4ai-pilot/app/security/input_guard.py#L35-L36)
+- [input_guard.py:40](file://safe4ai-pilot/app/security/input_guard.py#L40)
+- [input_guard.py:52-54](file://safe4ai-pilot/app/security/input_guard.py#L52-L54)
 
 ### Extending Security Patterns and Additional Rules
 To extend the system:
 - Add new regex patterns to the injection patterns list for detection.
 - Introduce additional sanitization steps (e.g., Unicode normalization, additional character whitelisting) before length and pattern checks.
+- Configure blocked terms for domain-specific content filtering.
 - Centralize configuration of thresholds and patterns for easier maintenance.
 
 Note: The current implementation compiles patterns once at module load time. When extending, ensure patterns remain compiled and reused efficiently.
 
 **Section sources**
-- [input_guard.py:11-21](file://safe4ai-pilot/app/security/input_guard.py#L11-L21)
+- [input_guard.py:20-34](file://safe4ai-pilot/app/security/input_guard.py#L20-L34)
+- [input_guard.py:42-45](file://safe4ai-pilot/app/security/input_guard.py#L42-L45)
 
 ## Dependency Analysis
 The InputGuard depends on:
@@ -296,7 +307,7 @@ The InputGuard depends on:
 Integration points:
 - Chat routes validate the question before invoking the pipeline.
 - Authentication middleware provides CSRF protection and JWT validation.
-- Tests validate behavior across normal, too-long, and injection scenarios.
+- Tests validate behavior across normal, too-long, blocked terms, and injection scenarios.
 
 ```mermaid
 graph LR
@@ -310,22 +321,22 @@ TG["Test Security Guards<br/>test_security_guards.py"] --> IG
 ```
 
 **Diagram sources**
-- [input_guard.py:26-48](file://safe4ai-pilot/app/security/input_guard.py#L26-L48)
+- [input_guard.py:39-72](file://safe4ai-pilot/app/security/input_guard.py#L39-L72)
 - [models.py:38-41](file://safe4ai-pilot/app/models.py#L38-L41)
 - [chat_routes.py:109-142](file://safe4ai-pilot/app/api/chat_routes.py#L109-L142)
-- [test_security_guards.py:32-83](file://safe4ai-pilot/tests/test_security_guards.py#L32-L83)
+- [test_security_guards.py:36-96](file://safe4ai-pilot/tests/test_security_guards.py#L36-L96)
 - [middleware.py:51-95](file://safe4ai-pilot/app/auth/middleware.py#L51-L95)
 
 **Section sources**
-- [input_guard.py:26-48](file://safe4ai-pilot/app/security/input_guard.py#L26-L48)
+- [input_guard.py:39-72](file://safe4ai-pilot/app/security/input_guard.py#L39-L72)
 - [chat_routes.py:109-142](file://safe4ai-pilot/app/api/chat_routes.py#L109-L142)
-- [test_security_guards.py:32-83](file://safe4ai-pilot/tests/test_security_guards.py#L32-L83)
+- [test_security_guards.py:36-96](file://safe4ai-pilot/tests/test_security_guards.py#L36-L96)
 
 ## Performance Considerations
 - Regex compilation: Patterns are compiled once and reused, minimizing overhead.
 - **Enhanced** Multi-step preprocessing: HTML entity decoding, Unicode normalization, and whitespace handling add computational overhead but provide essential security benefits.
 - Single-pass sanitization: The enhanced pipeline processes input in a single pass through multiple stages for efficiency.
-- Early exit: Validation stops at the first failure (length or injection), avoiding unnecessary work.
+- Early exit: Validation stops at the first failure (length, blocked terms, or injection), avoiding unnecessary work.
 - Threshold tuning: Adjust the maximum character limit to balance safety and usability.
 - **Enhanced** Authentication overhead: JWT validation adds minimal overhead but provides crucial security benefits.
 - **Enhanced** Rate limiting integration: Works seamlessly with authentication middleware for comprehensive protection.
@@ -334,6 +345,7 @@ TG["Test Security Guards<br/>test_security_guards.py"] --> IG
 Common issues and resolutions:
 - Queries rejected as too long: Verify the maximum character limit and consider increasing it if legitimate inputs exceed the threshold.
 - False positives for injection detection: Review the regex patterns and refine them to reduce over-blocking while maintaining protection.
+- Blocked terms not working: Ensure blocked terms are properly configured and the input is being converted to lowercase for comparison.
 - HTML not being stripped: Confirm that the input contains standard HTML tags and that the sanitization step runs before length checks.
 - **Enhanced** Unicode normalization issues: Ensure input contains valid Unicode sequences that can be properly normalized.
 - **Enhanced** HTML entity decoding problems: Verify that HTML entities are properly formatted and not malformed.
@@ -343,13 +355,14 @@ Common issues and resolutions:
 - Consistent error reporting: Ensure clients handle GuardResult.reason for actionable feedback.
 
 Relevant tests:
-- Normal query allowed: [test_input_guard_allows_normal_query:32-38](file://safe4ai-pilot/tests/test_security_guards.py#L32-L38)
-- Too-long query blocked: [test_input_guard_blocks_too_long:41-48](file://safe4ai-pilot/tests/test_security_guards.py#L41-L48)
-- Injection patterns blocked: [test_input_guard_blocks_injection_ignore_previous:51-57](file://safe4ai-pilot/tests/test_security_guards.py#L51-L57), [test_input_guard_blocks_injection_you_are_now:60-66](file://safe4ai-pilot/tests/test_security_guards.py#L60-L66), [test_input_guard_blocks_injection_act_as:68-73](file://safe4ai-pilot/tests/test_security_guards.py#L68-L73)
-- HTML stripped: [test_input_guard_strips_html:76-82](file://safe4ai-pilot/tests/test_security_guards.py#L76-L82)
+- Normal query allowed: [test_input_guard_allows_normal_query:36-42](file://safe4ai-pilot/tests/test_security_guards.py#L36-L42)
+- Too-long query blocked: [test_input_guard_blocks_too_long:45-52](file://safe4ai-pilot/tests/test_security_guards.py#L45-L52)
+- Injection patterns blocked: [test_input_guard_blocks_injection_ignore_previous:55-61](file://safe4ai-pilot/tests/test_security_guards.py#L55-L61), [test_input_guard_blocks_injection_you_are_now:64-69](file://safe4ai-pilot/tests/test_security_guards.py#L64-L69), [test_input_guard_blocks_injection_act_as:72-77](file://safe4ai-pilot/tests/test_security_guards.py#L72-L77)
+- HTML stripped: [test_input_guard_strips_html:89-95](file://safe4ai-pilot/tests/test_security_guards.py#L89-L95)
+- Blocked terms: [test_input_guard_blocks_configured_terms:80-86](file://safe4ai-pilot/tests/test_security_guards.py#L80-L86)
 
 **Section sources**
-- [test_security_guards.py:32-83](file://safe4ai-pilot/tests/test_security_guards.py#L32-L83)
+- [test_security_guards.py:36-96](file://safe4ai-pilot/tests/test_security_guards.py#L36-L96)
 
 ## Conclusion
-The InputGuard provides a comprehensive, efficient mechanism to sanitize and validate user inputs prior to LLM processing. The enhanced sanitization pipeline now includes Unicode normalization using NFKC form to prevent homoglyph attacks, HTML entity decoding to neutralize encoding bypass attempts, and comprehensive whitespace collapsing to eliminate obfuscation techniques. The system has been strengthened with CSRF protection integration through authentication middleware, providing JWT-based access control with role validation and token revocation support. By combining these advanced preprocessing steps with HTML tag stripping, printable character filtering, length enforcement, and regex-based injection detection, the system provides robust protection against sophisticated prompt injection attacks. The GuardResult model ensures consistent, exception-free error reporting. With clear extension points for patterns and thresholds, the system can evolve to address emerging threats while maintaining predictable performance and usability.
+The InputGuard provides a comprehensive, efficient mechanism to sanitize and validate user inputs prior to LLM processing. The enhanced sanitization pipeline now includes Unicode normalization using NFKC form to prevent homoglyph attacks, HTML entity decoding to neutralize encoding bypass attempts, and comprehensive whitespace collapsing to eliminate obfuscation techniques. The system has been strengthened with CSRF protection integration through authentication middleware, providing JWT-based access control with role validation and token revocation support. By combining these advanced preprocessing steps with HTML tag stripping, printable character filtering, length enforcement, and regex-based injection detection, the system provides robust protection against sophisticated prompt injection attacks. The GuardResult model ensures consistent, exception-free error reporting. With clear extension points for patterns, thresholds, and blocked terms, the system can evolve to address emerging threats while maintaining predictable performance and usability.

@@ -2,9 +2,7 @@
 
 <cite>
 **Referenced Files in This Document**
-- [product-readiness-copy-audit.md](file://product-readiness-copy-audit.md)
 - [site-copy.md](file://site-copy.md)
-- [site-copy-gap-analysis.md](file://site-copy-gap-analysis.md)
 - [SettingsPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx)
 - [audit_routes.py](file://safe4ai-pilot/app/api/audit_routes.py)
 - [output_filter.py](file://safe4ai-pilot/app/security/output_filter.py)
@@ -16,6 +14,12 @@
 - [tracer.py](file://safe4ai-pilot/observability/tracer.py)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Removed references to product-readiness-copy-audit.md and site-copy-gap-analysis.md as these files were removed from the codebase
+- Updated documentation structure to reflect streamlined approach focusing on core implementation details
+- Maintained all functional analysis while removing dependency on dropped documentation files
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -84,9 +88,7 @@ AC --> DB
 - [audit_cleanup.py:1-132](file://safe4ai-pilot/scripts/audit_cleanup.py#L1-L132)
 
 **Section sources**
-- [product-readiness-copy-audit.md:1-211](file://product-readiness-copy-audit.md#L1-L211)
 - [site-copy.md:1-133](file://site-copy.md#L1-L133)
-- [site-copy-gap-analysis.md:1-156](file://site-copy-gap-analysis.md#L1-L156)
 
 ## Core Components
 - Tier enforcement: seat caps, monthly query limits, and evaluation expiry are enforced via quota_service and checked in user creation and chat endpoints.
@@ -109,12 +111,11 @@ The audit compares website claims with backend enforcement across four areas:
 ```mermaid
 flowchart TD
 Start(["Copy Audit Start"]) --> Claims["Extract Website Claims<br/>site-copy.md"]
-Claims --> Gaps["Map to Implementation Gaps<br/>site-copy-gap-analysis.md"]
-Gaps --> Enforce["Enforcement Layer<br/>quota_service.py, user_routes.py, chat_routes.py"]
-Gaps --> Audit["Audit/Citation Layer<br/>audit_routes.py, output_filter.py"]
-Gaps --> SSO["SSO Layer<br/>settings_service.py, SettingsPage.tsx"]
-Gaps --> Compliance["Compliance Evidence<br/>tracer.py, audit_cleanup.py"]
-Enforce --> Decision["Product Decision Matrix<br/>product-readiness-copy-audit.md"]
+Claims --> Enforce["Enforcement Layer<br/>quota_service.py, user_routes.py, chat_routes.py"]
+Claims --> Audit["Audit/Citation Layer<br/>audit_routes.py, output_filter.py"]
+Claims --> SSO["SSO Layer<br/>settings_service.py, SettingsPage.tsx"]
+Claims --> Compliance["Compliance Evidence<br/>tracer.py, audit_cleanup.py"]
+Enforce --> Decision["Product Decision Matrix"]
 Audit --> Decision
 SSO --> Decision
 Compliance --> Decision
@@ -124,8 +125,6 @@ Actions --> End(["Audit Outcome"])
 
 **Diagram sources**
 - [site-copy.md:106-121](file://site-copy.md#L106-L121)
-- [site-copy-gap-analysis.md:9-156](file://site-copy-gap-analysis.md#L9-L156)
-- [product-readiness-copy-audit.md:33-210](file://product-readiness-copy-audit.md#L33-L210)
 
 ## Detailed Component Analysis
 
@@ -250,30 +249,25 @@ J --> K["Allow"]
 
 **Section sources**
 - [models.py:25-28](file://safe4ai-pilot/app/db/models.py#L25-L28)
-- [site-copy-gap-analysis.md:82-87](file://site-copy-gap-analysis.md#L82-L87)
 
 ## Dependency Analysis
 The audit reveals dependencies between website claims and backend enforcement:
 
 ```mermaid
 graph LR
-SC["site-copy.md"] --> GA["site-copy-gap-analysis.md"]
-GA --> PR["product-readiness-copy-audit.md"]
-PR --> US["user_routes.py"]
-PR --> CH["chat_routes.py"]
-PR --> QU["quota_service.py"]
-PR --> AR["audit_routes.py"]
-PR --> OF["output_filter.py"]
-PR --> ST["settings_service.py"]
-PR --> SP["SettingsPage.tsx"]
-PR --> TR["tracer.py"]
-PR --> AC["audit_cleanup.py"]
+SC["site-copy.md"] --> US["user_routes.py"]
+SC --> CH["chat_routes.py"]
+SC --> QU["quota_service.py"]
+SC --> AR["audit_routes.py"]
+SC --> OF["output_filter.py"]
+SC --> ST["settings_service.py"]
+SC --> SP["SettingsPage.tsx"]
+SC --> TR["tracer.py"]
+SC --> AC["audit_cleanup.py"]
 ```
 
 **Diagram sources**
 - [site-copy.md:106-121](file://site-copy.md#L106-L121)
-- [site-copy-gap-analysis.md:9-156](file://site-copy-gap-analysis.md#L9-L156)
-- [product-readiness-copy-audit.md:33-210](file://product-readiness-copy-audit.md#L33-L210)
 - [user_routes.py:68-101](file://safe4ai-pilot/app/api/user_routes.py#L68-L101)
 - [chat_routes.py:138-150](file://safe4ai-pilot/app/api/chat_routes.py#L138-L150)
 - [quota_service.py:87-155](file://safe4ai-pilot/app/services/quota_service.py#L87-L155)
@@ -284,15 +278,10 @@ PR --> AC["audit_cleanup.py"]
 - [tracer.py:27-32](file://safe4ai-pilot/observability/tracer.py#L27-L32)
 - [audit_cleanup.py:35-86](file://safe4ai-pilot/scripts/audit_cleanup.py#L35-L86)
 
-**Section sources**
-- [product-readiness-copy-audit.md:20-32](file://product-readiness-copy-audit.md#L20-L32)
-
 ## Performance Considerations
 - Current implementation relies on database-backed counters for seat and query enforcement. These are efficient for small to medium deployments but should be monitored for contention.
 - Audit CSV export streams rows; consider pagination and compression for large datasets.
 - OpenTelemetry exporter batching is configured; ensure exporter endpoint reliability and throughput.
-
-[No sources needed since this section provides general guidance]
 
 ## Troubleshooting Guide
 Common issues and remedies derived from the audit:

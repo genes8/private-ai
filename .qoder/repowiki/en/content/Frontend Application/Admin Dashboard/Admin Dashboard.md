@@ -29,16 +29,20 @@
 - [settings.ts](file://safe4ai-pilot/frontend/src/api/settings.ts)
 - [client.ts](file://safe4ai-pilot/frontend/src/api/client.ts)
 - [admin_routes.py](file://safe4ai-pilot/app/api/admin_routes.py)
+- [oidc.py](file://safe4ai-pilot/app/auth/oidc.py)
+- [input_guard.py](file://safe4ai-pilot/app/security/input_guard.py)
 - [test_admin.py](file://safe4ai-pilot/tests/test_admin.py)
+- [test_oidc.py](file://safe4ai-pilot/tests/test_oidc.py)
 - [test_runtime_config.py](file://safe4ai-pilot/tests/test_runtime_config.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added documentation for the new 'Back to chat' navigation option in the admin sidebar
-- Enhanced AdminLayout documentation to include seamless navigation between admin and chat interfaces
-- Updated navigation patterns to reflect the new back-to-chat functionality
-- Maintained existing admin functionality while documenting the improved user experience
+- Added documentation for enhanced OIDC authentication integration in SettingsPage
+- Updated security features documentation to include blocked terms filtering
+- Enhanced SettingsPage configuration options with OIDC settings and blocked terms management
+- Updated authentication flows documentation to reflect improved OIDC integration
+- Added security guard documentation for input filtering and prompt injection prevention
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -56,10 +60,10 @@
 ## Introduction
 This document describes the enhanced admin dashboard system for the private·ai platform. The system now includes comprehensive administrative interfaces covering monitoring, document management, activity auditing, feedback administration, user management, and system configuration. The dashboard features six core pages: OverviewPage for system monitoring, DocumentsPage for document management, ActivityPage for audit trails, FeedbackPage for user feedback analysis, UsersPage for team administration, and SettingsPage for system configuration. The system leverages a consistent admin layout with navigation patterns, real-time data visualization through Sparkline charts, and robust API integration for all administrative functions.
 
-**Updated** Added the new 'Back to chat' navigation option that creates seamless navigation between the admin interface and the main chat interface, improving user workflow efficiency and reducing context switching overhead.
+**Updated** Enhanced with improved authentication flows including OIDC integration, better security measures with blocked terms filtering, and updated frontend hooks/components supporting modern authentication and content filtering systems.
 
 ## Project Structure
-The admin dashboard has been significantly enhanced with new components and pages. The system now includes both frontend-based admin pages and design system components that provide comprehensive administrative capabilities.
+The admin dashboard has been significantly enhanced with new components and pages. The system now includes both frontend-based admin pages and design system components that provide comprehensive administrative capabilities, along with enhanced security and authentication features.
 
 ```mermaid
 graph TB
@@ -99,6 +103,11 @@ FB["feedback.ts"]
 AT["audit.ts"]
 SET["settings.ts"]
 end
+subgraph "Security & Authentication"
+OIDC["OIDC Authentication"]
+IG["Input Guard"]
+BT["Blocked Terms"]
+end
 AL --> SP
 AL --> UP
 AL --> FP
@@ -112,6 +121,9 @@ FP --> FB
 AP --> AT
 DP --> DOC
 OP --> ST
+SP --> OIDC
+SP --> IG
+IG --> BT
 ```
 
 **Diagram sources**
@@ -123,6 +135,8 @@ OP --> ST
 - [AdminFeedback.tsx:5-215](file://design/components/AdminFeedback.tsx#L5-L215)
 - [AdminStats.tsx:5-258](file://design/components/AdminStats.tsx#L5-L258)
 - [AdminShell.tsx:12-20](file://design/components/AdminShell.tsx#L12-L20)
+- [oidc.py:78-149](file://safe4ai-pilot/app/auth/oidc.py#L78-L149)
+- [input_guard.py:39-71](file://safe4ai-pilot/app/security/input_guard.py#L39-L71)
 
 **Section sources**
 - [AdminLayout.tsx:10-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L10-L19)
@@ -130,7 +144,7 @@ OP --> ST
 - [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 
 ## Core Components
-The admin dashboard now encompasses six comprehensive pages with distinct responsibilities, enhanced by seamless navigation between admin and chat interfaces:
+The admin dashboard now encompasses six comprehensive pages with distinct responsibilities, enhanced by seamless navigation between admin and chat interfaces and strengthened security measures:
 
 **AdminLayout**: Enhanced with Settings navigation, improved feedback badge display, and the new 'Back to chat' navigation option
 **OverviewPage**: System monitoring and analytics with real-time metrics
@@ -138,7 +152,7 @@ The admin dashboard now encompasses six comprehensive pages with distinct respon
 **ActivityPage**: Comprehensive audit trail with filtering and export capabilities
 **FeedbackPage**: User feedback analysis with rating categorization and trace details
 **UsersPage**: Team management with invitation, status control, and role assignment
-**SettingsPage**: Complete system configuration with redesigned mode selector cards and context-specific model management
+**SettingsPage**: Complete system configuration with redesigned mode selector cards, OIDC authentication settings, and blocked terms management
 
 **Enhanced SettingsPage Features**:
 - **Mode Selector Cards**: Visual cards for Local, Hybrid, and Cloud provider modes
@@ -146,6 +160,16 @@ The admin dashboard now encompasses six comprehensive pages with distinct respon
 - **Custom Model Management**: Support for external provider model names
 - **Real-time Provider Validation**: Connectivity testing with immediate feedback
 - **Intelligent Model Options**: Dynamic model lists based on current configuration
+- **OIDC Authentication Settings**: Client ID, client secret, redirect URI, and domain restrictions
+- **Blocked Terms Management**: Configurable content filtering and prompt injection prevention
+- **Security Configuration**: Enhanced authentication and access control settings
+
+**Enhanced Security Features**:
+- **Input Guard**: Comprehensive input validation with blocked terms filtering
+- **Prompt Injection Detection**: Advanced pattern matching for security threats
+- **SSRF Protection**: Secure server-side request forgery prevention in OIDC flows
+- **Domain Restriction**: Email domain validation for OIDC authentication
+- **Auto-Provisioning**: Controlled user creation after successful OIDC authentication
 
 **Enhanced Components**:
 - Sparkline: Lightweight trend visualization
@@ -166,9 +190,11 @@ The admin dashboard now encompasses six comprehensive pages with distinct respon
 - [AdminDocs.tsx:27-238](file://design/components/AdminDocs.tsx#L27-238)
 - [AdminFeedback.tsx:29-215](file://design/components/AdminFeedback.tsx#L29-215)
 - [AdminStats.tsx:44-258](file://design/components/AdminStats.tsx#L44-L258)
+- [oidc.py:78-149](file://safe4ai-pilot/app/auth/oidc.py#L78-L149)
+- [input_guard.py:39-71](file://safe4ai-pilot/app/security/input_guard.py#L39-L71)
 
 ## Architecture Overview
-The enhanced admin architecture follows a modular pattern with clear separation of concerns across six specialized pages, each leveraging shared components and APIs. The new 'Back to chat' navigation creates seamless integration between admin and chat interfaces.
+The enhanced admin architecture follows a modular pattern with clear separation of concerns across six specialized pages, each leveraging shared components and APIs. The new 'Back to chat' navigation creates seamless integration between admin and chat interfaces, while enhanced security measures protect against various threats.
 
 ```mermaid
 sequenceDiagram
@@ -262,7 +288,7 @@ AutoRedirect --> OverviewPage["Render OverviewPage"]
 - [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 
 ### SettingsPage - Redesigned Configuration Management
-The SettingsPage provides complete system configuration with redesigned mode selector cards and context-specific model management.
+The SettingsPage provides complete system configuration with redesigned mode selector cards and context-specific model management, now enhanced with OIDC authentication and blocked terms filtering capabilities.
 
 **Redesigned Mode Selector System**:
 - **Visual Mode Cards**: Three distinct provider mode cards with icons and badges
@@ -270,11 +296,16 @@ The SettingsPage provides complete system configuration with redesigned mode sel
 - **Context-Specific Guidance**: Mode-appropriate hints and warnings
 - **Real-time Validation**: Immediate feedback during configuration changes
 
+**Enhanced Security Configuration**:
+- **OIDC Authentication Settings**: Client ID, client secret, redirect URI, and domain restrictions
+- **Blocked Terms Management**: Configurable content filtering and prompt injection prevention
+- **Security Configuration**: Enhanced authentication and access control settings
+
 **Configuration Sections**:
 - **Models**: Generation, fallback, and embedding model selection with version control
 - **Retrieval**: Chunk management, scoring thresholds, and processing parameters
 - **Sources**: Document source connections (S3, Google Drive, watch folders)
-- **Security**: Authentication, session management, and audit retention
+- **Security**: Authentication, session management, audit retention, and content filtering
 - **Cost**: Spend monitoring, daily/monthly ceilings, and budget controls
 - **Provider**: Enhanced provider configuration with mode selector cards
 
@@ -286,6 +317,8 @@ The SettingsPage provides complete system configuration with redesigned mode sel
 - **Scroll-snap Layout**: Left-rail navigation with section-based scrolling
 - **Automatic Change Propagation**: Configuration changes applied to all users within 30 seconds
 - **Comprehensive Audit Logging**: All configuration changes tracked and logged
+- **OIDC Integration**: Secure single sign-on configuration and management
+- **Content Filtering**: Blocked terms and prompt injection prevention
 
 ```mermaid
 flowchart TD
@@ -302,6 +335,15 @@ CloudMode --> CloudModels2["Provider Model Dropdowns"]
 CustomModels["Custom Model Manager"] --> AddCustom["Add Custom Models"]
 AddCustom --> SaveCustom["Save Custom Models"]
 end
+subgraph "Enhanced Security Configuration"
+OIDCConfig["OIDC Authentication"] --> ClientID["Client ID Input"]
+OIDCConfig --> ClientSecret["Client Secret Input"]
+OIDCConfig --> RedirectURI["Redirect URI Input"]
+OIDCConfig --> AllowedDomains["Allowed Domains Input"]
+OIDCConfig --> AutoProvision["Auto-Provision Toggle"]
+BlockedTerms["Blocked Terms"] --> TermsInput["Terms Input Field"]
+BlockedTerms --> TermsList["Terms List Display"]
+end
 RenderSections --> Mutations["useMutation: patchSettings()"]
 Mutations --> Success["Update UI with new settings"]
 ```
@@ -309,6 +351,8 @@ Mutations --> Success["Update UI with new settings"]
 **Diagram sources**
 - [SettingsPage.tsx:189-193](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L189-L193)
 - [settings.ts:56-62](file://safe4ai-pilot/frontend/src/api/settings.ts#L56-L62)
+- [SettingsPage.tsx:455-486](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L455-L486)
+- [SettingsPage.tsx:474-483](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L474-L483)
 
 **Section sources**
 - [SettingsPage.tsx:176-378](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L176-L378)
@@ -376,11 +420,10 @@ ModeSelector["Mode Selector Cards"] --> LocalCard["Local Card"]
 ModeSelector --> HybridCard["Hybrid Card"]
 ModeSelector --> CloudCard["Cloud Card"]
 LocalCard --> LocalModels["Ollama Model Dropdowns"]
-HybridCard --> HybridModels["Provider Model Dropdowns"]
-CloudCard --> CloudModels["Provider Model Dropdowns"]
-LocalModels --> LocalValidation["Local Validation"]
-HybridModels --> HybridValidation["Hybrid Validation"]
-CloudModels --> CloudValidation["Cloud Validation"]
+HybridCard --> CloudModels["Provider Model Dropdowns"]
+CloudCard --> CloudModels2["Provider Model Dropdowns"]
+CustomModels["Custom Model Manager"] --> AddCustom["Add Custom Models"]
+AddCustom --> SaveCustom["Save Custom Models"]
 ```
 
 **Diagram sources**
@@ -487,6 +530,88 @@ SettingsPage-->>User : Show Validation Status
 - [SettingsPage.tsx:517-559](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L517-L559)
 - [admin_routes.py:1095-1137](file://safe4ai-pilot/app/api/admin_routes.py#L1095-L1137)
 - [test_admin.py:902-951](file://safe4ai-pilot/tests/test_admin.py#L902-L951)
+
+### Enhanced Security Features
+
+#### OIDC Authentication Integration
+The SettingsPage now includes comprehensive OIDC authentication configuration with secure integration and domain restriction capabilities.
+
+**OIDC Configuration Features**:
+- **Client ID Management**: Secure client ID input with validation
+- **Client Secret Handling**: Protected client secret storage and transmission
+- **Redirect URI Configuration**: Callback URL management for authentication flows
+- **Domain Restrictions**: Email domain validation for user authentication
+- **Auto-Provisioning**: Automatic user creation after successful OIDC login
+- **SSRF Protection**: Secure server-side request forgery prevention
+
+**Authentication Flow**:
+- Discovery of OIDC endpoints via well-known configuration
+- Authorization URL construction with state parameter
+- Token exchange for user information retrieval
+- Domain validation and user provisioning
+
+```mermaid
+sequenceDiagram
+participant User as "End User"
+participant OIDC as "OIDC Provider"
+participant Backend as "Private-AI Backend"
+participant Database as "User Database"
+User->>Backend : Request OIDC Login
+Backend->>OIDC : Discover Configuration
+OIDC-->>Backend : Return Endpoints
+Backend->>OIDC : Redirect with Authorization Code
+OIDC-->>Backend : Return Authorization Code
+Backend->>OIDC : Exchange Code for Tokens
+OIDC-->>Backend : Return Access Token
+Backend->>OIDC : Fetch User Info
+OIDC-->>Backend : Return User Information
+Backend->>Database : Validate Domain & Provision User
+Database-->>Backend : User Created/Found
+Backend-->>User : Redirect to Application
+```
+
+**Diagram sources**
+- [oidc.py:105-149](file://safe4ai-pilot/app/auth/oidc.py#L105-L149)
+- [SettingsPage.tsx:455-486](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L455-L486)
+
+#### Blocked Terms Filtering and Input Guard
+The system implements comprehensive input filtering to prevent prompt injection attacks and enforce content policies.
+
+**Input Guard Features**:
+- **HTML Entity Decoding**: Proper handling of encoded HTML content
+- **Unicode Normalization**: NFKC normalization for homoglyph prevention
+- **HTML Tag Removal**: Stripping of potentially malicious HTML tags
+- **Length Validation**: Maximum character limits for input safety
+- **Blocked Terms Detection**: Configurable term filtering with case-insensitive matching
+- **Injection Pattern Detection**: Advanced pattern matching for prompt injection attempts
+
+**Security Measures**:
+- **SSRF Protection**: Secure URL validation and pinned transport for OIDC endpoints
+- **Domain Restriction**: Email domain validation for OIDC authentication
+- **Auto-Provisioning Control**: Controlled user creation after successful authentication
+- **Content Filtering**: Real-time input validation and blocking
+
+```mermaid
+flowchart TD
+InputGuard["Input Guard System"] --> Decode["Decode HTML Entities"]
+Decode --> Normalize["Normalize Unicode"]
+Normalize --> CleanHTML["Remove HTML Tags"]
+CleanHTML --> CleanControl["Strip Control Characters"]
+CleanControl --> CollapseWS["Collapse Whitespace"]
+CollapseWS --> LengthCheck["Length Validation"]
+LengthCheck --> BlockedTerms["Blocked Terms Check"]
+BlockedTerms --> InjectionPatterns["Injection Pattern Check"]
+InjectionPatterns --> Result["Return Guard Result"]
+```
+
+**Diagram sources**
+- [input_guard.py:47-71](file://safe4ai-pilot/app/security/input_guard.py#L47-L71)
+- [oidc.py:78-149](file://safe4ai-pilot/app/auth/oidc.py#L78-L149)
+
+**Section sources**
+- [SettingsPage.tsx:455-486](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L455-L486)
+- [oidc.py:78-149](file://safe4ai-pilot/app/auth/oidc.py#L78-L149)
+- [input_guard.py:39-71](file://safe4ai-pilot/app/security/input_guard.py#L39-L71)
 
 ### New Design Components
 
@@ -657,7 +782,7 @@ HealthCard --> HealthStatus["Indexing Healthy"]
 - [AdminShell.tsx:1-119](file://design/components/AdminShell.tsx#L1-L119)
 
 ## Dependency Analysis
-The enhanced admin system maintains clean dependency relationships with additional components and APIs supporting the expanded functionality, including the new navigation integration.
+The enhanced admin system maintains clean dependency relationships with additional components and APIs supporting the expanded functionality, including the new navigation integration and enhanced security features.
 
 ```mermaid
 graph LR
@@ -689,6 +814,8 @@ AR --> FP
 AR --> AP
 AR --> DP
 AR --> OP
+OIDC["oidc.py"] --> SP
+IG["input_guard.py"] --> SP
 ```
 
 **Diagram sources**
@@ -697,6 +824,8 @@ AR --> OP
 - [UsersPage.tsx:14-17](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx#L14-L17)
 - [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 - [admin_routes.py:56-56](file://safe4ai-pilot/app/api/admin_routes.py#L56-L56)
+- [oidc.py:78-149](file://safe4ai-pilot/app/auth/oidc.py#L78-L149)
+- [input_guard.py:39-71](file://safe4ai-pilot/app/security/input_guard.py#L39-L71)
 
 **Section sources**
 - [AdminLayout.tsx:12-19](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L12-L19)
@@ -704,9 +833,11 @@ AR --> OP
 - [UsersPage.tsx:14-17](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx#L14-L17)
 - [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
 - [admin_routes.py:56-56](file://safe4ai-pilot/app/api/admin_routes.py#L56-L56)
+- [oidc.py:78-149](file://safe4ai-pilot/app/auth/oidc.py#L78-L149)
+- [input_guard.py:39-71](file://safe4ai-pilot/app/security/input_guard.py#L39-L71)
 
 ## Performance Considerations
-The enhanced admin system implements optimized data fetching strategies and efficient rendering patterns, including the new navigation features.
+The enhanced admin system implements optimized data fetching strategies and efficient rendering patterns, including the new navigation features and enhanced security measures.
 
 **Optimized Refresh Patterns**:
 - SettingsPage: Configuration changes propagate within 30 seconds
@@ -718,6 +849,8 @@ The enhanced admin system implements optimized data fetching strategies and effi
 - **New**: Mode selector cards with instant visual feedback
 - **New**: Context-specific model dropdowns with cached model lists
 - **New**: Back-to-chat navigation with instant routing
+- **New**: OIDC configuration validation with debounced requests
+- **New**: Blocked terms filtering with efficient pattern matching
 
 **Efficient Rendering**:
 - Virtualized scrolling for large datasets
@@ -728,6 +861,7 @@ The enhanced admin system implements optimized data fetching strategies and effi
 - **New**: Instant mode card selection without form submission
 - **New**: Context-aware model dropdown rendering
 - **New**: Seamless navigation without page reloads
+- **New**: Real-time security validation feedback
 
 **Network Optimization**:
 - Shared API client with authentication
@@ -737,9 +871,11 @@ The enhanced admin system implements optimized data fetching strategies and effi
 - **New**: Provider connectivity testing with timeout handling
 - **New**: Custom model validation with debounce
 - **New**: Client-side navigation optimization
+- **New**: OIDC endpoint discovery with caching
+- **New**: Blocked terms validation with batch processing
 
 ## Troubleshooting Guide
-Enhanced troubleshooting procedures for the expanded admin functionality, including navigation-related issues.
+Enhanced troubleshooting procedures for the expanded admin functionality, including navigation-related issues and new security features.
 
 **Settings Management Issues**:
 - Configuration changes not applying: Verify settings API connectivity and authentication
@@ -747,6 +883,8 @@ Enhanced troubleshooting procedures for the expanded admin functionality, includ
 - Source connection issues: Validate S3/GDrive credentials and permissions
 - **New**: Mode selector card interaction failures: Check browser compatibility and JavaScript
 - **New**: Context-specific model dropdown issues: Verify provider connectivity and model availability
+- **New**: OIDC configuration validation errors: Check client credentials and domain restrictions
+- **New**: Blocked terms filtering not working: Verify regex patterns and term formatting
 
 **Navigation Issues**:
 - **Back to chat not working**: Verify React Router configuration and navigation links
@@ -776,15 +914,24 @@ Enhanced troubleshooting procedures for the expanded admin functionality, includ
 - Indexing errors: Verify document preprocessing and embedding model availability
 - Search performance: Monitor Elasticsearch indices and query optimization
 
+**Security and Authentication Issues**:
+- **OIDC Login Failures**: Verify issuer URL, client credentials, and redirect URI configuration
+- **Domain Restriction Errors**: Check allowed domains list format and email verification
+- **Auto-Provisioning Issues**: Verify user creation permissions and database connectivity
+- **Input Guard False Positives**: Adjust blocked terms list and injection pattern rules
+- **SSRF Protection Errors**: Check network connectivity and URL validation configuration
+
 **Section sources**
 - [SettingsPage.tsx:360-366](file://safe4ai-pilot/frontend/src/pages/admin/SettingsPage.tsx#L360-L366)
 - [UsersPage.tsx:430-436](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx#L430-L436)
 - [AdminLayout.tsx:81-89](file://safe4ai-pilot/frontend/src/pages/admin/AdminLayout.tsx#L81-L89)
 - [App.tsx:29-34](file://safe4ai-pilot/frontend/src/App.tsx#L29-L34)
 - [admin_routes.py:1074-1080](file://safe4ai-pilot/app/api/admin_routes.py#L1074-L1080)
+- [oidc.py:78-149](file://safe4ai-pilot/app/auth/oidc.py#L78-L149)
+- [input_guard.py:39-71](file://safe4ai-pilot/app/security/input_guard.py#L39-L71)
 
 ## Security Considerations
-The enhanced admin system implements comprehensive security measures across all administrative functions, including navigation security.
+The enhanced admin system implements comprehensive security measures across all administrative functions, including navigation security and advanced authentication and content filtering capabilities.
 
 **Access Control**:
 - Role-based permissions (admin, pilot_user)
@@ -792,6 +939,8 @@ The enhanced admin system implements comprehensive security measures across all 
 - Two-factor authentication support
 - IP whitelisting and device trust
 - **New**: Navigation security with RequireAdmin wrapper preventing unauthorized access
+- **New**: OIDC domain restriction for email-based access control
+- **New**: Auto-provisioning control for user creation management
 
 **Data Protection**:
 - Audit logging for all administrative actions
@@ -801,6 +950,7 @@ The enhanced admin system implements comprehensive security measures across all 
 - **New**: API key masking and secure handling in UI
 - **New**: Provider configuration validation without exposing secrets
 - **New**: Secure navigation between admin and chat interfaces
+- **New**: Blocked terms configuration with secure storage
 
 **API Security**:
 - JWT token authentication with refresh cycles
@@ -810,6 +960,8 @@ The enhanced admin system implements comprehensive security measures across all 
 - **New**: Provider API key validation and secure transmission
 - **New**: Custom model validation and sanitization
 - **New**: Navigation endpoint security validation
+- **New**: OIDC endpoint discovery with SSRF protection
+- **New**: Blocked terms validation with regex sanitization
 
 **Compliance**:
 - Audit retention policies (30-365 days configurable)
@@ -817,16 +969,19 @@ The enhanced admin system implements comprehensive security measures across all 
 - Security incident response procedures
 - Regular security assessments and penetration testing
 
-**Provider Security**:
+**Enhanced Provider Security**:
 - **New**: Secure API key handling with masking
 - **New**: Real-time validation without exposing secrets
 - **New**: Provider connectivity testing with controlled requests
 - **New**: Configuration change audit logging
 - **New**: Custom model identifier validation
 - **New**: Navigation security enforcement
+- **New**: OIDC authentication with domain restriction
+- **New**: Input guard with blocked terms filtering
+- **New**: Prompt injection detection and prevention
 
 ## Practical Extensions
-The enhanced admin system provides numerous opportunities for customization and extension, including navigation enhancements.
+The enhanced admin system provides numerous opportunities for customization and extension, including navigation enhancements and advanced security features.
 
 **Adding New Administrative Pages**:
 - Create new page component following AdminLayout pattern
@@ -847,6 +1002,8 @@ The enhanced admin system provides numerous opportunities for customization and 
 - Create configuration templates and presets
 - **New**: Extend mode selector cards with additional provider types
 - **New**: Implement advanced model validation and compatibility checking
+- **New**: Add OIDC provider configuration for multiple identity providers
+- **New**: Implement advanced blocked terms management with regex support
 
 **Extending Monitoring Capabilities**:
 - Add custom metrics and KPIs to OverviewPage
@@ -860,6 +1017,7 @@ The enhanced admin system provides numerous opportunities for customization and 
 - Create user onboarding workflows
 - Add team collaboration features
 - **New**: Enhance navigation UX with progress indicators and tooltips
+- **New**: Implement user session management with activity monitoring
 
 **Enhancing Provider Management**:
 - **New**: Add support for additional provider types (Azure, Anthropic, etc.)
@@ -867,8 +1025,17 @@ The enhanced admin system provides numerous opportunities for customization and 
 - **New**: Add provider-specific configuration templates
 - **New**: Implement provider failover and redundancy mechanisms
 - **New**: Extend custom model management with validation rules
+- **New**: Implement advanced OIDC configuration management
+- **New**: Add security policy configuration for content filtering
+
+**Advanced Security Features**:
+- **New**: Implement advanced threat detection and prevention
+- **New**: Add security audit trail for all security-related actions
+- **New**: Implement rate limiting for authentication attempts
+- **New**: Add IP-based access control and monitoring
+- **New**: Implement advanced input validation and sanitization
 
 ## Conclusion
 The enhanced admin dashboard provides comprehensive administrative capabilities through six specialized pages, each designed for specific management tasks. The system combines modern React patterns with robust backend integration, offering real-time monitoring, detailed analytics, and complete configuration management. With enhanced security measures, efficient data management, and extensible architecture, the admin system supports both current operational needs and future growth requirements. The modular design ensures maintainability while the comprehensive feature set addresses all aspects of system administration and monitoring.
 
-**Updated** The addition of the 'Back to chat' navigation option creates seamless navigation between the admin interface and the main chat interface, improving user workflow efficiency and reducing context switching overhead. This enhancement maintains the accuracy of system monitoring while providing administrators with convenient access to both administrative and chat functionalities. The enhanced admin layout with improved navigation patterns and real-time data visualization provides administrators with reliable and actionable insights into system performance and document indexing status.
+**Updated** The addition of the 'Back to chat' navigation option creates seamless navigation between the admin interface and the main chat interface, improving user workflow efficiency and reducing context switching overhead. The enhanced admin layout with improved navigation patterns and real-time data visualization provides administrators with reliable and actionable insights into system performance and document indexing status. The integration of OIDC authentication and blocked terms filtering significantly enhances security while maintaining usability. These enhancements demonstrate the system's commitment to providing both powerful administrative capabilities and strong security protections.

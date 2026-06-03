@@ -10,14 +10,21 @@
 - [ActivityEvent.tsx](file://safe4ai-pilot/frontend/src/components/admin/ActivityEvent.tsx)
 - [DocumentRow.tsx](file://safe4ai-pilot/frontend/src/components/admin/DocumentRow.tsx)
 - [FeedbackListItem.tsx](file://safe4ai-pilot/frontend/src/components/admin/FeedbackListItem.tsx)
-- [Sparkline.tsx](file://safe4ai-pilot/frontend/src/components/admin/Sparkline.tsx)
 - [ActivityPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx)
+- [OverviewPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx)
 - [audit.ts](file://safe4ai-pilot/frontend/src/api/audit.ts)
 - [documents.ts](file://safe4ai-pilot/frontend/src/api/documents.ts)
 - [feedback.ts](file://safe4ai-pilot/frontend/src/api/feedback.ts)
 - [stats.ts](file://safe4ai-pilot/frontend/src/api/stats.ts)
 - [useAuditStream.ts](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Removed Sparkline.tsx component reference as it has been removed from the codebase
+- Updated component dependency analysis to reflect simplified admin interface
+- Revised overview page documentation to remove sparkline-based analytics
+- Updated architecture diagrams to exclude sparkline component
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -32,10 +39,10 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document describes the administrative dashboard components in the Private AI system. It focuses on the admin shell layout, activity audit display, document management, feedback handling, and statistics visualization. It explains the admin interface architecture, navigation patterns, data presentation strategies, component props, data fetching patterns, state management, API integrations, permissions, role-based access, responsive design, and accessibility considerations.
+This document describes the administrative dashboard components in the Private AI system. It focuses on the admin shell layout, activity audit display, document management, feedback handling, and statistics visualization. The admin interface has been simplified by removing the sparkline component, focusing on core administrative functions with streamlined data presentation.
 
 ## Project Structure
-The admin UI is implemented in the frontend of the pilot service. The design system also includes a set of presentational components in the design directory. The admin pages integrate with typed APIs and shared components.
+The admin UI is implemented in the frontend of the pilot service. The design system includes presentational components in the design directory, while the actual admin components are located in the frontend components directory. The admin pages integrate with typed APIs and shared components, with a simplified approach to analytics visualization.
 
 ```mermaid
 graph TB
@@ -52,13 +59,13 @@ FP_ActivityPage["ActivityPage.tsx"]
 FP_DocumentsPage["DocumentsPage.tsx"]
 FP_FeedbackPage["FeedbackPage.tsx"]
 FP_OverviewPage["OverviewPage.tsx"]
+FP_SettingsPage["SettingsPage.tsx"]
 FP_UsersPage["UsersPage.tsx"]
 end
 subgraph "Components"
 C_ActivityEvent["ActivityEvent.tsx"]
 C_DocumentRow["DocumentRow.tsx"]
 C_FeedbackListItem["FeedbackListItem.tsx"]
-C_Sparkline["Sparkline.tsx"]
 end
 subgraph "API"
 A_Audit["audit.ts"]
@@ -74,12 +81,12 @@ DS_AdminShell --> FP_ActivityPage
 DS_AdminShell --> FP_DocumentsPage
 DS_AdminShell --> FP_FeedbackPage
 DS_AdminShell --> FP_OverviewPage
+DS_AdminShell --> FP_SettingsPage
 DS_AdminShell --> FP_UsersPage
 FP_DocumentsPage --> C_DocumentRow
 FP_DocumentsPage --> A_Docs
 FP_FeedbackPage --> C_FeedbackListItem
 FP_FeedbackPage --> A_Feedback
-FP_OverviewPage --> C_Sparkline
 FP_OverviewPage --> A_Stats
 ```
 
@@ -90,10 +97,10 @@ FP_OverviewPage --> A_Stats
 - [AdminFeedback.tsx:1-215](file://design/components/AdminFeedback.tsx#L1-L215)
 - [AdminStats.tsx:1-258](file://design/components/AdminStats.tsx#L1-L258)
 - [ActivityPage.tsx:1-147](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx#L1-L147)
+- [OverviewPage.tsx:1-100](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L1-L100)
 - [ActivityEvent.tsx:1-83](file://safe4ai-pilot/frontend/src/components/admin/ActivityEvent.tsx#L1-L83)
 - [DocumentRow.tsx:1-100](file://safe4ai-pilot/frontend/src/components/admin/DocumentRow.tsx#L1-L100)
 - [FeedbackListItem.tsx:1-30](file://safe4ai-pilot/frontend/src/components/admin/FeedbackListItem.tsx#L1-L30)
-- [Sparkline.tsx:1-26](file://safe4ai-pilot/frontend/src/components/admin/Sparkline.tsx#L1-L26)
 - [audit.ts:1-54](file://safe4ai-pilot/frontend/src/api/audit.ts#L1-L54)
 - [documents.ts:1-68](file://safe4ai-pilot/frontend/src/api/documents.ts#L1-L68)
 - [feedback.ts:1-44](file://safe4ai-pilot/frontend/src/api/feedback.ts#L1-L44)
@@ -113,17 +120,15 @@ FP_OverviewPage --> A_Stats
 - ActivityEvent: Renders a single audit event row with kind badges, metadata, content, and trace.
 - DocumentRow: Renders a single document row with type badge, status chip, actions, and selection affordances.
 - FeedbackListItem: Renders a single feedback entry with rating icon, user info, note preview, and timestamp.
-- Sparkline: Lightweight SVG sparkline for trend visualization.
 
 **Section sources**
 - [AdminShell.tsx:4-119](file://design/components/AdminShell.tsx#L4-L119)
 - [ActivityEvent.tsx:19-83](file://safe4ai-pilot/frontend/src/components/admin/ActivityEvent.tsx#L19-L83)
 - [DocumentRow.tsx:22-100](file://safe4ai-pilot/frontend/src/components/admin/DocumentRow.tsx#L22-L100)
 - [FeedbackListItem.tsx:4-30](file://safe4ai-pilot/frontend/src/components/admin/FeedbackListItem.tsx#L4-L30)
-- [Sparkline.tsx:1-26](file://safe4ai-pilot/frontend/src/components/admin/Sparkline.tsx#L1-L26)
 
 ## Architecture Overview
-The admin UI follows a page-per-section pattern with a shared shell. Pages render lists or dashboards and delegate individual item rendering to dedicated components. Data is fetched via typed API modules and cached/revalidated with React Query.
+The admin UI follows a page-per-section pattern with a shared shell. Pages render lists or dashboards and delegate individual item rendering to dedicated components. Data is fetched via typed API modules and cached/revalidated with React Query. The interface has been simplified to focus on core administrative functions without complex charting components.
 
 ```mermaid
 sequenceDiagram
@@ -281,28 +286,6 @@ FeedbackListItem --> FeedbackItem : "renders"
 - [FeedbackListItem.tsx:6-29](file://safe4ai-pilot/frontend/src/components/admin/FeedbackListItem.tsx#L6-L29)
 - [feedback.ts:30-43](file://safe4ai-pilot/frontend/src/api/feedback.ts#L30-L43)
 
-### Sparkline (Analytics Visualization)
-Sparkline renders a lightweight SVG sparkline for trends:
-- Normalized path from min/max
-- Optional filled area
-- End dot marker
-
-```mermaid
-classDiagram
-class Sparkline {
-+data : number[]
-+color? : string
-+height? : number
-+fill? : boolean
-}
-```
-
-**Diagram sources**
-- [Sparkline.tsx:1-26](file://safe4ai-pilot/frontend/src/components/admin/Sparkline.tsx#L1-L26)
-
-**Section sources**
-- [Sparkline.tsx:3-25](file://safe4ai-pilot/frontend/src/components/admin/Sparkline.tsx#L3-L25)
-
 ### Activity Page (Audit Stream)
 ActivityPage integrates filters, live stream, and export:
 - Kind filter mapping to AuditKind
@@ -336,14 +319,24 @@ P->>E : Render list
 - [ActivityPage.tsx:32-147](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx#L32-L147)
 - [useAuditStream.ts:5-16](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts#L5-L16)
 
+### Overview Page (Simplified Analytics)
+OverviewPage provides a streamlined analytics dashboard without sparkline charts:
+- Statistics cards for key metrics
+- Recent activity timeline
+- System health indicators
+- Simplified data visualization focused on essential metrics
+
+**Section sources**
+- [OverviewPage.tsx:1-100](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L1-L100)
+
 ### Design System Admin Pages
 The design directory includes AdminAudit, AdminDocs, AdminFeedback, and AdminStats pages. These demonstrate:
 - Audit timeline with filters and export
 - Documents table with inspector panel
 - Feedback list with detail pane
-- Overview dashboard with charts and metrics
+- Overview dashboard with simplified metrics presentation
 
-These components wrap their respective shells and compose the same underlying components and APIs.
+These components wrap their respective shells and compose the same underlying components and APIs, maintaining consistency across the admin interface.
 
 **Section sources**
 - [AdminAudit.tsx:5-278](file://design/components/AdminAudit.tsx#L5-L278)
@@ -356,6 +349,7 @@ These components wrap their respective shells and compose the same underlying co
 - Components depend on typed API modules for data.
 - ActivityPage uses a React Query hook for streaming/paginated data.
 - AdminShell is reused across pages to maintain consistent layout and navigation.
+- OverviewPage now relies on simplified statistics components instead of sparkline-based charts.
 
 ```mermaid
 graph LR
@@ -366,8 +360,7 @@ DP["DocumentsPage.tsx"] --> DR["DocumentRow.tsx"]
 DR --> DT["documents.ts"]
 FP["FeedbackPage.tsx"] --> FL["FeedbackListItem.tsx"]
 FL --> FD["feedback.ts"]
-OP["OverviewPage.tsx"] --> SP["Sparkline.tsx"]
-OP --> ST["stats.ts"]
+OP["OverviewPage.tsx"] --> ST["stats.ts"]
 ```
 
 **Diagram sources**
@@ -379,7 +372,6 @@ OP --> ST["stats.ts"]
 - [documents.ts:1-1](file://safe4ai-pilot/frontend/src/api/documents.ts#L1-L1)
 - [FeedbackListItem.tsx:1-2](file://safe4ai-pilot/frontend/src/components/admin/FeedbackListItem.tsx#L1-L2)
 - [feedback.ts:1-1](file://safe4ai-pilot/frontend/src/api/feedback.ts#L1-L1)
-- [Sparkline.tsx:1-1](file://safe4ai-pilot/frontend/src/components/admin/Sparkline.tsx#L1-L1)
 - [stats.ts:1-1](file://safe4ai-pilot/frontend/src/api/stats.ts#L1-L1)
 
 **Section sources**
@@ -392,10 +384,8 @@ OP --> ST["stats.ts"]
 ## Performance Considerations
 - Infinite scrolling/streaming: useAuditStream paginates and refetches periodically to keep the feed fresh without reloading.
 - Minimal re-renders: ActivityEvent and other item components are pure and rely on stable keys.
-- Efficient charts: Sparkline computes normalized points once per render.
-- Lazy loading: Pages split content into sections to avoid rendering heavy charts until scrolled into view.
-
-[No sources needed since this section provides general guidance]
+- Simplified analytics: Removed sparkline component reduces computational overhead and improves page load performance.
+- Lazy loading: Pages split content into sections to avoid rendering heavy components until scrolled into view.
 
 ## Troubleshooting Guide
 - Activity stream not updating:
@@ -407,17 +397,18 @@ OP --> ST["stats.ts"]
   - Check polling intervals and status endpoints.
 - Feedback list empty:
   - Validate admin endpoint permissions and data presence.
+- Overview page metrics missing:
+  - Verify stats API endpoint connectivity and data availability.
 
 **Section sources**
 - [useAuditStream.ts:5-16](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts#L5-L16)
 - [audit.ts:52-54](file://safe4ai-pilot/frontend/src/api/audit.ts#L52-L54)
 - [documents.ts:46-68](file://safe4ai-pilot/frontend/src/api/documents.ts#L46-L68)
 - [feedback.ts:30-43](file://safe4ai-pilot/frontend/src/api/feedback.ts#L30-L43)
+- [stats.ts:20-31](file://safe4ai-pilot/frontend/src/api/stats.ts#L20-L31)
 
 ## Conclusion
-The admin UI leverages a clean separation of concerns: a reusable shell, typed APIs, and small, focused components. The design supports efficient data flows, live updates, and rich visualizations while maintaining a consistent UX across pages.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The admin UI leverages a clean separation of concerns: a reusable shell, typed APIs, and small, focused components. The recent simplification removes the sparkline component, resulting in a more streamlined interface that maintains efficient data flows, live updates, and essential visualizations while reducing complexity and improving performance across pages.
 
 ## Appendices
 
@@ -425,7 +416,7 @@ The admin UI leverages a clean separation of concerns: a reusable shell, typed A
 - Audit logs: list and export endpoints with kind and timestamp mapping.
 - Documents: CRUD operations and status polling.
 - Feedback: listing and submission endpoints.
-- Stats: daily metrics aggregation.
+- Stats: daily metrics aggregation with simplified presentation.
 
 **Section sources**
 - [audit.ts:34-54](file://safe4ai-pilot/frontend/src/api/audit.ts#L34-L54)
@@ -439,5 +430,5 @@ The admin UI leverages a clean separation of concerns: a reusable shell, typed A
 - Provide sufficient contrast for status chips and badges.
 - Keep interactive targets accessible-sized.
 - Test keyboard navigation for filter rails and action buttons.
-
-[No sources needed since this section provides general guidance]
+- Maintain responsive design principles across simplified components.
+- Ensure screen reader compatibility with streamlined data presentations.
