@@ -257,6 +257,47 @@ def test_chat_stream_done_event_reports_chat_model_name(authed_client: TestClien
     assert '"model": "qwen3.5:9b"' in body
 
 
+def test_chat_stream_done_event_includes_follow_ups(authed_client: TestClient) -> None:
+    class _CitedAnswerGraph:
+        async def astream(self, _state: PrivateAIState) -> Any:
+            yield {
+                "respond": {
+                    "status": "completed",
+                    "draft_answer": "Cited answer",
+                    "citations": [
+                        Citation(filename="handbook.pdf", page_number=2, excerpt="x", score=0.9)
+                    ],
+                    "current_step": "respond",
+                }
+            }
+
+    session_id = "sess-follow-ups"
+    with patch(
+        "app.services.conversation.ConversationManager.new_session", return_value=session_id
+    ), patch(
+        "app.services.conversation.ConversationManager.load_session",
+        return_value=PrivateAIState(session_id=session_id, user_id="u1"),
+    ), patch("app.api.chat_routes.finalize_chat_run"), patch(
+        "app.api.chat_routes.load_runtime_config",
+        return_value=MagicMock(
+            sse_done_mode="strict",
+            provider_type="ollama",
+            chat_model="qwen3.5:9b",
+        ),
+    ):
+        authed_client.app.state.graph = _CitedAnswerGraph()  # type: ignore[union-attr]
+        with authed_client.stream(
+            "POST",
+            "/chat/stream",
+            json={"question": "What does the handbook say?"},
+        ) as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert '"followUps"' in body
+    assert "What else does handbook.pdf say about this topic?" in body
+
+
 def test_chat_stream_async_finalization_uses_thread(authed_client: TestClient) -> None:
     class _SingleChunkGraph:
         async def astream(self, _state: PrivateAIState) -> Any:

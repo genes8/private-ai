@@ -27,6 +27,7 @@ from app.services.app_config_store import load_app_config
 from app.services.chat_finalizer import finalize_chat_run
 from app.services.conversation import ConversationManager
 from app.services.cost_service import CostCeilingExceeded, check_cost_ceiling, usage_or_estimate
+from app.services.follow_ups import build_follow_up_suggestions
 from app.services.quota_service import (
     QuotaExceeded,
     TierExpired,
@@ -361,6 +362,7 @@ async def chat_stream(
             "model": _model_name,
             "kRetrieved": len(final.retrieved_chunks),
             "sessionId": session_id,
+            "followUps": build_follow_up_suggestions(final.citations),
         })
 
     return StreamingResponse(

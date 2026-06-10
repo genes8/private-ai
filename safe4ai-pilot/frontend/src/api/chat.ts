@@ -10,6 +10,7 @@ export interface SseCite   { id: string; file: string; page: number; score: numb
 export interface SseDone   {
   traceId: string; latencyMs: number; cache: boolean;
   model: string; kRetrieved: number; sessionId: string; error?: string;
+  followUps?: string[];
 }
 
 export type SseEvent =

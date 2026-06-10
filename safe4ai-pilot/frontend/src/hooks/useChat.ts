@@ -14,6 +14,7 @@ export interface ChatMessage {
   trust: { latencyMs: number; cacheHit: boolean; model: string; kRetrieved: number } | null;
   traceId: string | null;
   rated?: "up" | "down";
+  followUps?: string[];
 }
 
 export function useChat(userId?: string) {
@@ -134,8 +135,9 @@ export function useChat(userId?: string) {
           storeChatSessionId(userId, ev.data.sessionId);
           streamCompleted = !ev.data.error;
           const trust = { latencyMs: ev.data.latencyMs, cacheHit: ev.data.cache, model: ev.data.model, kRetrieved: ev.data.kRetrieved };
+          const followUps = ev.data.followUps ?? [];
           setMessages((prev) =>
-            prev.map((m) => m.id === assistantId ? { ...m, trust, traceId } : m),
+            prev.map((m) => m.id === assistantId ? { ...m, trust, traceId, followUps } : m),
           );
         } else if (ev.type === "error") {
           streamErrored = true;

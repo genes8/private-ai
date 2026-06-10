@@ -237,34 +237,61 @@ export default function ChatPage() {
               </div>
             )}
 
-            {messages.map((msg) => (
-              <MessageBubble key={msg.id} role={msg.role}>
-                {msg.role === "user" ? (
-                  <span>{msg.content}</span>
-                ) : (
-                  <AnswerBlock
-                    body={msg.content}
-                    sources={msg.sources}
-                    trust={
-                      msg.trust ?? { latencyMs: 0, cacheHit: false, model: "—", kRetrieved: 0 }
-                    }
-                    isStreaming={
-                      streaming && msg.id === assistantMessages.at(-1)?.id
-                    }
-                    rated={msg.rated}
-                    onCopy={() => void handleCopy(msg.content)}
-                    onRate={(r) => rate(msg.id, r)}
-                    onCitationOpen={(id) => {
-                      setUi({
-                        drawerMessageId: msg.id,
-                        activeCitationId: activeCitationId === id ? null : id,
-                        mobileSourcesOpen: true,
-                      });
-                    }}
-                  />
+            {messages.map((msg) => {
+              const isLastAssistant =
+                msg.role === "assistant" && msg.id === assistantMessages.at(-1)?.id;
+              const followUps = isLastAssistant && !streaming ? msg.followUps ?? [] : [];
+              return (
+              <div key={msg.id}>
+                <MessageBubble role={msg.role}>
+                  {msg.role === "user" ? (
+                    <span>{msg.content}</span>
+                  ) : (
+                    <AnswerBlock
+                      body={msg.content}
+                      sources={msg.sources}
+                      trust={
+                        msg.trust ?? { latencyMs: 0, cacheHit: false, model: "—", kRetrieved: 0 }
+                      }
+                      isStreaming={
+                        streaming && msg.id === assistantMessages.at(-1)?.id
+                      }
+                      rated={msg.rated}
+                      onCopy={() => void handleCopy(msg.content)}
+                      onRate={(r) => rate(msg.id, r)}
+                      onCitationOpen={(id) => {
+                        setUi({
+                          drawerMessageId: msg.id,
+                          activeCitationId: activeCitationId === id ? null : id,
+                          mobileSourcesOpen: true,
+                        });
+                      }}
+                    />
+                  )}
+                </MessageBubble>
+                {followUps.length > 0 && (
+                  <div className="mt-2.5 flex flex-wrap gap-2">
+                    {followUps.map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        onClick={() => {
+                          setUi({ composer: q });
+                          setTimeout(
+                            () => bottomRef.current?.scrollIntoView({ behavior: "smooth" }),
+                            50,
+                          );
+                        }}
+                        className="px-2.5 py-1.5 rounded-full border border-line bg-surface text-[12px] text-text-2 hover:bg-surface-2 transition-colors"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
                 )}
-              </MessageBubble>
-            ))}
+              </div>
+              );
+            })}
 
             {streaming && steps.length > 0 && (
               <div className="flex justify-start">
