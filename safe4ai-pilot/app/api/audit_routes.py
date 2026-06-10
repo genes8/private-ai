@@ -236,3 +236,60 @@ def get_stats(
         "unique_users": int(unique_users),
         "generated_at": datetime.now(UTC),
     }
+
+
+@router.get("/admin/stats/timeseries")
+@limiter.limit("100/minute")
+def get_stats_timeseries(
+    request: Request,
+    days: int = 14,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Daily query/user/cost buckets for the last *days* days, zero-filled.
+
+    Buckets are calendar days in UTC; the last bucket is today (partial).
+    """
+    if days < 1 or days > 90:
+        raise HTTPException(status_code=422, detail="days must be between 1 and 90")
+    today = datetime.now(UTC).date()
+    first_day = today - timedelta(days=days - 1)
+    cutoff = datetime(first_day.year, first_day.month, first_day.day, tzinfo=UTC)
+
+    audit_rows = (
+        db.query(
+            func.date(AuditLog.timestamp),
+            func.count(AuditLog.id),
+            func.count(func.distinct(AuditLog.user_id)),
+        )
+        .filter(AuditLog.timestamp >= cutoff)
+        .group_by(func.date(AuditLog.timestamp))
+        .all()
+    )
+    cost_rows = (
+        db.query(func.date(AgentRun.started_at), func.sum(AgentRun.cost_usd))
+        .filter(AgentRun.started_at >= cutoff)
+        .group_by(func.date(AgentRun.started_at))
+        .all()
+    )
+
+    def _day_key(value: Any) -> str:
+        # func.date() yields date objects on Postgres and strings on SQLite.
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+    queries_by_day = {_day_key(d): (int(n), int(u)) for d, n, u in audit_rows}
+    cost_by_day = {_day_key(d): float(c or 0.0) for d, c in cost_rows}
+
+    series: list[dict[str, Any]] = []
+    for offset_days in range(days):
+        day = (first_day + timedelta(days=offset_days)).isoformat()
+        n_queries, n_users = queries_by_day.get(day, (0, 0))
+        series.append(
+            {
+                "date": day,
+                "queries": n_queries,
+                "unique_users": n_users,
+                "cost_usd": round(cost_by_day.get(day, 0.0), 4),
+            }
+        )
+    return {"days": days, "series": series}

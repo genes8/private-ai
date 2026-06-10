@@ -1546,8 +1546,10 @@ class TestAuditLogs:
         audit.model_used = None
         audit.trace_id = None
 
-        _paged = db.query.return_value.outerjoin.return_value.order_by.return_value.offset.return_value.limit.return_value
-        _paged.all.return_value = [(audit, "pilot@example.com")]
+        _joined = db.query.return_value.outerjoin.return_value.order_by.return_value
+        _joined.offset.return_value.limit.return_value.all.return_value = [
+            (audit, "pilot@example.com")
+        ]
 
         with patch("pathlib.Path.mkdir"):
             client = _make_test_client(db, admin)
@@ -1590,8 +1592,8 @@ class TestAuditLogs:
             ("chat_query",),
             ("settings_provider_change",),
         ]
-        _filtered = db.query.return_value.outerjoin.return_value.order_by.return_value.filter.return_value
-        _filtered.offset.return_value.limit.return_value.all.return_value = [
+        _joined = db.query.return_value.outerjoin.return_value.order_by.return_value
+        _joined.filter.return_value.offset.return_value.limit.return_value.all.return_value = [
             (audit, "pilot@example.com")
         ]
 
@@ -1967,6 +1969,48 @@ class TestStats:
         assert body["total_cost_usd"] == 0.0
         assert body["cache_total_hits"] == 0
         assert body["unique_users"] == 0
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_stats_timeseries_zero_fills_missing_days(self) -> None:
+        from datetime import date
+        from datetime import timedelta as td
+
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        today = date.today()
+        yesterday = today - td(days=1)
+        # First .all() is the audit aggregation, second is the cost aggregation.
+        db.query.return_value.filter.return_value.group_by.return_value.all.side_effect = [
+            [(today.isoformat(), 4, 2)],
+            [(yesterday.isoformat(), 0.05), (today.isoformat(), 0.1)],
+        ]
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/stats/timeseries?days=3")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["days"] == 3
+        series = body["series"]
+        assert len(series) == 3
+        assert [p["queries"] for p in series] == [0, 0, 4]
+        assert [p["unique_users"] for p in series] == [0, 0, 2]
+        assert [p["cost_usd"] for p in series] == [0.0, 0.05, 0.1]
+        assert series[-1]["date"] == today.isoformat()
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_stats_timeseries_rejects_out_of_range_days(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/stats/timeseries?days=365")
+
+        assert resp.status_code == 422
         from app.main import app
         app.dependency_overrides.clear()
 

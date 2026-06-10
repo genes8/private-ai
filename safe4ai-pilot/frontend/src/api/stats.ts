@@ -20,6 +20,34 @@ interface RawStats {
   unique_users: number;
 }
 
+export interface StatsTimeseriesPoint {
+  date: string;
+  queries: number;
+  uniqueUsers: number;
+  costUsd: number;
+}
+
+interface RawTimeseriesPoint {
+  date: string;
+  queries: number;
+  unique_users: number;
+  cost_usd: number;
+}
+
+export const getStatsTimeseries = (days = 14) =>
+  apiFetch<{ days: number; series: RawTimeseriesPoint[] }>(
+    `/admin/stats/timeseries?days=${days}`,
+  ).then((r) =>
+    r.series.map(
+      (p): StatsTimeseriesPoint => ({
+        date: p.date,
+        queries: p.queries,
+        uniqueUsers: p.unique_users,
+        costUsd: p.cost_usd,
+      }),
+    ),
+  );
+
 export const getStats = () =>
   apiFetch<RawStats>("/admin/stats").then(
     (r): StatsToday => ({

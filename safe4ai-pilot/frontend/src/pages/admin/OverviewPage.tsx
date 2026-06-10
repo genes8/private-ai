@@ -1,8 +1,9 @@
 import { ThumbsUp } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
-import { getStats } from "../../api/stats";
+import { getStats, getStatsTimeseries } from "../../api/stats";
 import { listFeedback } from "../../api/feedback";
+import Sparkline from "../../components/admin/Sparkline";
 import AdminLayout from "./AdminLayout";
 
 function Stat({ value, unit, color }: { value: string | number; unit?: string; color?: string }) {
@@ -26,6 +27,12 @@ export default function OverviewPage() {
   const { data: feedbackItems = [] } = useQuery({
     queryKey: ["feedback"],
     queryFn: listFeedback,
+    refetchInterval: 60_000,
+  });
+
+  const { data: timeseries = [] } = useQuery({
+    queryKey: ["stats-timeseries"],
+    queryFn: () => getStatsTimeseries(14),
     refetchInterval: 60_000,
   });
 
@@ -104,16 +111,31 @@ export default function OverviewPage() {
           </p>
 
           {/* Traffic section */}
-          <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-2.5">traffic</p>
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-2.5">traffic — last 14 days</p>
           <div className="grid grid-cols-3 gap-3 mb-8">
             {[
-              { label: "Total queries",    value: stats.queries.total.toLocaleString() },
-              { label: "Active users",     value: stats.uniqueUsers.toString() },
-              { label: "Avg cost / query", value: avgCostPerQuery },
+              {
+                label: "Total queries",
+                value: stats.queries.total.toLocaleString(),
+                series: timeseries.map((p) => p.queries),
+              },
+              {
+                label: "Active users",
+                value: stats.uniqueUsers.toString(),
+                series: timeseries.map((p) => p.uniqueUsers),
+              },
+              {
+                label: "Avg cost / query",
+                value: avgCostPerQuery,
+                series: timeseries.map((p) => p.costUsd),
+              },
             ].map((s) => (
               <div key={s.label} className="bg-surface border border-line rounded-lg p-3.5">
                 <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-1.5">{s.label}</p>
                 <span className="font-mono text-[22px] font-medium text-ink leading-none tabular-nums">{s.value}</span>
+                <div className="mt-2">
+                  <Sparkline values={s.series} />
+                </div>
               </div>
             ))}
           </div>
