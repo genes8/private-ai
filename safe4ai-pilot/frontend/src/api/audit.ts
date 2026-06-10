@@ -18,30 +18,27 @@ interface RawAudit {
   user_id: string;
   user_email?: string | null;
   action_type: string;
+  kind: AuditKind;
   query_text: string | null;
   latency_ms: number | null;
   trace_id: string | null;
 }
 
-function mapKind(t: string): AuditKind {
-  if (t === "query") return "query";
-  if (t === "upload") return "upload";
-  if (t === "feedback") return "feedback";
-  if (t === "login") return "login";
-  if (t === "fallback") return "fallback";
-  if (t.includes("settings") || t.includes("user") || t.includes("admin")) return "admin";
-  return "other";
+export interface AuditKindCounts {
+  total: number;
+  kinds: Record<AuditKind, number>;
 }
 
-export const listAuditLogs = (offset = 0, limit = 50, start?: string) => {
+export const listAuditLogs = (offset = 0, limit = 50, start?: string, kind?: AuditKind) => {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
   if (start) params.set("start", start);
+  if (kind) params.set("kind", kind);
   return apiFetch<RawAudit[]>(`/admin/audit-logs?${params}`).then((rows) =>
     rows.map(
       (r): AuditEvent => ({
         id: r.id,
         ts: r.timestamp,
-        kind: mapKind(r.action_type),
+        kind: r.kind,
         who: r.user_email ?? r.user_id,
         query: r.query_text ?? undefined,
         latencyMs: r.latency_ms ?? undefined,
@@ -49,6 +46,13 @@ export const listAuditLogs = (offset = 0, limit = 50, start?: string) => {
       }),
     ),
   );
+};
+
+export const getAuditKindCounts = (start?: string) => {
+  const params = new URLSearchParams();
+  if (start) params.set("start", start);
+  const qs = params.toString();
+  return apiFetch<AuditKindCounts>(`/admin/audit-logs/kind-counts${qs ? `?${qs}` : ""}`);
 };
 
 export const exportAuditCsv = () =>

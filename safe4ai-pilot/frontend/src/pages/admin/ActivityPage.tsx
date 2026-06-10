@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ActivityEvent from "../../components/admin/ActivityEvent";
 import Button from "../../components/Button";
-import { exportAuditCsv } from "../../api/audit";
+import { exportAuditCsv, getAuditKindCounts } from "../../api/audit";
 import type { AuditKind } from "../../api/audit";
 import { useAuditStream } from "../../hooks/useAuditStream";
 import { getSettings } from "../../api/settings";
@@ -40,11 +40,18 @@ function rangeToStart(range: string): string | undefined {
 export default function ActivityPage() {
   const [activeKind, setActiveKind] = useState<AuditKind | "all">("all");
   const [activeRange, setActiveRange] = useState("Today");
-  const { events, isLoading, page, setPage, limit } = useAuditStream(rangeToStart(activeRange));
+  const start = rangeToStart(activeRange);
+  const { events, isLoading, page, setPage, limit } = useAuditStream(
+    start,
+    activeKind === "all" ? undefined : activeKind,
+  );
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings, staleTime: 60_000 });
+  const { data: kindCounts } = useQuery({
+    queryKey: ["audit-kind-counts", start],
+    queryFn: () => getAuditKindCounts(start),
+    refetchInterval: 30_000,
+  });
   const retentionDays = settings?.security?.auditRetentionDays ?? 365;
-
-  const filtered = activeKind === "all" ? events : events.filter((e) => e.kind === activeKind);
 
   const todayFormatted = new Date().toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
@@ -79,12 +86,15 @@ export default function ActivityPage() {
           <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-1.5 px-1">Kind</p>
           <div className="flex flex-col gap-0.5 mb-4">
             {KIND_FILTERS.map(({ label, value }) => {
-              const count = value === "all" ? events.length : events.filter((e) => e.kind === value).length;
+              const count = value === "all" ? kindCounts?.total : kindCounts?.kinds?.[value];
               return (
                 <button
                   key={value}
                   type="button"
-                  onClick={() => setActiveKind(value)}
+                  onClick={() => {
+                    setActiveKind(value);
+                    setPage(0);
+                  }}
                   className={[
                     "flex items-center h-7 px-2 rounded-md text-[13px] w-full transition-colors",
                     activeKind === value
@@ -93,7 +103,7 @@ export default function ActivityPage() {
                   ].join(" ")}
                 >
                   <span className="flex-1 text-left">{label}</span>
-                  <span className="font-mono text-[11px] text-text-3">{count}</span>
+                  <span className="font-mono text-[11px] text-text-3">{count ?? "–"}</span>
                 </button>
               );
             })}
@@ -165,12 +175,12 @@ export default function ActivityPage() {
 
             {isLoading ? (
               <div className="py-8 text-center text-[13px] text-text-mute">Loading…</div>
-            ) : filtered.length === 0 ? (
+            ) : events.length === 0 ? (
               <div className="py-8 text-center text-[13px] text-text-mute">No events yet.</div>
             ) : (
               <div className="relative pl-[18px] mt-1">
                 <span className="absolute left-[4px] top-[18px] bottom-3 w-px bg-line" aria-hidden />
-                {filtered.map((ev) => (
+                {events.map((ev) => (
                   <ActivityEvent key={ev.id} event={ev} />
                 ))}
               </div>

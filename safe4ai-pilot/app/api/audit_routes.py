@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.audit.kinds import AUDIT_KINDS, classify_action_type
 from app.auth.middleware import require_role
 from app.auth.router import limiter
 from app.db import get_db
@@ -21,6 +22,39 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["admin"])
 
 
+def _apply_audit_filters(
+    q: Any,
+    start: datetime | None,
+    end: datetime | None,
+    user_id: str | None,
+) -> Any:
+    if start:
+        q = q.filter(AuditLog.timestamp >= start)
+    if end:
+        q = q.filter(AuditLog.timestamp <= end)
+    if user_id:
+        q = q.filter(AuditLog.user_id == user_id)
+    return q
+
+
+def _action_types_for_kind(
+    db: Session,
+    kind: str,
+    start: datetime | None,
+    end: datetime | None,
+    user_id: str | None,
+) -> list[str]:
+    """Resolve a UI kind to the raw action_type values present in range.
+
+    Classification lives in Python (app.audit.kinds), so the filter is the
+    distinct action types observed in the range that classify to *kind*.
+    """
+    distinct_q = _apply_audit_filters(
+        db.query(AuditLog.action_type).distinct(), start, end, user_id
+    )
+    return [t for (t,) in distinct_q.all() if classify_action_type(t) == kind]
+
+
 @router.get("/admin/audit-logs")
 @limiter.limit("100/minute")
 def list_audit_logs(
@@ -28,6 +62,7 @@ def list_audit_logs(
     start: datetime | None = None,
     end: datetime | None = None,
     user_id: str | None = None,
+    kind: str | None = None,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -37,17 +72,19 @@ def list_audit_logs(
         raise HTTPException(status_code=422, detail="limit must be positive")
     if offset < 0:
         raise HTTPException(status_code=422, detail="offset cannot be negative")
+    if kind is not None and kind not in AUDIT_KINDS:
+        raise HTTPException(status_code=422, detail=f"kind must be one of {', '.join(AUDIT_KINDS)}")
     q = (
         db.query(AuditLog, User.email)
         .outerjoin(User, AuditLog.user_id == User.id)
         .order_by(AuditLog.timestamp.desc())
     )
-    if start:
-        q = q.filter(AuditLog.timestamp >= start)
-    if end:
-        q = q.filter(AuditLog.timestamp <= end)
-    if user_id:
-        q = q.filter(AuditLog.user_id == user_id)
+    q = _apply_audit_filters(q, start, end, user_id)
+    if kind is not None:
+        matching_types = _action_types_for_kind(db, kind, start, end, user_id)
+        if not matching_types:
+            return []
+        q = q.filter(AuditLog.action_type.in_(matching_types))
     rows = q.offset(offset).limit(min(limit, 1000)).all()
     result: list[dict[str, Any]] = []
     for row in rows:
@@ -64,6 +101,7 @@ def list_audit_logs(
                 "session_id": r.session_id,
                 "timestamp": r.timestamp,
                 "action_type": r.action_type,
+                "kind": classify_action_type(r.action_type),
                 "query_text": r.query_text,
                 "latency_ms": r.latency_ms,
                 "model_used": r.model_used,
@@ -71,6 +109,28 @@ def list_audit_logs(
             }
         )
     return result
+
+
+@router.get("/admin/audit-logs/kind-counts")
+@limiter.limit("100/minute")
+def audit_kind_counts(
+    request: Request,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    user_id: str | None = None,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Event counts per UI kind for the given range — drives the sidebar badges."""
+    grouped_q = _apply_audit_filters(
+        db.query(AuditLog.action_type, func.count(AuditLog.id)), start, end, user_id
+    ).group_by(AuditLog.action_type)
+    counts: dict[str, int] = {k: 0 for k in AUDIT_KINDS}
+    total = 0
+    for action_type, n in grouped_q.all():
+        counts[classify_action_type(action_type)] += int(n)
+        total += int(n)
+    return {"total": total, "kinds": counts}
 
 
 @router.get("/admin/audit-logs/export.csv")
@@ -82,11 +142,9 @@ def export_audit_logs_csv(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_role("admin")),
 ) -> StreamingResponse:
-    q = db.query(AuditLog).order_by(AuditLog.timestamp.asc())
-    if start:
-        q = q.filter(AuditLog.timestamp >= start)
-    if end:
-        q = q.filter(AuditLog.timestamp <= end)
+    q = _apply_audit_filters(
+        db.query(AuditLog).order_by(AuditLog.timestamp.asc()), start, end, None
+    )
     row_stream = q.limit(50_000).yield_per(500)
     fieldnames = [
         "id",
