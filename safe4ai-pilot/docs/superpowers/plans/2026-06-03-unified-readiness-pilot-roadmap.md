@@ -403,17 +403,17 @@ Tasks (C0 — hardening first, see 2026-06-10 status update for detail):
 - [x] C0: output filter Rule 3 — done 2026-06-10 (shared `INFERENCE_DISCLAIMER` constant + contract test, language-limitation note, docstring renumber).
 - [x] C0: chat-provider health check re-verified 2026-06-10 — health and chat now share the same URL source by construction.
 
-Tasks:
+Tasks — **all done 2026-06-10**:
 
-- [ ] Add audit kind-count endpoint and server-backed kind filter.
-- [ ] Add document inspector endpoint and UI panel.
-- [ ] Add stats time-series endpoint and use real sparkline data.
-- [ ] Add session list API and chat session sidebar.
-- [ ] Add deterministic follow-up suggestions in the SSE `done` payload.
-- [ ] Add chunk detail endpoint only if richer citation popovers need data beyond current SSE excerpts.
-- [ ] Decide whether review-queue actions need to notify the user or only update admin status.
+- [x] Add audit kind-count endpoint and server-backed kind filter. (`app/audit/kinds.py` classifier + `/admin/audit-logs/kind-counts`; also fixed the frontend bug where `chat_query` events showed as "Other".)
+- [x] Add document inspector endpoint and UI panel. (`GET /admin/documents/{id}/inspect` — metadata, chunk sample, job history; wired into the existing documents side panel.)
+- [x] Add stats time-series endpoint and use real sparkline data. (`GET /admin/stats/timeseries`, zero-filled daily buckets; 14-day sparklines on overview traffic cards.)
+- [x] Add session list API and chat session sidebar. (`GET /chat/sessions` + `/chat/sessions/{id}/messages` with ownership check; sidebar with new-chat + restore.)
+- [x] Add deterministic follow-up suggestions in the SSE `done` payload. (`build_follow_up_suggestions()` templated from cited documents, no extra LLM call; chips in chat UI.)
+- [x] Chunk detail endpoint — **decision: skip.** SSE citations already carry excerpts for popovers, and the new inspect endpoint gives admins chunk previews. Revisit only if a customer needs full chunk text in citation popovers.
+- [x] Review-queue actions — **decision: admin-status only for the pilot.** No end-user notification; the operator communicates outcomes through the pilot runbook process. Revisit for production if a customer workflow requires in-app notification.
 
-Exit criteria:
+Exit criteria — met (2026-06-10):
 
 - Admin can inspect pilot activity without database access.
 - Chat users can return to previous sessions.
@@ -544,7 +544,8 @@ Exit criteria:
 | Provider runtime hardening | Done | Keep pinned helper shared |
 | Audit CSV | Done | Do not call it signed |
 | Tamper-evident audit archive | Done for JSONL archive | WORM remains deployment responsibility |
-| Admin UI | Pilot-ready | Add inspector, counts, timeseries |
+| Admin UI | Done (2026-06-10) | Inspector, kind counts/filter, real sparklines shipped |
+| Chat UX (sessions, follow-ups) | Done (2026-06-10) | Session sidebar + follow-up chips shipped |
 | Evaluation tooling | Implemented | Run during pilots and attach to report |
 | Final pilot report | Template done (2026-06-03) | Fill per pilot from `docs/pilot/final-readiness-report-template.md` |
 | Paid pilot package | Templates done (2026-06-03) | Use `docs/pilot/` to sell/run/close pilots |
@@ -563,9 +564,10 @@ Exit criteria:
 
 Next, in order:
 
-1. ~~**C0 hardening**~~ — **done 2026-06-10** (`provider_base_url` invariant, output filter Rule 3 contract, health check verification; 420 tests pass). Details in the 2026-06-10 status update.
-2. **Phase C — Productize pilot operations** (audit kind-count endpoint + server-side kind filter, document inspector, stats time-series/sparklines, session list + chat sidebar, deterministic follow-up suggestions). None of these endpoints exist yet (verified 2026-06-10). **This is the current next step.**
-3. **Phase D and Phase E in parallel planning**: Phase E (closed-runtime packaging, CI/CD release gates, SBOM) is the largest remaining gap between "pilot-ready" and "sellable production product" — start its design decisions (delivery target, runtime boundary) while Phase C is being built.
+1. ~~**C0 hardening**~~ — **done 2026-06-10** (`provider_base_url` invariant, output filter Rule 3 contract, health check verification).
+2. ~~**Phase C — Productize pilot operations**~~ — **done 2026-06-10**, all five features shipped with tests; the two open decisions (chunk-detail endpoint, review-queue notifications) are recorded in Phase C as deliberate skips for the pilot.
+3. **Phase D — Harden document lifecycle** — **current next step**: atomic `upload-new-version` replacement, rollback window, version-filtered retrieval, extended deletion verification.
+4. **Phase E — closed-runtime packaging, CI/CD release gates, SBOM**: the largest remaining gap between "pilot-ready" and "sellable production product" — start its design decisions (delivery target, runtime boundary) alongside Phase D.
 
 Earlier smoke-run findings, current status:
 
