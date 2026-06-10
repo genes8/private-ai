@@ -86,3 +86,34 @@ export const deleteDocument = (id: string) =>
 
 export const reindexDocument = (id: string) =>
   apiFetch<{ job_id: string }>(`/admin/documents/${id}/reindex`, { method: "POST" });
+
+export interface DocumentInspection {
+  document: {
+    id: string;
+    filename: string;
+    file_type: string;
+    ingestion_status: string;
+    uploaded_at: string | null;
+    uploaded_by_email: string | null;
+    file_size_bytes: number | null;
+    version: number;
+    active_version: number;
+    metadata: Record<string, unknown> | null;
+  };
+  chunk_count: number;
+  chunks: {
+    chunk_index: number;
+    chunk_version: number;
+    content_preview: string | null;
+    indexed: boolean;
+  }[];
+  jobs: {
+    status: string;
+    created_at: string | null;
+    completed_at: string | null;
+    error: string | null;
+  }[];
+}
+
+export const inspectDocument = (id: string) =>
+  apiFetch<DocumentInspection>(`/admin/documents/${id}/inspect`);

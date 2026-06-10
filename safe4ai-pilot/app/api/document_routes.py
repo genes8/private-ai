@@ -282,6 +282,84 @@ def get_document_status(
     }
 
 
+@router.get("/admin/documents/{doc_id}/inspect")
+@limiter.limit("100/minute")
+def inspect_document(
+    request: Request,
+    doc_id: str,
+    chunk_limit: int = 10,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """One-call document inspector: metadata, chunk sample, and job history.
+
+    Lets an operator audit what was ingested without database access.
+    """
+    if chunk_limit < 1 or chunk_limit > 50:
+        raise HTTPException(status_code=422, detail="chunk_limit must be between 1 and 50")
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    uploader = db.get(User, doc.uploaded_by) if doc.uploaded_by else None
+    from sqlalchemy import func
+
+    chunk_count = (
+        db.query(func.count(DocumentChunk.id))
+        .filter(DocumentChunk.document_id == doc_id)
+        .scalar()
+        or 0
+    )
+    chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == doc_id)
+        .order_by(DocumentChunk.chunk_index.asc())
+        .limit(chunk_limit)
+        .all()
+    )
+    jobs = (
+        db.query(IngestionJob)
+        .filter(IngestionJob.document_id == doc_id)
+        .order_by(IngestionJob.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    return {
+        "document": {
+            "id": doc.id,
+            "filename": doc.filename,
+            "file_type": doc.file_type,
+            "ingestion_status": doc.ingestion_status,
+            "uploaded_at": doc.uploaded_at,
+            "uploaded_by_email": uploader.email if uploader else None,
+            "file_size_bytes": doc.file_size_bytes,
+            "version": doc.version,
+            "active_version": doc.active_version,
+            "metadata": doc.doc_metadata,
+        },
+        "chunk_count": int(chunk_count),
+        "chunks": [
+            {
+                "chunk_index": c.chunk_index,
+                "chunk_version": c.chunk_version,
+                "content_preview": c.content_preview,
+                "indexed": c.qdrant_point_id is not None,
+            }
+            for c in chunks
+        ],
+        "jobs": [
+            {
+                "status": j.status,
+                "created_at": j.created_at,
+                "completed_at": j.completed_at,
+                "error": j.error,
+            }
+            for j in jobs
+        ],
+    }
+
+
 @router.delete("/admin/documents/{doc_id}", status_code=204)
 def delete_document(
     request: Request,

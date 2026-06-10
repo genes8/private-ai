@@ -224,6 +224,67 @@ class TestDocumentList:
         from app.main import app
         app.dependency_overrides.clear()
 
+    def test_inspect_document_returns_metadata_chunks_and_jobs(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        doc = _make_document()
+        db.get.side_effect = lambda model, pk: admin if model is User else doc
+
+        chunk = MagicMock()
+        chunk.chunk_index = 0
+        chunk.chunk_version = 1
+        chunk.content_preview = "First chunk preview"
+        chunk.qdrant_point_id = "point-1"
+
+        job = MagicMock()
+        job.status = "completed"
+        job.created_at = datetime.now(UTC)
+        job.completed_at = datetime.now(UTC)
+        job.error = None
+
+        _filtered = db.query.return_value.filter.return_value
+        _filtered.scalar.return_value = 12
+        _filtered.order_by.return_value.limit.return_value.all.side_effect = [[chunk], [job]]
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/documents/doc-1/inspect")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["document"]["id"] == "doc-1"
+        assert body["chunk_count"] == 12
+        assert body["chunks"][0]["indexed"] is True
+        assert body["chunks"][0]["content_preview"] == "First chunk preview"
+        assert body["jobs"][0]["status"] == "completed"
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_inspect_document_404_for_unknown(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+        db.get.side_effect = lambda model, pk: admin if model is User else None
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/documents/nonexistent/inspect")
+
+        assert resp.status_code == 404
+        from app.main import app
+        app.dependency_overrides.clear()
+
+    def test_inspect_document_rejects_bad_chunk_limit(self) -> None:
+        admin = _make_admin_user()
+        db = _mock_db_with_admin(admin)
+
+        with patch("pathlib.Path.mkdir"):
+            client = _make_test_client(db, admin)
+            resp = client.get("/admin/documents/doc-1/inspect?chunk_limit=500")
+
+        assert resp.status_code == 422
+        from app.main import app
+        app.dependency_overrides.clear()
+
 
 # ---------------------------------------------------------------------------
 # Document delete and reindex

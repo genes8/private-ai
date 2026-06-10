@@ -1,8 +1,10 @@
 import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Button from "../../components/Button";
 import Chip from "../../components/Chip";
 import DocumentRow from "../../components/admin/DocumentRow";
+import { inspectDocument } from "../../api/documents";
 import { useDocuments } from "../../hooks/useDocuments";
 import AdminLayout from "./AdminLayout";
 
@@ -24,6 +26,13 @@ export default function DocumentsPage() {
   const selectedDoc = docs.find((d) => d.id === selected) ?? null;
   const isReindexing = selectedDoc !== null &&
     (selectedDoc.status === "queued" || selectedDoc.status === "embedding");
+
+  const { data: inspection } = useQuery({
+    queryKey: ["document-inspect", selected],
+    queryFn: () => inspectDocument(selected as string),
+    enabled: selected !== null,
+    staleTime: 15_000,
+  });
 
   async function handleFiles(files: FileList | null) {
     if (!files) return;
@@ -176,6 +185,42 @@ export default function DocumentsPage() {
                 {new Date(selectedDoc.addedAt).toLocaleString()} · {selectedDoc.addedBy}
               </p>
             </div>
+
+            {inspection && inspection.chunks.length > 0 && (
+              <div className="px-[18px] pb-4">
+                <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-2">
+                  chunk sample · {inspection.chunk_count} total
+                </p>
+                <div className="flex flex-col gap-1.5 max-h-[180px] overflow-y-auto">
+                  {inspection.chunks.map((c) => (
+                    <div key={c.chunk_index} className="bg-surface rounded-md p-2">
+                      <p className="font-mono text-[10px] text-text-3 mb-0.5">
+                        #{c.chunk_index} · v{c.chunk_version} · {c.indexed ? "indexed" : "not indexed"}
+                      </p>
+                      <p className="text-[11px] text-text-2 leading-snug line-clamp-2">
+                        {c.content_preview ?? "—"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {inspection && inspection.jobs.length > 0 && (
+              <div className="px-[18px] pb-4">
+                <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-2">
+                  ingestion history
+                </p>
+                <div className="flex flex-col gap-1">
+                  {inspection.jobs.map((j, i) => (
+                    <p key={i} className="font-mono text-[10.5px] text-text-3 leading-relaxed">
+                      {j.created_at ? new Date(j.created_at).toLocaleString() : "—"} · {j.status}
+                      {j.error ? ` · ${j.error}` : ""}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="px-[18px] pb-4">
               <p className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-text-3 mb-1.5">status</p>
