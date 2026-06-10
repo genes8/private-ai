@@ -1,9 +1,10 @@
 import { BookOpen, ChevronDown, LogOut, Settings, Shield, Square } from "lucide-react";
 import { useEffect, useReducer, useRef } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import type { SseCite } from "../api/chat";
+import SessionSidebar from "../components/chat/SessionSidebar";
 import Avatar from "../components/Avatar";
 import Logo from "../components/Logo";
 import AnswerBlock from "../components/chat/AnswerBlock";
@@ -45,7 +46,11 @@ function timeOfDay() {
 
 export default function ChatPage() {
   const { me, isAdmin, signOut } = useAuth();
-  const { messages, steps, streaming, sendMessage, rate, stop, ratingError } = useChat(me?.id);
+  const {
+    messages, steps, streaming, sendMessage, rate, stop, ratingError,
+    newChat, loadSession, activeSessionId,
+  } = useChat(me?.id);
+  const queryClient = useQueryClient();
   const { data: corpusStats } = useQuery({
     queryKey: ["corpus-stats"],
     queryFn: () => apiFetch<{ docCount: number; chunkCount: number }>("/admin/corpus-stats"),
@@ -93,15 +98,29 @@ export default function ChatPage() {
     const q = composer.trim();
     if (!q || streaming) return;
     setUi({ composer: "" });
-    sendMessage(q).then(() =>
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50)
-    );
+    sendMessage(q).then(() => {
+      queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    });
+  }
+
+  function handleSessionSelect(sessionId: string) {
+    if (streaming || sessionId === activeSessionId) return;
+    loadSession(sessionId).catch((error) => console.error("loadSession_failed", error));
   }
 
   const assistantMessages = messages.filter((m) => m.role === "assistant");
 
   return (
     <div className="flex h-screen bg-paper">
+      {/* Session history */}
+      <SessionSidebar
+        activeSessionId={activeSessionId}
+        onSelect={handleSessionSelect}
+        onNewChat={newChat}
+        disabled={streaming}
+      />
+
       {/* Main column */}
       <div className="flex flex-1 flex-col min-w-0">
         {/* Header */}

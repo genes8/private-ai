@@ -1,4 +1,4 @@
-import { apiUrl, csrfHeaders } from "./client";
+import { apiFetch, apiUrl, csrfHeaders } from "./client";
 import { emitUnauthorized } from "./authEvents";
 
 export type StepName = "embed" | "retrieve" | "rerank" | "generate";
@@ -114,3 +114,43 @@ export async function* streamChat(
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Session history
+// ---------------------------------------------------------------------------
+
+export interface ChatSessionSummary {
+  sessionId: string;
+  title: string;
+  updatedAt: string | null;
+  messageCount: number;
+}
+
+export interface ChatSessionMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface RawSessionSummary {
+  session_id: string;
+  title: string;
+  updated_at: string | null;
+  message_count: number;
+}
+
+export const listChatSessions = () =>
+  apiFetch<RawSessionSummary[]>("/chat/sessions").then((rows) =>
+    rows.map(
+      (r): ChatSessionSummary => ({
+        sessionId: r.session_id,
+        title: r.title,
+        updatedAt: r.updated_at,
+        messageCount: r.message_count,
+      }),
+    ),
+  );
+
+export const getChatSessionMessages = (sessionId: string) =>
+  apiFetch<{ session_id: string; messages: ChatSessionMessage[] }>(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+  );

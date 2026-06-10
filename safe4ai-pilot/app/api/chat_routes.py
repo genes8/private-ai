@@ -20,14 +20,21 @@ from app.auth.middleware import get_current_user
 from app.auth.router import limiter
 from app.config import settings
 from app.db import get_db
+from app.db.models import Session as DbSession
 from app.db.models import User
 from app.models import Citation, Message, PrivateAIState
 from app.services.app_config_store import load_app_config
 from app.services.chat_finalizer import finalize_chat_run
 from app.services.conversation import ConversationManager
 from app.services.cost_service import CostCeilingExceeded, check_cost_ceiling, usage_or_estimate
-from app.services.quota_service import QuotaExceeded, TierExpired, check_query_quota, check_tier_expiry
+from app.services.quota_service import (
+    QuotaExceeded,
+    TierExpired,
+    check_query_quota,
+    check_tier_expiry,
+)
 from app.services.runtime_config import load_runtime_config
+
 logger = structlog.get_logger(__name__)
 
 
@@ -364,3 +371,89 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Session history — list previous sessions and reload their messages
+# ---------------------------------------------------------------------------
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    title: str
+    updated_at: datetime | None
+    message_count: int
+
+
+class SessionMessage(BaseModel):
+    role: str
+    content: str
+
+
+class SessionMessagesResponse(BaseModel):
+    session_id: str
+    messages: list[SessionMessage]
+
+
+def _state_messages(state_json: Any) -> list[dict[str, Any]]:
+    """Extract the serialized message list from a session's state_json."""
+    if not isinstance(state_json, dict):
+        return []
+    messages = state_json.get("messages")
+    return messages if isinstance(messages, list) else []
+
+
+@router.get("/chat/sessions", response_model=list[SessionSummary])
+@limiter.limit("100/minute")
+def list_chat_sessions(
+    request: Request,
+    limit: int = 30,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[SessionSummary]:
+    """The current user's non-empty sessions, most recently active first."""
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+    rows = (
+        db.query(DbSession)
+        .filter(DbSession.user_id == str(current_user.id))
+        .order_by(DbSession.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+    summaries: list[SessionSummary] = []
+    for row in rows:
+        messages = _state_messages(row.state_json)
+        if not messages:
+            continue
+        first_user = next((m for m in messages if m.get("role") == "user"), None)
+        title = str(first_user.get("content", "")).strip()[:80] if first_user else ""
+        summaries.append(
+            SessionSummary(
+                session_id=str(row.id),
+                title=title or "Untitled session",
+                updated_at=row.updated_at,
+                message_count=len(messages),
+            )
+        )
+    return summaries
+
+
+@router.get("/chat/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
+@limiter.limit("100/minute")
+def get_chat_session_messages(
+    request: Request,
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SessionMessagesResponse:
+    """Messages of one owned session. 404 for missing or foreign sessions alike."""
+    row = db.get(DbSession, session_id)
+    if row is None or str(row.user_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    messages = [
+        SessionMessage(role=str(m.get("role", "")), content=str(m.get("content", "")))
+        for m in _state_messages(row.state_json)
+        if m.get("role") in {"user", "assistant"}
+    ]
+    return SessionMessagesResponse(session_id=str(row.id), messages=messages)

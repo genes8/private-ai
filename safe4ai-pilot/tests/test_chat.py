@@ -346,3 +346,75 @@ def test_chat_recovers_from_corrupted_session_state(authed_client: TestClient) -
 
     assert response.status_code == 200
     assert response.json()["session_id"] == "sess-new"
+
+
+# ---------------------------------------------------------------------------
+# Session history endpoints
+# ---------------------------------------------------------------------------
+
+
+def _make_session_row(
+    session_id: str = "11111111-2222-3333-4444-555555555555",
+    user_id: str = "u1",
+    messages: list[dict[str, str]] | None = None,
+) -> MagicMock:
+    row = MagicMock()
+    row.id = session_id
+    row.user_id = user_id
+    row.updated_at = None
+    row.state_json = {"messages": messages if messages is not None else []}
+    return row
+
+
+def test_list_chat_sessions_returns_titled_summaries(authed_client: TestClient) -> None:
+    populated = _make_session_row(
+        messages=[
+            {"role": "user", "content": "What is the refund policy?"},
+            {"role": "assistant", "content": "30 days."},
+        ]
+    )
+    empty = _make_session_row(session_id="22222222-2222-3333-4444-555555555555")
+    db = app.dependency_overrides[get_db]().__next__()
+    _q = db.query.return_value.filter.return_value.order_by.return_value
+    _q.limit.return_value.all.return_value = [populated, empty]
+
+    response = authed_client.get("/chat/sessions")
+
+    assert response.status_code == 200
+    body = response.json()
+    # Empty sessions are hidden from the sidebar
+    assert len(body) == 1
+    assert body[0]["title"] == "What is the refund policy?"
+    assert body[0]["message_count"] == 2
+
+
+def test_get_session_messages_returns_owned_session(authed_client: TestClient) -> None:
+    row = _make_session_row(
+        messages=[
+            {"role": "user", "content": "Q1"},
+            {"role": "assistant", "content": "A1"},
+            {"role": "system", "content": "hidden"},
+        ]
+    )
+    db = app.dependency_overrides[get_db]().__next__()
+    user = db.get.return_value
+    db.get.side_effect = lambda model, pk: user if model is User else row
+
+    response = authed_client.get(f"/chat/sessions/{row.id}/messages")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_id"] == row.id
+    # System messages are excluded from restored history
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+
+
+def test_get_session_messages_foreign_session_is_404(authed_client: TestClient) -> None:
+    row = _make_session_row(user_id="someone-else")
+    db = app.dependency_overrides[get_db]().__next__()
+    user = db.get.return_value
+    db.get.side_effect = lambda model, pk: user if model is User else row
+
+    response = authed_client.get(f"/chat/sessions/{row.id}/messages")
+
+    assert response.status_code == 404

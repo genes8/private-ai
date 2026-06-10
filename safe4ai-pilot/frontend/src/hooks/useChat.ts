@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type SseCite, type StepName, type StepState, streamChat } from "../api/chat";
+import { getChatSessionMessages, type SseCite, type StepName, type StepState, streamChat } from "../api/chat";
 import { submitFeedback } from "../api/feedback";
 import { readStoredChatSessionId, storeChatSessionId } from "../utils/chatSessionStorage";
 
@@ -22,6 +22,9 @@ export function useChat(userId?: string) {
   const [streaming, setStreaming] = useState(false);
   const [ratingError, setRatingError] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(readStoredChatSessionId(userId));
+  // Mirror of sessionRef for rendering (sidebar highlight); the ref stays the
+  // source of truth for stream calls because it updates mid-stream.
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(sessionRef.current);
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
@@ -36,11 +39,44 @@ export function useChat(userId?: string) {
 
   useEffect(() => {
     sessionRef.current = readStoredChatSessionId(userId);
+    setActiveSessionId(sessionRef.current);
   }, [userId]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  const newChat = useCallback(() => {
+    abortRef.current?.abort();
+    sessionRef.current = null;
+    setActiveSessionId(null);
+    setMessages([]);
+    setSteps([]);
+    setStreaming(false);
+  }, []);
+
+  const loadSession = useCallback(async (sessionId: string) => {
+    abortRef.current?.abort();
+    const { messages: history } = await getChatSessionMessages(sessionId);
+    if (!mountedRef.current) return;
+    sessionRef.current = sessionId;
+    setActiveSessionId(sessionId);
+    storeChatSessionId(userId, sessionId);
+    // Restored messages have no per-message citation/trust data — the state
+    // only persists role + content. Sources reappear on the next live answer.
+    setMessages(
+      history.map((m) => ({
+        id: crypto.randomUUID(),
+        role: m.role,
+        content: m.content,
+        sources: [],
+        trust: null,
+        traceId: null,
+      })),
+    );
+    setSteps([]);
+    setStreaming(false);
+  }, [userId]);
 
   const sendMessage = useCallback(async (question: string) => {
     const userMsg: ChatMessage = {
@@ -94,6 +130,7 @@ export function useChat(userId?: string) {
         } else if (ev.type === "done") {
           traceId = ev.data.traceId;
           sessionRef.current = ev.data.sessionId;
+          setActiveSessionId(ev.data.sessionId);
           storeChatSessionId(userId, ev.data.sessionId);
           streamCompleted = !ev.data.error;
           const trust = { latencyMs: ev.data.latencyMs, cacheHit: ev.data.cache, model: ev.data.model, kRetrieved: ev.data.kRetrieved };
@@ -149,5 +186,16 @@ export function useChat(userId?: string) {
     }
   }, []);
 
-  return { messages, steps, streaming, sendMessage, rate, stop, ratingError };
+  return {
+    messages,
+    steps,
+    streaming,
+    sendMessage,
+    rate,
+    stop,
+    ratingError,
+    newChat,
+    loadSession,
+    activeSessionId,
+  };
 }
