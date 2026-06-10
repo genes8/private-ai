@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import structlog
 from sqlalchemy.orm import Session
@@ -10,8 +13,14 @@ from app.components.reranker import Reranker
 from app.config import settings
 from app.db import SessionLocal
 from app.db.models import Document, IngestionJob, IngestionJobStatus, IngestionStatus
+from app.services.document_service import activate_document_version
 from app.services.rag_pipeline import RagPipeline
-from app.services.runtime_config import build_embedding_provider, build_provider, build_vision_provider, load_runtime_config
+from app.services.runtime_config import (
+    build_embedding_provider,
+    build_provider,
+    build_vision_provider,
+    load_runtime_config,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -27,10 +36,20 @@ async def run_ingestion(
     filename: str,
     uploaded_by: str,
     retriever: HybridRetriever | None = None,
+    activate_version: int | None = None,
+    cleanup_raw_path: str | None = None,
 ) -> None:
     """Background task: ingest a document and update job/document status.
 
     Opens its own DB session so the HTTP request session can be closed safely.
+
+    With ``activate_version`` set this is a replacement ingest: chunks go in
+    staged (``is_active=False``, excluded from retrieval) and only after a
+    fully successful ingest is the version switched — Qdrant payload flip,
+    DB ``active_version``, BM25 rebuild. A failed ingest leaves the previous
+    version serving untouched, so users never see a partial reindex.
+    ``cleanup_raw_path`` (the replaced version's raw file) is deleted only
+    after a successful switch.
     """
     db: Session = SessionLocal()
     try:
@@ -81,7 +100,23 @@ async def run_ingestion(
             filename,
             uploaded_by,
             document_version=doc.version or 1,
+            activate=activate_version is None,
         )
+
+        if activate_version is not None:
+            # Ingest succeeded — switch the serving version. Qdrant first;
+            # only then persist active_version so a failed flip never leaves
+            # the DB claiming a version Qdrant does not serve.
+            activate_document_version(doc_id, activate_version)
+            doc = db.get(Document, doc_id)
+            if doc is not None:
+                doc.active_version = activate_version
+            db.commit()
+            if retriever is not None:
+                await asyncio.to_thread(retriever.rebuild_from_qdrant)
+            if cleanup_raw_path:
+                with contextlib.suppress(OSError):
+                    Path(cleanup_raw_path).unlink(missing_ok=True)
 
         job.status = IngestionJobStatus.completed
         job.completed_at = datetime.now(UTC)
@@ -89,7 +124,7 @@ async def run_ingestion(
         if doc is not None and doc.ingestion_status == IngestionStatus.embedding:
             doc.ingestion_status = IngestionStatus.indexed
         db.commit()
-        logger.info("ingestion_completed", doc_id=doc_id)
+        logger.info("ingestion_completed", doc_id=doc_id, activated_version=activate_version)
 
     except Exception as exc:
         logger.error("ingestion_failed", doc_id=doc_id, error=str(exc))
@@ -101,7 +136,12 @@ async def run_ingestion(
                 job.error = str(exc)[:2000]
                 job.completed_at = datetime.now(UTC)
             if doc is not None:
-                doc.ingestion_status = IngestionStatus.failed
+                if activate_version is not None:
+                    # Replacement failed but the previous version still serves —
+                    # keep the document usable instead of marking it failed.
+                    doc.ingestion_status = IngestionStatus.indexed
+                else:
+                    doc.ingestion_status = IngestionStatus.failed
             db.commit()
         except Exception as failure_exc:  # noqa: BLE001
             db.rollback()

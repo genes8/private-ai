@@ -235,12 +235,38 @@ def schedule_cleanup(app: FastAPI) -> None:  # noqa: ARG001
         finally:
             db.close()
 
+    def _run_superseded_cleanup_wrapper(**kwargs: Any) -> None:
+        from app.services.document_service import (
+            cleanup_superseded_chunk_rows,
+            delete_superseded_points,
+        )
+
+        try:
+            delete_superseded_points(older_than_hours=24.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("superseded_points_cleanup_failed", error=str(exc))
+        db = SessionLocal()
+        try:
+            cleanup_superseded_chunk_rows(db)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("superseded_chunks_cleanup_failed", error=str(exc))
+        finally:
+            db.close()
+
     scheduler.add_job(
         _run_cleanup_wrapper,
         trigger="cron",
         hour=2,
         minute=0,
         id="audit_cleanup",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_superseded_cleanup_wrapper,
+        trigger="cron",
+        hour=2,
+        minute=30,
+        id="superseded_version_cleanup",
         replace_existing=True,
     )
     scheduler.start()

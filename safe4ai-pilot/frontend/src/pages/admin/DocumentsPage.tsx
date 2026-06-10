@@ -1,10 +1,10 @@
 import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Button from "../../components/Button";
 import Chip from "../../components/Chip";
 import DocumentRow from "../../components/admin/DocumentRow";
-import { inspectDocument } from "../../api/documents";
+import { inspectDocument, uploadNewVersion } from "../../api/documents";
 import { useDocuments } from "../../hooks/useDocuments";
 import AdminLayout from "./AdminLayout";
 
@@ -21,7 +21,25 @@ export default function DocumentsPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [versionError, setVersionError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const versionInputRef = useRef<HTMLInputElement>(null);
+  const qc = useQueryClient();
+
+  async function handleNewVersionFile(files: FileList | null) {
+    const file = files?.[0];
+    if (!file || !selected) return;
+    setVersionError(null);
+    try {
+      await uploadNewVersion(selected, file);
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: ["document-inspect", selected] });
+    } catch (error) {
+      setVersionError(error instanceof Error ? error.message : "New version upload failed");
+    } finally {
+      if (versionInputRef.current) versionInputRef.current.value = "";
+    }
+  }
 
   const selectedDoc = docs.find((d) => d.id === selected) ?? null;
   const isReindexing = selectedDoc !== null &&
@@ -243,7 +261,26 @@ export default function DocumentsPage() {
 
             <div className="flex-1" />
 
+            {versionError && (
+              <p className="px-[18px] pb-2 text-[11.5px] text-danger">{versionError}</p>
+            )}
             <div className="border-t border-line px-[14px] py-2.5 flex gap-1.5">
+              <input
+                ref={versionInputRef}
+                type="file"
+                aria-label="Upload new document version"
+                className="hidden"
+                accept=".pdf,.docx,.xlsx,.txt"
+                onChange={(e) => handleNewVersionFile(e.target.files)}
+              />
+              <button
+                type="button"
+                onClick={() => versionInputRef.current?.click()}
+                disabled={isReindexing}
+                className="flex-1 h-[26px] px-[9px] text-[12px] font-medium text-text-2 border border-line bg-surface rounded-[5px] hover:bg-surface-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                New version
+              </button>
               <button
                 type="button"
                 onClick={() => reindex(selectedDoc.id)}

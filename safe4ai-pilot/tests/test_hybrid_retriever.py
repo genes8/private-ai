@@ -176,3 +176,54 @@ async def test_retrieve_empty_collection() -> None:
 def test_embedding_model_attribute_exposed() -> None:
     retriever = _make_retriever()
     assert retriever.embedding_model == "nomic-embed-text"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_always_excludes_superseded_versions_in_qdrant_filter() -> None:
+    retriever = _make_retriever()
+
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
+        mock_qdrant.query_points.return_value = _make_query_response([])
+        await retriever.retrieve("query")
+
+        qdrant_filter = mock_qdrant.query_points.call_args.kwargs["query_filter"]
+        assert qdrant_filter is not None
+        assert qdrant_filter.must_not is not None
+        assert qdrant_filter.must_not[0].key == "is_active"
+
+
+@pytest.mark.asyncio
+async def test_bm25_path_skips_inactive_chunks() -> None:
+    retriever = _make_retriever()
+    active_payload = {**_make_payload("c-active", "doc-1"), "is_active": True}
+    stale_payload = {**_make_payload("c-stale", "doc-1"), "is_active": False}
+    retriever.update_bm25_index(
+        ["c-active", "c-stale"],
+        ["refund policy thirty days", "refund policy sixty days"],
+        [active_payload, stale_payload],
+    )
+
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
+        mock_qdrant.query_points.return_value = _make_query_response([])
+        results = await retriever.retrieve("refund policy")
+
+    chunk_ids = [r.chunk_id for r in results]
+    assert "c-active" in chunk_ids
+    assert "c-stale" not in chunk_ids
+
+
+def test_rebuild_from_qdrant_skips_inactive_points() -> None:
+    retriever = _make_retriever()
+    active = MagicMock()
+    active.id = "c-active"
+    active.payload = {**_make_payload("c-active", "doc-1"), "is_active": True}
+    stale = MagicMock()
+    stale.id = "c-stale"
+    stale.payload = {**_make_payload("c-stale", "doc-1"), "is_active": False}
+
+    with patch.object(retriever, "_qdrant") as mock_qdrant:
+        mock_qdrant.scroll.return_value = ([active, stale], None)
+        count = retriever.rebuild_from_qdrant()
+
+    assert count == 1
+    assert retriever._bm25_chunk_ids == ["c-active"]

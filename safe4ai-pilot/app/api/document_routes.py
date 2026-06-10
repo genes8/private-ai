@@ -9,6 +9,7 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from sqlalchemy.orm import Query, Session
 
 from app.auth.middleware import get_current_user, require_role
 from app.auth.router import limiter
@@ -23,11 +24,14 @@ from app.db.models import (
     User,
 )
 from app.security.upload_validator import UploadValidator
-from app.services.document_service import delete_qdrant_points, prune_bm25
+from app.services.document_service import (
+    delete_qdrant_points,
+    prune_bm25,
+    verify_document_deletion,
+)
 from app.services.ingestion_service import run_ingestion
 from app.services.semantic_cache import invalidate_cache_for_document
 from app.services.stats_service import get_corpus_stats
-from sqlalchemy.orm import Query, Session
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["admin"])
@@ -52,6 +56,8 @@ async def _run_ingestion_task(
     filename: str,
     uploaded_by: str,
     retriever: Any,
+    activate_version: int | None = None,
+    cleanup_raw_path: str | None = None,
 ) -> None:
     async with _INGESTION_TASK_SEMAPHORE:
         await run_ingestion(
@@ -61,6 +67,8 @@ async def _run_ingestion_task(
             filename=filename,
             uploaded_by=uploaded_by,
             retriever=retriever,
+            activate_version=activate_version,
+            cleanup_raw_path=cleanup_raw_path,
         )
 
 
@@ -73,6 +81,8 @@ def _schedule_ingestion_task(
     filename: str,
     uploaded_by: str,
     retriever: Any,
+    activate_version: int | None = None,
+    cleanup_raw_path: str | None = None,
 ) -> None:
     task = asyncio.create_task(
         _run_ingestion_task(
@@ -82,6 +92,8 @@ def _schedule_ingestion_task(
             filename=filename,
             uploaded_by=uploaded_by,
             retriever=retriever,
+            activate_version=activate_version,
+            cleanup_raw_path=cleanup_raw_path,
         )
     )
     tasks = getattr(request.app.state, "ingestion_tasks", None)
@@ -498,3 +510,117 @@ async def reindex_document(
         retriever=retriever,
     )
     return {"job_id": job_id}
+
+
+@router.post("/admin/documents/{doc_id}/upload-new-version", status_code=202)
+@limiter.limit("10/hour")
+async def upload_new_version(
+    request: Request,
+    doc_id: str,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Replace a document's content without a retrieval gap.
+
+    The new file is ingested as a staged version while the current version
+    keeps serving; only after a fully successful ingest does the runtime
+    switch to the new version (see run_ingestion). Old vectors stay in Qdrant
+    as superseded for a rollback window until the cleanup job prunes them.
+    """
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_bytes = await _read_upload_with_limit(file)
+    validator = UploadValidator()
+    result = validator.validate(
+        filename=file.filename or "",
+        content_type=file.content_type or "",
+        file_bytes=file_bytes,
+    )
+    if not result.allowed:
+        raise HTTPException(status_code=400, detail=result.reason)
+    suffix = Path(file.filename or "").suffix.lower()
+    if not suffix:
+        raise HTTPException(
+            status_code=400, detail="File must have an extension (e.g., .pdf, .docx, .txt)"
+        )
+
+    job_id = str(uuid.uuid4())
+    old_storage_path = _RAW_DIR / str(doc.storage_filename)
+    storage_name = validator.safe_filename() + suffix
+    storage_path = _RAW_DIR / storage_name
+
+    try:
+        active_job = _lock_query(
+            db.query(IngestionJob).filter(
+                IngestionJob.document_id == doc_id,
+                IngestionJob.status.in_(
+                    [IngestionJobStatus.embedding, IngestionJobStatus.pending]
+                ),
+            )
+        ).first()
+        if active_job:
+            raise HTTPException(
+                status_code=409,
+                detail="Document is currently being ingested. Wait for completion first.",
+            )
+        storage_path.write_bytes(file_bytes)
+        new_version = (doc.version or 1) + 1
+        doc.version = new_version
+        doc.filename = file.filename or storage_name
+        doc.storage_filename = storage_name
+        doc.file_type = suffix.lstrip(".")
+        doc.file_size_bytes = len(file_bytes)
+        doc.ingestion_status = IngestionStatus.queued
+        doc.ingestion_started_at = None
+        job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
+        db.add(job)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        with contextlib.suppress(OSError):
+            if storage_path.exists():
+                storage_path.unlink()
+        raise
+
+    _schedule_ingestion_task(
+        request,
+        doc_id=doc_id,
+        job_id=job_id,
+        file_path=str(storage_path),
+        filename=str(doc.filename),
+        uploaded_by=str(current_user.id),
+        retriever=getattr(request.app.state, "retriever", None),
+        activate_version=new_version,
+        cleanup_raw_path=(
+            str(old_storage_path) if old_storage_path != storage_path else None
+        ),
+    )
+    logger.info("document_new_version_queued", doc_id=doc_id, version=new_version)
+    return {"doc_id": doc_id, "job_id": job_id, "version": new_version}
+
+
+@router.get("/admin/documents/{doc_id}/verify-deletion")
+@limiter.limit("100/minute")
+def verify_deletion(
+    request: Request,
+    doc_id: str,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Auditable evidence that a deleted document left nothing retrievable.
+
+    Counts remnants across Qdrant, DB chunk/job rows, semantic cache, and the
+    in-memory BM25 index. ``clean`` is true only when every count is zero.
+    Returns 409 while the document still exists (deletion not performed yet).
+    """
+    if db.get(Document, doc_id) is not None:
+        raise HTTPException(status_code=409, detail="Document still exists; delete it first")
+    return verify_document_deletion(
+        db, getattr(request.app.state, "retriever", None), doc_id
+    )

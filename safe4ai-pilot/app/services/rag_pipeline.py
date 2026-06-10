@@ -86,7 +86,15 @@ class RagPipeline:
         uploaded_by: str,
         *,
         document_version: int = 1,
+        activate: bool = True,
     ) -> None:
+        """Parse, chunk, embed, and index a document.
+
+        With ``activate=False`` the chunks are ingested as a staged version:
+        they carry ``is_active=False`` in Qdrant (excluded from retrieval) and
+        are not added to BM25. The caller switches the active version after a
+        successful ingest — see ingestion_service.run_ingestion.
+        """
         ext = Path(file_path).suffix.lower()
 
         if ext == ".pdf":
@@ -143,6 +151,8 @@ class RagPipeline:
                     "chunk_index": all_chunks[i]["chunk_index"],
                     "content": all_chunks[i]["content"],
                     "ocr_quality": all_chunks[i]["ocr_quality"],
+                    "doc_version": document_version,
+                    "is_active": activate,
                 },
             )
             for i in range(len(all_chunks))
@@ -169,9 +179,10 @@ class RagPipeline:
         self._set_status(doc_id, IngestionStatus.indexed)
         self._db.commit()
 
-        # Update BM25 index
-        payloads = [point.payload or {} for point in points]
-        self._retriever.update_bm25_index(chunk_ids, contents, payloads)
+        # Update BM25 index — staged versions join BM25 only at activation
+        if activate:
+            payloads = [point.payload or {} for point in points]
+            self._retriever.update_bm25_index(chunk_ids, contents, payloads)
 
     # ------------------------------------------------------------------
     # Internal helpers

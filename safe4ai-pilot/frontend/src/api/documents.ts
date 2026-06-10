@@ -117,3 +117,22 @@ export interface DocumentInspection {
 
 export const inspectDocument = (id: string) =>
   apiFetch<DocumentInspection>(`/admin/documents/${id}/inspect`);
+
+export const uploadNewVersion = async (id: string, file: File): Promise<{ version: number }> => {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(apiUrl(`/admin/documents/${id}/upload-new-version`), {
+    method: "POST",
+    credentials: "include",
+    headers: csrfHeaders(),
+    body: fd,
+  });
+  if (!res.ok) {
+    if (res.status === 401) {
+      emitUnauthorized();
+    }
+    const text = await res.text().catch(() => String(res.status));
+    throw new ApiError(res.status, text);
+  }
+  return res.json() as Promise<{ version: number }>;
+};

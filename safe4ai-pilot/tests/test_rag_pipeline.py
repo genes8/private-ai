@@ -316,3 +316,74 @@ async def test_ocr_page_uses_vision_client_not_chat_client() -> None:
     vision_client.describe_image.assert_awaited()
     chat_client.chat.assert_not_awaited()
     assert text == "extracted text"
+
+
+@pytest.mark.asyncio
+async def test_staged_ingest_marks_inactive_and_skips_bm25() -> None:
+    """activate=False ingests a staged version: inactive payload, no BM25 update."""
+    pipeline = _make_pipeline()
+
+    fake_page = MagicMock()
+    fake_page.extract_text.return_value = "B" * 100
+
+    mock_reader = MagicMock()
+    mock_reader.pages = [fake_page]
+
+    db = MagicMock()
+    pipeline._db = db
+    pipeline._qdrant = MagicMock()
+
+    with (
+        patch("app.services.document_parser.PdfReader", return_value=mock_reader),
+        patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
+        patch.object(pipeline, "_retriever") as mock_retriever,
+    ):
+        mock_retriever.update_bm25_index = MagicMock()
+        db.get.return_value = MagicMock()
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"%PDF fake v2")
+            tmp_path = f.name
+
+        await pipeline.ingest(
+            tmp_path, "doc-1", "test.pdf", "user-1", document_version=2, activate=False
+        )
+
+    points = pipeline._qdrant.upsert.call_args.kwargs["points"]
+    assert points[0].payload["is_active"] is False
+    assert points[0].payload["doc_version"] == 2
+    mock_retriever.update_bm25_index.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_default_ingest_is_active_version_one() -> None:
+    pipeline = _make_pipeline()
+
+    fake_page = MagicMock()
+    fake_page.extract_text.return_value = "C" * 100
+
+    mock_reader = MagicMock()
+    mock_reader.pages = [fake_page]
+
+    db = MagicMock()
+    pipeline._db = db
+    pipeline._qdrant = MagicMock()
+
+    with (
+        patch("app.services.document_parser.PdfReader", return_value=mock_reader),
+        patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
+        patch.object(pipeline, "_retriever") as mock_retriever,
+    ):
+        mock_retriever.update_bm25_index = MagicMock()
+        db.get.return_value = MagicMock()
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"%PDF fake")
+            tmp_path = f.name
+
+        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
+
+    points = pipeline._qdrant.upsert.call_args.kwargs["points"]
+    assert points[0].payload["is_active"] is True
+    assert points[0].payload["doc_version"] == 1
+    mock_retriever.update_bm25_index.assert_called_once()

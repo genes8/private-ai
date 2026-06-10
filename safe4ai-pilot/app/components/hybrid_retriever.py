@@ -100,7 +100,7 @@ class HybridRetriever:
             for point in result:
                 payload = point.payload or {}
                 content = str(payload.get("content", ""))
-                if content:
+                if content and payload.get("is_active") is not False:
                     entries.append((str(point.id), content, payload))
             if next_offset is None:
                 break
@@ -142,17 +142,17 @@ class HybridRetriever:
             raise RuntimeError("No embedding client configured for HybridRetriever")
         embedding = await self._embedding_client.embed_query(query)
 
-        # Build optional qdrant filter for doc_id
-        qdrant_filter: qmodels.Filter | None = None
+        # Exclude superseded document versions (is_active=False). must_not keeps
+        # legacy points without the field retrievable.
+        must_not = [
+            qmodels.FieldCondition(key="is_active", match=qmodels.MatchValue(value=False))
+        ]
+        must: list[qmodels.FieldCondition] = []
         if doc_ids:
-            qdrant_filter = qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="doc_id",
-                        match=qmodels.MatchAny(any=doc_ids),
-                    )
-                ]
+            must.append(
+                qmodels.FieldCondition(key="doc_id", match=qmodels.MatchAny(any=doc_ids))
             )
+        qdrant_filter = qmodels.Filter(must=must or None, must_not=must_not)
 
         response = await asyncio.to_thread(
             self._qdrant.query_points,
@@ -187,6 +187,8 @@ class HybridRetriever:
                 cid = bm25_chunk_ids[idx]
                 payload = dense_data.get(cid) or bm25_payloads.get(cid, {})
                 if doc_ids and payload.get("doc_id") not in doc_ids:
+                    continue
+                if payload.get("is_active") is False:
                     continue
                 filtered.append((idx, score, payload))
 
