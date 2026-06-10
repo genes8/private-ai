@@ -12,14 +12,17 @@
 - [settings.ts](file://safe4ai-pilot/frontend/src/api/settings.ts)
 - [models.py](file://safe4ai-pilot/app/db/models.py)
 - [config.py](file://safe4ai-pilot/app/config.py)
+- [runtime_config.py](file://safe4ai-pilot/app/services/runtime_config.py)
+- [url_validator.py](file://safe4ai-pilot/app/security/url_validator.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Updated Frontend Implementation section to reflect CustomModelManager component refactoring
-- Updated Provider Modes and Configuration section to reflect SSE completion mode relocation to Retrieval section
-- Added documentation for intersection observer-based navigation synchronization
-- Enhanced user experience features documentation
+- Updated Backend Implementation section to reflect new effective_provider_base_url() helper function
+- Enhanced Provider Settings Resolution section with environment-specific URL handling
+- Updated Runtime Integration section to show effective URL resolution in runtime components
+- Added Security Mechanisms section documenting URL validation and SSRF protection
+- Updated Troubleshooting Guide with environment-specific URL issues
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -28,10 +31,11 @@
 4. [Backend Implementation](#backend-implementation)
 5. [Frontend Implementation](#frontend-implementation)
 6. [Runtime Integration](#runtime-integration)
-7. [Validation and Safety Mechanisms](#validation-and-safety-mechanisms)
-8. [Error Handling and Diagnostics](#error-handling-and-diagnostics)
-9. [Best Practices and Guidelines](#best-practices-and-guidelines)
-10. [Troubleshooting Guide](#troubleshooting-guide)
+7. [Security Mechanisms](#security-mechanisms)
+8. [Validation and Safety Mechanisms](#validation-and-safety-mechanisms)
+9. [Error Handling and Diagnostics](#error-handling-and-diagnostics)
+10. [Best Practices and Guidelines](#best-practices-and-guidelines)
+11. [Troubleshooting Guide](#troubleshooting-guide)
 
 ## Introduction
 
@@ -39,7 +43,7 @@ Provider Settings Management is a critical component of the private-ai system th
 
 The system provides three distinct operational modes to balance performance, privacy, and cost considerations while maintaining robust validation and safety mechanisms to prevent misconfiguration that could impact system stability or data privacy.
 
-**Updated** Enhanced with improved user experience features including custom model management and automatic navigation synchronization.
+**Updated** Enhanced with streamlined provider settings system featuring environment-specific URL resolution for local Ollama deployments across different runtime environments.
 
 ## System Architecture
 
@@ -58,11 +62,13 @@ SR[settings_routes.py]
 SS[settings_service.py]
 PS[provider_settings.py]
 PC[provider_clients.py]
+EV[Effective URL Resolver]
 end
 subgraph "Infrastructure Layer"
 DB[AppConfig table]
 CFG[config.py]
 RT[Runtime Components]
+UV[url_validator.py]
 end
 SP --> PSS
 PSS --> CM
@@ -71,7 +77,9 @@ API --> SR
 SR --> SS
 SS --> PS
 SS --> PC
-SR --> DB
+SR --> EV
+EV --> CFG
+EV --> UV
 SS --> DB
 PS --> CFG
 PC --> RT
@@ -80,7 +88,9 @@ PC --> RT
 **Diagram sources**
 - [settings_routes.py:1-354](file://safe4ai-pilot/app/api/settings_routes.py#L1-L354)
 - [settings_service.py:1-415](file://safe4ai-pilot/app/services/settings_service.py#L1-L415)
-- [provider_settings.py:1-225](file://safe4ai-pilot/app/services/provider_settings.py#L1-L225)
+- [provider_settings.py:1-224](file://safe4ai-pilot/app/services/provider_settings.py#L1-L224)
+- [runtime_config.py:130-256](file://safe4ai-pilot/app/services/runtime_config.py#L130-L256)
+- [url_validator.py:54-74](file://safe4ai-pilot/app/security/url_validator.py#L54-L74)
 
 ## Provider Modes and Configuration
 
@@ -91,32 +101,35 @@ The system supports three distinct provider modes, each with specific characteri
 - **Privacy**: Maximum privacy - no data leaves the local server
 - **Requirements**: Ollama must be running locally
 - **Capabilities**: Full local processing for chat, embeddings, and vision
+- **Environment Handling**: Uses environment-specific Ollama URL (host vs Docker)
 
 ### Hybrid Mode
 - **Description**: Cloud LLM for answers, Ollama for document search
 - **Privacy**: Balanced privacy - documents stay local, queries go to cloud
 - **Requirements**: Working cloud provider connection and local Ollama
 - **Capabilities**: Cloud chat with local embeddings
+- **Base URL**: Persists cloud provider base URL for future sessions
 
 ### Cloud Mode
 - **Description**: Chat and document search both via cloud API
 - **Privacy**: Lower privacy - all data goes to cloud provider
 - **Requirements**: Working cloud provider connection with embeddings support
 - **Capabilities**: Full cloud processing for all AI tasks
+- **Base URL**: Uses persisted cloud provider base URL
 
 ```mermaid
 flowchart TD
 Start([Provider Selection]) --> Mode{"Select Mode"}
-Mode --> |Local| Local[Local Mode<br/>• All processing local<br/>• Ollama required<br/>• Highest privacy]
-Mode --> |Hybrid| Hybrid[Hybrid Mode<br/>• Cloud chat<br/>• Local embeddings<br/>• Balanced privacy]
-Mode --> |Cloud| Cloud[Cloud Mode<br/>• All processing cloud<br/>• Embeddings required<br/>• Lower privacy]
+Mode --> |Local| Local[Local Mode<br/>• Environment-specific Ollama URL<br/>• No base URL persistence<br/>• Highest privacy]
+Mode --> |Hybrid| Hybrid[Hybrid Mode<br/>• Cloud chat<br/>• Local embeddings<br/>• Balanced privacy<br/>• Persists cloud base URL]
+Mode --> |Cloud| Cloud[Cloud Mode<br/>• All processing cloud<br/>• Embeddings required<br/>• Lower privacy<br/>• Uses persisted base URL]
 Local --> LocalConfig[Configure Local Models]
 Hybrid --> HybridConfig[Configure Cloud Endpoint + Local Models]
 Cloud --> CloudConfig[Configure Cloud Credentials + Models]
-LocalConfig --> ValidateLocal{Validate Ollama}
+LocalConfig --> ValidateLocal{Validate Ollama Environment}
 HybridConfig --> ValidateHybrid{Validate Ollama + Cloud}
 CloudConfig --> ValidateCloud{Validate Cloud API}
-ValidateLocal --> ApplyLocal[Apply Configuration]
+ValidateLocal --> ApplyLocal[Apply Environment URL]
 ValidateHybrid --> ApplyHybrid[Apply Configuration]
 ValidateCloud --> ApplyCloud[Apply Configuration]
 ```
@@ -124,10 +137,12 @@ ValidateCloud --> ApplyCloud[Apply Configuration]
 **Diagram sources**
 - [settings_routes.py:227-286](file://safe4ai-pilot/app/api/settings_routes.py#L227-L286)
 - [settings_service.py:138-164](file://safe4ai-pilot/app/services/settings_service.py#L138-L164)
+- [provider_settings.py:29-41](file://safe4ai-pilot/app/services/provider_settings.py#L29-L41)
 
 **Section sources**
 - [settings_routes.py:17-354](file://safe4ai-pilot/app/api/settings_routes.py#L17-L354)
 - [settings_service.py:38-66](file://safe4ai-pilot/app/services/settings_service.py#L38-L66)
+- [provider_settings.py:29-41](file://safe4ai-pilot/app/services/provider_settings.py#L29-L41)
 
 ## Backend Implementation
 
@@ -144,6 +159,7 @@ participant Route as "settings_routes.py"
 participant Service as "settings_service.py"
 participant Provider as "provider_settings.py"
 participant Runtime as "build_runtime_components"
+participant EffectiveURL as "effective_provider_base_url"
 Client->>Route : PATCH /settings
 Route->>Service : normalize_patch_request()
 Service->>Provider : expand_provider_mode()
@@ -152,7 +168,8 @@ Service->>Service : probe_provider_prerequisites()
 Service->>Provider : validate_hybrid_embedding()
 Service->>Provider : sanitize_ollama_role_models()
 Service->>Service : collect_field_updates()
-Service->>Route : updates dict
+Route->>EffectiveURL : resolve effective base URL
+EffectiveURL-->>Route : environment-specific URL
 Route->>Runtime : build_runtime_components()
 Runtime-->>Route : new components
 Route-->>Client : Updated settings
@@ -161,6 +178,7 @@ Route-->>Client : Updated settings
 **Diagram sources**
 - [settings_routes.py:227-286](file://safe4ai-pilot/app/api/settings_routes.py#L227-L286)
 - [settings_service.py:138-415](file://safe4ai-pilot/app/services/settings_service.py#L138-L415)
+- [provider_settings.py:29-41](file://safe4ai-pilot/app/services/provider_settings.py#L29-L41)
 
 ### Service Layer Logic
 
@@ -172,7 +190,7 @@ The service layer implements a three-stage pipeline for processing settings upda
 
 ### Provider Settings Resolution
 
-The provider settings module handles the core logic for provider mode resolution and validation:
+The provider settings module handles the core logic for provider mode resolution and validation, including the new effective_provider_base_url() helper function:
 
 ```mermaid
 classDiagram
@@ -190,20 +208,28 @@ class ProviderSettings {
 +expand_provider_mode(mode, base_url) ProviderPatch
 +validate_hybrid_embedding() string|None
 +sanitize_ollama_role_models() dict
++effective_provider_base_url(provider_type, raw_config) string
 +probe_cloud_embeddings() void
+}
+class EffectiveURLResolver {
++effective_provider_base_url(provider_type, raw_config) string
++returns_env_url_for_ollama() boolean
++returns_persisted_url_for_cloud() boolean
 }
 ProviderSettings --> ProviderResolution : creates
 ProviderSettings --> ProviderPatch : creates
+ProviderSettings --> EffectiveURLResolver : uses
 ```
 
 **Diagram sources**
 - [provider_settings.py:18-62](file://safe4ai-pilot/app/services/provider_settings.py#L18-L62)
 - [provider_settings.py:27-33](file://safe4ai-pilot/app/services/provider_settings.py#L27-L33)
+- [provider_settings.py:29-41](file://safe4ai-pilot/app/services/provider_settings.py#L29-L41)
 
 **Section sources**
 - [settings_routes.py:227-286](file://safe4ai-pilot/app/api/settings_routes.py#L227-L286)
 - [settings_service.py:138-415](file://safe4ai-pilot/app/services/settings_service.py#L138-L415)
-- [provider_settings.py:35-225](file://safe4ai-pilot/app/services/provider_settings.py#L35-L225)
+- [provider_settings.py:35-224](file://safe4ai-pilot/app/services/provider_settings.py#L35-L224)
 
 ## Frontend Implementation
 
@@ -302,9 +328,12 @@ participant Settings as "Settings Update"
 participant DB as "Database"
 participant Runtime as "Runtime Builder"
 participant Components as "Components"
+participant EffectiveURL as "effective_provider_base_url"
 Settings->>DB : Commit configuration changes
 DB-->>Settings : Acknowledge
 Settings->>Runtime : build_runtime_components()
+Runtime->>EffectiveURL : Resolve effective base URL
+EffectiveURL-->>Runtime : Environment-specific URL
 Runtime->>Components : Create new instances
 Components-->>Runtime : Ready components
 Runtime-->>Settings : Updated components
@@ -313,14 +342,65 @@ Settings->>Settings : Update application state
 
 **Diagram sources**
 - [settings_routes.py:267-277](file://safe4ai-pilot/app/api/settings_routes.py#L267-L277)
+- [runtime_config.py:138-159](file://safe4ai-pilot/app/services/runtime_config.py#L138-159)
+- [provider_settings.py:29-41](file://safe4ai-pilot/app/services/provider_settings.py#L29-L41)
 
 ### Configuration Persistence
 
 The system uses a dedicated configuration table for storing application settings with automatic timestamping and update tracking.
 
+**Updated** The runtime now uses the effective_provider_base_url() helper function to resolve the actual base URL used by the runtime, ensuring environment-specific URLs are properly handled:
+
+- **Local Ollama**: Always uses environment-specific URL (host vs Docker)
+- **Cloud Providers**: Uses persisted base URL from configuration
+- **Hybrid Mode**: Uses environment-specific Ollama URL for embeddings, cloud URL for chat
+
 **Section sources**
 - [settings_routes.py:265-286](file://safe4ai-pilot/app/api/settings_routes.py#L265-L286)
 - [models.py:204-210](file://safe4ai-pilot/app/db/models.py#L204-L210)
+- [runtime_config.py:138-159](file://safe4ai-pilot/app/services/runtime_config.py#L138-L159)
+
+## Security Mechanisms
+
+The system implements comprehensive security measures to prevent SSRF attacks and ensure secure provider URL handling.
+
+### URL Validation and SSRF Protection
+
+**Updated** The system now includes robust URL validation and SSRF protection mechanisms:
+
+```mermaid
+flowchart TD
+Start([Provider URL Input]) --> ParseURL{Parse URL}
+ParseURL --> CheckScheme{Valid Scheme?}
+CheckScheme --> |No| BlockScheme[Block - Invalid Scheme]
+CheckScheme --> |Yes| ExtractHost[Extract Hostname]
+ExtractHost --> ValidateHost{Hostname Valid?}
+ValidateHost --> |No| BlockHost[Block - Missing Host]
+ValidateHost --> |Yes| ResolveIP[Resolve IP Address]
+ResolveIP --> CheckNetwork{Private/Reserved IP?}
+CheckNetwork --> |Yes| BlockPrivate[Block - Private Network]
+CheckNetwork --> |No| StripSlash[Strip Trailing Slash]
+StripSlash --> ReturnClean[Return Clean URL + Resolved IP]
+BlockScheme --> Error[HTTP 422 Error]
+BlockHost --> Error
+BlockPrivate --> Error
+```
+
+**Diagram sources**
+- [url_validator.py:54-74](file://safe4ai-pilot/app/security/url_validator.py#L54-L74)
+
+### Effective URL Resolution Security
+
+The effective_provider_base_url() function ensures secure URL resolution:
+
+- **Local Ollama**: Always uses environment-specific URL, never persisted value
+- **Cloud Providers**: Uses persisted base URL with validation
+- **SSRF Prevention**: All URLs are validated against private/reserved networks
+- **DNS Rebinding Protection**: Resolved IPs are used as connection targets
+
+**Section sources**
+- [url_validator.py:54-74](file://safe4ai-pilot/app/security/url_validator.py#L54-L74)
+- [provider_settings.py:29-41](file://safe4ai-pilot/app/services/provider_settings.py#L29-L41)
 
 ## Validation and Safety Mechanisms
 
@@ -357,10 +437,11 @@ The system performs several critical safety validations:
 2. **Model Availability**: Verifies requested models exist in target systems
 3. **Dimension Compatibility**: Confirms embedding model dimensions match existing collections
 4. **Mode Invariants**: Maintains logical consistency between provider type and embedding source
+5. **URL Security**: Validates provider URLs against SSRF attacks and private networks
 
 **Section sources**
 - [settings_service.py:171-251](file://safe4ai-pilot/app/services/settings_service.py#L171-L251)
-- [provider_settings.py:99-225](file://safe4ai-pilot/app/services/provider_settings.py#L99-L225)
+- [provider_settings.py:99-224](file://safe4ai-pilot/app/services/provider_settings.py#L99-L224)
 
 ## Error Handling and Diagnostics
 
@@ -374,6 +455,7 @@ The system provides comprehensive error handling with clear diagnostic informati
 | Provider Unreachable | 503 | External service not accessible | Check network connectivity and credentials |
 | Model Not Found | 422 | Requested model unavailable | Select available model or install missing model |
 | Dimension Mismatch | 409 | Embedding dimension mismatch | Drop and recreate collection or change model |
+| URL Validation Error | 422 | Invalid or insecure URL | Use valid public URL without private/reserved addresses |
 
 ### Diagnostic Features
 
@@ -395,6 +477,7 @@ The system provides comprehensive error handling with clear diagnostic informati
 - Limited or unreliable internet connectivity
 - Compliance requirements mandate data stays on-premises
 - Resource constraints limit cloud usage
+- Deploying in containerized environments where Ollama URL differs from host
 
 **Choose Hybrid Mode When:**
 - Need cloud-quality LLMs with local document processing
@@ -415,6 +498,7 @@ The system provides comprehensive error handling with clear diagnostic informati
 3. **Monitor cost implications** when switching to cloud providers
 4. **Validate model availability** in target environments
 5. **Consider reindexing requirements** when changing embedding models
+6. **Understand environment-specific URLs** for local Ollama deployments
 
 ### Security Considerations
 
@@ -423,6 +507,7 @@ The system provides comprehensive error handling with clear diagnostic informati
 - Monitor provider access logs and usage patterns
 - Limit administrative access to settings management
 - Audit all configuration changes for compliance
+- Ensure provider URLs resolve to public, non-private IP addresses
 
 ## Troubleshooting Guide
 
@@ -444,6 +529,14 @@ The system provides comprehensive error handling with clear diagnostic informati
 - **Cause**: Changing embedding models requires collection recreation
 - **Solution**: Drop and recreate Qdrant collection or revert model change
 
+**Issue**: "Provider URL resolves to a private/reserved IP address"
+- **Cause**: URL points to private network or localhost
+- **Solution**: Use public URL or configure proper network routing
+
+**Issue**: "Local Ollama URL differs between host and Docker deployments"
+- **Cause**: Environment-specific URL resolution
+- **Solution**: System automatically uses correct URL for current environment
+
 ### Debugging Steps
 
 1. **Verify provider connectivity** using the built-in test function
@@ -451,6 +544,7 @@ The system provides comprehensive error handling with clear diagnostic informati
 3. **Review configuration logs** for detailed error messages
 4. **Validate network connectivity** to external services
 5. **Confirm resource availability** (CPU, memory, disk space)
+6. **Test URL resolution** using the effective_provider_base_url() function
 
 ### Performance Optimization
 
@@ -463,3 +557,4 @@ The system provides comprehensive error handling with clear diagnostic informati
 **Section sources**
 - [settings_routes.py:289-354](file://safe4ai-pilot/app/api/settings_routes.py#L289-L354)
 - [settings_service.py:171-251](file://safe4ai-pilot/app/services/settings_service.py#L171-L251)
+- [url_validator.py:54-74](file://safe4ai-pilot/app/security/url_validator.py#L54-L74)

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Strategic Decision Frame</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18212f;
+      --muted: #5f6b7a;
+      --line: #d9e0e8;
+      --paper: #ffffff;
+      --soft: #f4f7fa;
+      --accent: #0f766e;
+      --warn: #9a3412;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #eef2f6;
+    }
+    main {
+      max-width: 980px;
+      margin: 28px auto;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      padding: 34px;
+    }
+    h1, h2 { line-height: 1.15; margin: 0 0 12px; }
+    h1 { font-size: 34px; letter-spacing: 0; }
+    h2 { font-size: 19px; margin-top: 28px; }
+    p { margin: 0 0 14px; }
+    .lead { color: var(--muted); max-width: 76ch; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .box {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      padding: 16px;
+      min-height: 136px;
+    }
+    .box strong { display: block; margin-bottom: 8px; }
+    ul { margin: 0; padding-left: 20px; }
+    code {
+      background: #edf2f7;
+      border: 1px solid #d7dde5;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+    .template {
+      white-space: pre-wrap;
+      background: #101827;
+      color: #edf7f7;
+      padding: 16px;
+      overflow-x: auto;
+      border-radius: 6px;
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      padding: 12px 14px;
+      background: #ecfdf5;
+      margin: 18px 0;
+    }
+    .sources a { color: #0f5b99; }
+    @media print {
+      body { background: white; }
+      main { margin: 0; border: 0; max-width: none; }
+      a { color: inherit; text-decoration: none; }
+    }
+    @media (max-width: 740px) {
+      main { margin: 0; padding: 22px; border: 0; }
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Strategic Decision Frame</h1>
+    <p class="lead">Use this before asking AI or yourself to implement a non-trivial change. The goal is to make the human judgment explicit: why this change, why now, what tradeoffs, what evidence, and how it stays reversible.</p>
+
+    <div class="grid">
+      <section class="box">
+        <strong>1. Outcome</strong>
+        <ul>
+          <li>What user, operator, or developer pain changes?</li>
+          <li>What will be observably better after this ships?</li>
+          <li>What is deliberately not being solved?</li>
+        </ul>
+      </section>
+      <section class="box">
+        <strong>2. Constraints</strong>
+        <ul>
+          <li>What interfaces, data, latency, security, cost, or rollout constraints matter?</li>
+          <li>Which constraints are facts, and which are assumptions?</li>
+          <li>What existing code shape should be respected?</li>
+        </ul>
+      </section>
+      <section class="box">
+        <strong>3. Options</strong>
+        <ul>
+          <li>List at least two plausible approaches.</li>
+          <li>Name the boring option and the tempting option.</li>
+          <li>Explain why rejected options lose.</li>
+        </ul>
+      </section>
+      <section class="box">
+        <strong>4. Verification</strong>
+        <ul>
+          <li>What test proves the main behavior?</li>
+          <li>What regression would be expensive to miss?</li>
+          <li>What manual or operational check closes the loop?</li>
+        </ul>
+      </section>
+      <section class="box">
+        <strong>5. Change Shape</strong>
+        <ul>
+          <li>Can it be split into small, reviewable changes?</li>
+          <li>What refactor should be separate from behavior?</li>
+          <li>What can be merged safely before the full feature?</li>
+        </ul>
+      </section>
+      <section class="box">
+        <strong>6. Reversibility</strong>
+        <ul>
+          <li>Can this be rolled back without data loss?</li>
+          <li>Does it need a feature flag, migration guard, or fallback path?</li>
+          <li>What would make the decision worth revisiting?</li>
+        </ul>
+      </section>
+    </div>
+
+    <h2>Copyable Mini-ADR</h2>
+    <p>Use this for planning notes, PR descriptions, issue comments, or a real ADR when the decision is durable.</p>
+    <pre class="template"># Decision: {short active-voice title}
+
+## Context
+{What problem are we solving? What constraints and facts shape the choice?}
+
+## Options
+1. {Option A}: {main benefit, main cost}
+2. {Option B}: {main benefit, main cost}
+3. {Do nothing}: {cost of delay or reason this is acceptable}
+
+## Decision
+We will {chosen approach}.
+
+## Consequences
+- Positive: {what becomes easier, safer, faster, or clearer}
+- Negative: {new coupling, cost, risk, or maintenance burden}
+- Neutral: {what changes but is not clearly good or bad}
+
+## Verification
+- Automated: {unit/integration/contract/e2e checks}
+- Manual: {review, screenshot, smoke, rollout check}
+- Revisit when: {trigger that would make this decision stale}</pre>
+
+    <div class="callout">
+      <strong>Rule of thumb:</strong> strategic programming is not "think longer before coding." It is making the important judgment visible early enough that implementation work can be split, reviewed, tested, and reversed.
+    </div>
+
+    <h2>Source Hooks</h2>
+    <p class="sources">This frame compresses practices from <a href="https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions">Nygard's ADR format</a>, <a href="https://adr.github.io/">ADR guidance</a>, <a href="https://google.github.io/eng-practices/review/developer/small-cls.html">Google's small CL guidance</a>, <a href="https://sre.google/sre-book/postmortem-culture/">Google SRE postmortem culture</a>, and <a href="https://martinfowler.com/articles/practical-test-pyramid.html">the practical test pyramid</a>.</p>
+  </main>
+</body>
+</html>

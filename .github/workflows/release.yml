@@ -124,7 +124,7 @@ jobs:
           format: sarif
           output: trivy-backend.sarif
           severity: CRITICAL,HIGH
-          exit-code: "0"
+          exit-code: "1"
 
       - name: Vulnerability scan (frontend)
         uses: aquasecurity/trivy-action@master
@@ -133,7 +133,7 @@ jobs:
           format: sarif
           output: trivy-frontend.sarif
           severity: CRITICAL,HIGH
-          exit-code: "0"
+          exit-code: "1"
 
       - name: SBOM (backend)
         uses: anchore/sbom-action@v0
@@ -158,11 +158,19 @@ jobs:
           docker push "$BACKEND_IMAGE:$VERSION"
           docker push "$FRONTEND_IMAGE:$VERSION"
 
+      - name: Download license reports
+        uses: actions/download-artifact@v4
+        with:
+          name: license-reports
+          path: release-evidence/license-reports
+
       - name: Create GitHub release with evidence artifacts
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
+            release-evidence/license-reports/license-report-backend.md
+            release-evidence/license-reports/license-report-frontend.md
             sbom-backend.spdx.json
             sbom-frontend.spdx.json
             trivy-backend.sarif

@@ -13,17 +13,23 @@
 - [middleware.py](file://safe4ai-pilot/app/auth/middleware.py)
 - [router.py](file://safe4ai-pilot/app/auth/router.py)
 - [audit_cleanup.py](file://safe4ai-pilot/scripts/audit_cleanup.py)
+- [audit_routes.py](file://safe4ai-pilot/app/api/audit_routes.py)
+- [kinds.py](file://safe4ai-pilot/app/audit/kinds.py)
+- [chat_finalizer.py](file://safe4ai-pilot/app/services/chat_finalizer.py)
+- [settings_routes.py](file://safe4ai-pilot/app/api/settings_routes.py)
+- [audit-log-reference.md](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md)
 - [test_security_guards.py](file://safe4ai-pilot/tests/test_security_guards.py)
 - [test_audit_cleanup.py](file://safe4ai-pilot/tests/test_audit_cleanup.py)
+- [test_admin_audit.py](file://safe4ai-pilot/tests/test_admin_audit.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Enhanced PII redaction capabilities in ContentFilter with improved redaction logic
-- Optimized InputGuard injection pattern detection with expanded malicious role word coverage
-- Strengthened RAG pipeline security with comprehensive PII redaction during document ingestion
-- Improved output validation with enhanced PII hallucination detection
-- Added data loss prevention measures and reduced false positives across security components
+- Enhanced audit logging documentation with comprehensive field reference from audit-log-reference.md
+- Updated audit log privacy guarantees and deletion evidence procedures
+- Expanded audit trail coverage including agent runs, query feedback, and ingestion jobs
+- Integrated audit log reference documentation into compliance framework
+- Added detailed field descriptions and regulatory compliance support
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -31,22 +37,24 @@
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
-10. [Appendices](#appendices)
+6. [Audit Logging and Compliance Framework](#audit-logging-and-compliance-framework)
+7. [Dependency Analysis](#dependency-analysis)
+8. [Performance Considerations](#performance-considerations)
+9. [Troubleshooting Guide](#troubleshooting-guide)
+10. [Conclusion](#conclusion)
+11. [Appendices](#appendices)
 
 ## Introduction
-This document provides comprehensive security and compliance documentation for the Private AI system. It explains the multi-layered security architecture, including input validation, content filtering, output validation, and upload sanitization. The system has undergone comprehensive security improvements including enhanced PII redaction, optimized input guard detection, and strengthened RAG pipeline security measures. It also documents the audit logging system that ensures complete traceability of user interactions and system operations, along with data privacy measures, access control mechanisms, and compliance considerations for handling sensitive information. Practical guidance is included for configuring security policies, implementing custom validation rules, and monitoring security events. Integration with authentication systems, session management, and authorization controls is covered, alongside threat modeling, vulnerability assessment, and incident response procedures.
+This document provides comprehensive security and compliance documentation for the Private AI system. It explains the multi-layered security architecture, including input validation, content filtering, output validation, and upload sanitization. The system has undergone comprehensive security improvements including enhanced PII redaction, optimized input guard detection, and strengthened RAG pipeline security measures. It also documents the comprehensive audit logging system that ensures complete traceability of user interactions and system operations, along with data privacy measures, access control mechanisms, and compliance considerations for handling sensitive information. The audit logging system now includes detailed field reference documentation supporting regulatory compliance requirements. Practical guidance is included for configuring security policies, implementing custom validation rules, and monitoring security events. Integration with authentication systems, session management, and authorization controls is covered, alongside threat modeling, vulnerability assessment, and incident response procedures.
 
 ## Project Structure
 The security and compliance capabilities are implemented across several modules with enhanced security measures:
 - Security guards: input validation, content filtering, output filtering, and upload validation with improved PII detection
 - Authentication and authorization: JWT-based authentication, password hashing, and role-based access control
-- Audit logging and retention: structured audit logs, cleanup scheduling, and retention policies
+- Audit logging and retention: structured audit logs, cleanup scheduling, and retention policies with comprehensive field reference
 - Data models: shared models for guards and database entities for audit and compliance
 - RAG pipeline security: comprehensive PII redaction during document ingestion and processing
+- Compliance framework: detailed audit log reference supporting regulatory requirements
 
 ```mermaid
 graph TB
@@ -63,10 +71,17 @@ subgraph "Auth & Access Control"
 MW["Auth Middleware<br/>middleware.py"]
 AR["Auth Router<br/>router.py"]
 end
-subgraph "Audit & Compliance"
+subgraph "Audit & Compliance Framework"
 AL["AuditLog Model<br/>db/models.py"]
 AC["Audit Cleanup Script<br/>audit_cleanup.py"]
-CFG["Settings<br/>config.py"]
+ARF["Audit Routes<br/>audit_routes.py"]
+AK["Audit Kinds Classifier<br/>kinds.py"]
+ALR["Audit Log Reference<br/>audit-log-reference.md"]
+end
+subgraph "Comprehensive Audit Tables"
+AT1["AgentRuns<br/>db/models.py"]
+AT2["QueryFeedback<br/>db/models.py"]
+AT3["IngestionJobs<br/>db/models.py"]
 end
 subgraph "Shared Models"
 GM["GuardResult, RankedChunk<br/>models.py"]
@@ -79,6 +94,12 @@ RP --> CF
 AR --> MW
 MW --> AL
 AC --> AL
+ARF --> AL
+ARF --> AT1
+ARF --> AT2
+ARF --> AT3
+AK --> ARF
+ALR --> ARF
 CFG --> AC
 ```
 
@@ -90,8 +111,11 @@ CFG --> AC
 - [rag_pipeline.py:1-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L413)
 - [middleware.py:1-83](file://safe4ai-pilot/app/auth/middleware.py#L1-L83)
 - [router.py:1-125](file://safe4ai-pilot/app/auth/router.py#L1-L125)
-- [db/models.py:111-124](file://safe4ai-pilot/app/db/models.py#L111-L124)
+- [db/models.py:147-196](file://safe4ai-pilot/app/db/models.py#L147-L196)
 - [audit_cleanup.py:35-84](file://safe4ai-pilot/scripts/audit_cleanup.py#L35-L84)
+- [audit_routes.py:1-296](file://safe4ai-pilot/app/api/audit_routes.py#L1-L296)
+- [kinds.py:1-37](file://safe4ai-pilot/app/audit/kinds.py#L1-L37)
+- [audit-log-reference.md:1-88](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L1-L88)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
 - [models.py:38-41](file://safe4ai-pilot/app/models.py#L38-L41)
 
@@ -103,8 +127,11 @@ CFG --> AC
 - [rag_pipeline.py:1-413](file://safe4ai-pilot/app/services/rag_pipeline.py#L1-L413)
 - [middleware.py:1-83](file://safe4ai-pilot/app/auth/middleware.py#L1-L83)
 - [router.py:1-125](file://safe4ai-pilot/app/auth/router.py#L1-L125)
-- [db/models.py:111-124](file://safe4ai-pilot/app/db/models.py#L111-L124)
+- [db/models.py:147-196](file://safe4ai-pilot/app/db/models.py#L147-L196)
 - [audit_cleanup.py:35-84](file://safe4ai-pilot/scripts/audit_cleanup.py#L35-L84)
+- [audit_routes.py:1-296](file://safe4ai-pilot/app/api/audit_routes.py#L1-L296)
+- [kinds.py:1-37](file://safe4ai-pilot/app/audit/kinds.py#L1-L37)
+- [audit-log-reference.md:1-88](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L1-L88)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
 - [models.py:38-41](file://safe4ai-pilot/app/models.py#L38-L41)
 
@@ -115,7 +142,8 @@ CFG --> AC
 - **UploadValidator**: Strict file constraint enforcement with enhanced MIME type detection and magic byte validation.
 - **RagPipeline**: Comprehensive PII redaction during document ingestion with automatic content sanitization.
 - **Authentication and Authorization**: JWT-based login/logout, password hashing, brute-force protection, and role-based access control.
-- **Audit Logging and Retention**: Structured audit logs with configurable retention, automated cleanup, and summary logging.
+- **Audit Logging and Retention**: Structured audit logs with configurable retention, automated cleanup, and comprehensive field reference supporting regulatory compliance.
+- **Comprehensive Audit Framework**: Multi-table audit system including agent runs, query feedback, and ingestion jobs with detailed field descriptions.
 
 **Section sources**
 - [input_guard.py:11-34](file://safe4ai-pilot/app/security/input_guard.py#L11-L34)
@@ -125,17 +153,20 @@ CFG --> AC
 - [rag_pipeline.py:140-144](file://safe4ai-pilot/app/services/rag_pipeline.py#L140-L144)
 - [middleware.py:25-83](file://safe4ai-pilot/app/auth/middleware.py#L25-L83)
 - [router.py:39-125](file://safe4ai-pilot/app/auth/router.py#L39-L125)
-- [db/models.py:111-124](file://safe4ai-pilot/app/db/models.py#L111-L124)
+- [db/models.py:147-196](file://safe4ai-pilot/app/db/models.py#L147-L196)
 - [audit_cleanup.py:35-84](file://safe4ai-pilot/scripts/audit_cleanup.py#L35-L84)
+- [audit_routes.py:1-296](file://safe4ai-pilot/app/api/audit_routes.py#L1-L296)
+- [audit-log-reference.md:11-88](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L11-L88)
 
 ## Architecture Overview
-The system implements a comprehensive layered defense-in-depth approach with enhanced security measures:
+The system implements a comprehensive layered defense-in-depth approach with enhanced security measures and comprehensive audit logging:
 - **Input Layer**: Enhanced InputGuard with expanded injection pattern detection and malicious role word recognition.
 - **Processing Layer**: ContentFilter with advanced PII detection and automatic redaction during ingestion.
 - **Generation Layer**: OutputFilter with strengthened hallucination detection and suspicious length monitoring.
 - **Upload Layer**: UploadValidator with strict constraint enforcement and enhanced MIME type validation.
 - **Access Control**: Auth router and middleware manage authentication, sessions, and authorization.
-- **Observability**: Audit logs capture actions, metadata, and system events with comprehensive retention policies.
+- **Observability**: Comprehensive audit logs capture actions, metadata, and system events with detailed field reference supporting regulatory compliance.
+- **Compliance Framework**: Multi-table audit system providing complete traceability for security reviews and regulatory requirements.
 
 ```mermaid
 sequenceDiagram
@@ -145,6 +176,7 @@ participant MW as "Auth Middleware<br/>middleware.py"
 participant Guard as "Enhanced Security Guards"
 participant Pipeline as "RagPipeline<br/>rag_pipeline.py"
 participant DB as "Database<br/>db/models.py"
+participant Audit as "Audit System<br/>audit_routes.py"
 Client->>Auth : POST /auth/login
 Auth->>Auth : Validate credentials and rate limit
 Auth-->>Client : Set HTTP-only JWT cookie
@@ -154,7 +186,9 @@ MW-->>Client : Authorized request or 401/403
 Client->>Guard : Submit query/document
 Guard->>Pipeline : Process with enhanced security
 Pipeline->>Pipeline : Automatic PII redaction
-Pipeline-->>Client : Secure response with citations
+Pipeline->>DB : Create AuditLog entry
+DB->>Audit : Expose audit data via API
+Audit-->>Client : Secure response with citations
 ```
 
 **Diagram sources**
@@ -166,6 +200,7 @@ Pipeline-->>Client : Secure response with citations
 - [upload_validator.py:24-68](file://safe4ai-pilot/app/security/upload_validator.py#L24-L68)
 - [rag_pipeline.py:140-144](file://safe4ai-pilot/app/services/rag_pipeline.py#L140-L144)
 - [db/models.py:45-56](file://safe4ai-pilot/app/db/models.py#L45-L56)
+- [audit_routes.py:58-111](file://safe4ai-pilot/app/api/audit_routes.py#L58-L111)
 
 ## Detailed Component Analysis
 
@@ -323,10 +358,11 @@ MW-->>Client : 200 OK or 401/403 with proper error handling
 - [db/models.py:45-56](file://safe4ai-pilot/app/db/models.py#L45-L56)
 
 ### Comprehensive Audit Logging and Retention
-- **Enhanced AuditLog** capturing user actions, session context, query metadata, latency, model used, and trace identifiers
+- **Enhanced AuditLog** capturing user actions, session context, query metadata, latency, model used, and trace identifiers with comprehensive field reference
 - **Improved retention policies** with configurable cleanup schedules
 - **Automated cleanup processes** with detailed summary logging and row count reporting
 - **Scheduled cleanup** running daily at 02:00 UTC with enhanced error handling
+- **Multi-table audit system** including agent runs, query feedback, and ingestion jobs for complete traceability
 
 ```mermaid
 flowchart TD
@@ -339,19 +375,87 @@ Summ --> LogInfo["Log info with deleted row counts<br/>and cleanup success metri
 LogInfo --> EndAC(["Return cleanup statistics"])
 ```
 
-**Updated** Enhanced cleanup processes with improved transaction safety and detailed metrics reporting.
+**Updated** Enhanced cleanup processes with improved transaction safety and detailed metrics reporting, integrated with comprehensive audit log reference documentation.
 
 **Diagram sources**
 - [audit_cleanup.py:35-84](file://safe4ai-pilot/scripts/audit_cleanup.py#L35-L84)
-- [db/models.py:111-124](file://safe4ai-pilot/app/db/models.py#L111-L124)
+- [db/models.py:147-196](file://safe4ai-pilot/app/db/models.py#L147-L196)
 
 **Section sources**
-- [db/models.py:111-124](file://safe4ai-pilot/app/db/models.py#L111-L124)
+- [db/models.py:147-196](file://safe4ai-pilot/app/db/models.py#L147-L196)
 - [audit_cleanup.py:35-84](file://safe4ai-pilot/scripts/audit_cleanup.py#L35-L84)
 - [test_audit_cleanup.py:20-57](file://safe4ai-pilot/tests/test_audit_cleanup.py#L20-L57)
 
+## Audit Logging and Compliance Framework
+
+### Comprehensive Audit Log Reference
+The system maintains detailed audit records in the customer's PostgreSQL database with strict privacy guarantees and regulatory compliance support:
+
+#### Privacy Guarantees
+- **Data confinement**: Audit rows are append-only in normal operation; nothing leaves the customer environment
+- **Deletion evidence**: Only deletion path is retention cleanup job, which first writes tamper-evident JSONL archive (HMAC-chained) before deleting expired rows
+- **Query truncation**: Query text is truncated to the first 500 characters
+- **Sensitive data protection**: Passwords, JWTs, session cookies, and API keys are never written to audit rows or logs
+- **Configurable retention**: Retention is configurable (`audit_log_retention_days`, default 365) with admin Activity page display
+
+#### Audit Tables Structure
+
+**audit_logs** — user/admin activity
+- One row per audited action
+- Exported via `GET /admin/audit-logs/export.csv`
+- Supports filtering by user, time range, and action kind
+- Provides CSV export capability for regulatory requirements
+
+**agent_runs** — agent pipeline trail
+- One row per agent pipeline execution (per answered query)
+- Provides agent-level audit trail referenced in security reviews
+- Includes run status, final output, error information, and cost attribution
+- Step-level detail exported as OpenTelemetry spans correlated by trace_id
+
+**query_feedback** — user feedback
+- Links feedback to exact answer/run via trace_id
+- Supports positive/negative ratings with optional comments
+- Includes submission time and user association
+
+**ingestion_jobs** — document processing trail
+- Tracks document processing lifecycle from pending to completed/failed
+- Includes error information with truncation for sensitive data
+- Supports cascade deletion with document removal
+
+#### Audit Trail Integration
+- **Action classification**: Raw action types mapped to UI kinds (query, upload, feedback, login, fallback, admin, other)
+- **Trace correlation**: All audit entries linked via trace_id for end-to-end correlation
+- **Session tracking**: Session_id connects actions to user chat sessions
+- **Metadata enrichment**: Response_metadata captures action-specific evidence and system state
+
+**Section sources**
+- [audit-log-reference.md:11-88](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L11-L88)
+- [audit_routes.py:58-192](file://safe4ai-pilot/app/api/audit_routes.py#L58-L192)
+- [kinds.py:10-37](file://safe4ai-pilot/app/audit/kinds.py#L10-L37)
+- [db/models.py:147-196](file://safe4ai-pilot/app/db/models.py#L147-L196)
+
+### Audit Event Generation
+Audit events are automatically generated across system operations:
+
+**Chat Query Processing**
+- Finalized chat runs create AuditLog entries with query text, response metadata, latency, and model information
+- AgentRun entries track pipeline execution with cost attribution and status
+
+**Settings Changes**
+- Provider configuration changes logged with before/after context
+- Critical setting modifications tracked for compliance purposes
+
+**Administrative Actions**
+- User management, system configuration, and administrative operations captured
+- Role-based access control enforced with audit trail
+
+**Section sources**
+- [chat_finalizer.py:37-69](file://safe4ai-pilot/app/services/chat_finalizer.py#L37-L69)
+- [settings_routes.py:131-146](file://safe4ai-pilot/app/api/settings_routes.py#L131-L146)
+- [audit_routes.py:58-111](file://safe4ai-pilot/app/api/audit_routes.py#L58-L111)
+
 ## Dependency Analysis
-Enhanced security guards depend on shared models for guard results and ranked chunks. Authentication depends on database models for user state and settings for runtime configuration. Audit cleanup depends on settings and database models for retention and deletion. The RAG pipeline integrates ContentFilter for automatic PII redaction during document processing.
+Enhanced security guards depend on shared models for guard results and ranked chunks. Authentication depends on database models for user state and settings for runtime configuration. Audit cleanup depends on settings and database models for retention and deletion. The RAG pipeline integrates ContentFilter for automatic PII redaction during document processing. The comprehensive audit framework integrates multiple database models and API endpoints for complete traceability.
 
 ```mermaid
 graph LR
@@ -364,10 +468,14 @@ MW["Auth Middleware"] --> DBU["User model"]
 AR["Auth Router"] --> MW
 AC["Audit Cleanup"] --> AL["AuditLog model"]
 AC --> CFG["Settings"]
-CFG --> AC
+ARF["Audit Routes"] --> AL
+ARF --> AT1["AgentRun model"]
+ARF --> AT2["QueryFeedback model"]
+ARF --> AT3["IngestionJob model"]
+ALR["Audit Log Reference"] --> ARF
 ```
 
-**Updated** Added RAG pipeline integration with ContentFilter for comprehensive PII redaction.
+**Updated** Added comprehensive audit framework with multiple database models and API endpoints supporting regulatory compliance.
 
 **Diagram sources**
 - [input_guard.py:9](file://safe4ai-pilot/app/security/input_guard.py#L9)
@@ -378,14 +486,18 @@ CFG --> AC
 - [middleware.py:16-17](file://safe4ai-pilot/app/auth/middleware.py#L16-L17)
 - [router.py:14-17](file://safe4ai-pilot/app/auth/router.py#L14-L17)
 - [audit_cleanup.py:25-27](file://safe4ai-pilot/scripts/audit_cleanup.py#L25-L27)
-- [db/models.py:111-124](file://safe4ai-pilot/app/db/models.py#L111-L124)
+- [db/models.py:147-196](file://safe4ai-pilot/app/db/models.py#L147-L196)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
+- [audit_routes.py:18](file://safe4ai-pilot/app/api/audit_routes.py#L18)
+- [audit-log-reference.md:1-88](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L1-L88)
 
 **Section sources**
 - [models.py:38-41](file://safe4ai-pilot/app/models.py#L38-L41)
 - [db/models.py:45-56](file://safe4ai-pilot/app/db/models.py#L45-L56)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
 - [rag_pipeline.py:85](file://safe4ai-pilot/app/services/rag_pipeline.py#L85)
+- [audit_routes.py:18](file://safe4ai-pilot/app/api/audit_routes.py#L18)
+- [audit-log-reference.md:1-88](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L1-L88)
 
 ## Performance Considerations
 - **Enhanced regex-based scanning** for injection patterns and PII with optimized pattern compilation and minimal false positives.
@@ -394,6 +506,8 @@ CFG --> AC
 - **Enhanced authentication** using bcrypt hashing and JWT decoding with improved key management and token expiry.
 - **Streamlined audit cleanup** with transaction-safe operations and efficient deletion strategies.
 - **RAG pipeline optimization** with automatic PII redaction during ingestion reducing downstream processing overhead.
+- **Audit system scalability** with efficient indexing on timestamp, user_id, and session_id fields.
+- **CSV export optimization** with streaming response for large audit datasets.
 
 ## Troubleshooting Guide
 Common issues and enhanced resolutions:
@@ -411,19 +525,26 @@ Common issues and enhanced resolutions:
 - **Audit retention problems**
   - Validate retention settings and confirm scheduled cleanup executed at 02:00 UTC.
   - Inspect summary audit logs for deletion counts and enhanced error reporting.
+  - Verify audit log reference compliance with privacy guarantees and deletion evidence procedures.
 - **RAG pipeline security issues**
   - Verify automatic PII redaction during ingestion with enhanced logging.
   - Check ContentFilter integration and redaction effectiveness.
   - Monitor enhanced security guard performance and false positive rates.
+- **Audit system performance**
+  - Monitor audit table growth and ensure proper indexing on frequently queried fields.
+  - Verify CSV export performance with appropriate limit parameters.
+  - Check audit log reference documentation for field usage and compliance requirements.
 
 **Section sources**
 - [router.py:89-105](file://safe4ai-pilot/app/auth/router.py#L89-L105)
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
 - [test_audit_cleanup.py:20-57](file://safe4ai-pilot/tests/test_audit_cleanup.py#L20-L57)
 - [rag_pipeline.py:140-144](file://safe4ai-pilot/app/services/rag_pipeline.py#L140-L144)
+- [audit-log-reference.md:11-88](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L11-L88)
+- [test_admin_audit.py:19-200](file://safe4ai-pilot/tests/test_admin_audit.py#L19-L200)
 
 ## Conclusion
-The Private AI system employs a comprehensive, multi-layered security architecture with significant enhancements including improved PII redaction, optimized input guard detection, and strengthened RAG pipeline security measures. The system addresses 11 critical runtime bugs with enhanced data loss prevention and reduced false positives across all security components. Authentication and authorization controls are enforced via enhanced JWT and role-based access. Comprehensive audit logging with configurable retention and automated cleanup ensures traceability and compliance hygiene. Together, these enhanced measures form a robust foundation for protecting sensitive data and maintaining regulatory compliance in enterprise environments.
+The Private AI system employs a comprehensive, multi-layered security architecture with significant enhancements including improved PII redaction, optimized input guard detection, and strengthened RAG pipeline security measures. The system addresses 11 critical runtime bugs with enhanced data loss prevention and reduced false positives across all security components. Authentication and authorization controls are enforced via enhanced JWT and role-based access. Comprehensive audit logging with configurable retention and automated cleanup ensures traceability and compliance hygiene, supported by detailed audit log reference documentation providing field-level compliance information. The multi-table audit system including agent runs, query feedback, and ingestion jobs provides complete traceability for security reviews and regulatory requirements. Together, these enhanced measures form a robust foundation for protecting sensitive data and maintaining regulatory compliance in enterprise environments.
 
 ## Appendices
 
@@ -446,6 +567,11 @@ The Private AI system employs a comprehensive, multi-layered security architectu
 - **Configure RAG pipeline security**
   - Enable automatic PII redaction during document ingestion with enhanced ContentFilter integration.
   - Reference: [rag_pipeline.py:85](file://safe4ai-pilot/app/services/rag_pipeline.py#L85), [rag_pipeline.py:140-144](file://safe4ai-pilot/app/services/rag_pipeline.py#L140-L144)
+- **Audit system administration**
+  - Use `/admin/audit-logs` endpoint for querying and filtering audit events.
+  - Export audit data via `/admin/audit-logs/export.csv` for compliance reporting.
+  - Monitor audit log reference documentation for field usage and compliance requirements.
+  - Reference: [audit_routes.py:58-192](file://safe4ai-pilot/app/api/audit_routes.py#L58-L192), [audit-log-reference.md:22-88](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L22-L88)
 
 ### Enhanced Threat Modeling and Vulnerability Assessment
 - **Enhanced prompt injection**
@@ -460,13 +586,20 @@ The Private AI system employs a comprehensive, multi-layered security architectu
 - **Unauthorized access**
   - Protected by JWT authentication, role-based access control, and enhanced rate limiting.
   - Reference: [router.py:40-82](file://safe4ai-pilot/app/auth/router.py#L40-L82), [middleware.py:74-82](file://safe4ai-pilot/app/auth/middleware.py#L74-L82)
+- **Audit data integrity**
+  - Maintained through append-only logging, tamper-evident deletion evidence, and comprehensive field reference.
+  - Reference: [audit-log-reference.md:11-19](file://safe4ai-pilot/docs/security-pack/audit-log-reference.md#L11-L19), [audit_cleanup.py:35-84](file://safe4ai-pilot/scripts/audit_cleanup.py#L35-L84)
 
 ### Enhanced Incident Response Procedures
 - **Immediate actions**
   - Revoke compromised tokens, lock affected accounts, and review recent audit logs with enhanced security events.
+  - Verify audit log reference compliance and deletion evidence procedures.
 - **Enhanced forensic analysis**
   - Correlate timestamps, trace IDs, and user/session context from AuditLog entries with improved logging.
+  - Utilize comprehensive audit trail including agent runs, query feedback, and ingestion jobs.
 - **Remediation**
   - Update guard rules with enhanced patterns, adjust retention policies, and harden configurations based on findings.
+  - Implement enhanced audit log reference documentation for compliance reporting.
 - **Prevention**
   - Schedule periodic audits, update regex patterns with enhanced coverage, and monitor enhanced security metrics.
+  - Regularly review audit log reference documentation for compliance requirements and field usage.

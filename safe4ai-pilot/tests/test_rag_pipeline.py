@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.models import RankedChunk, RetrievedChunk
+from app.models import RankedChunk
 from app.services.rag_pipeline import RagPipeline
 from tests.conftest import FAKE_EMBEDDING
 
@@ -127,7 +127,10 @@ async def test_ingest_triggers_needs_review() -> None:
     with (
         patch("app.services.document_parser.PdfReader", return_value=mock_reader),
         patch("app.services.document_parser.convert_from_path", return_value=[fake_image]),
-        patch("app.services.document_parser.ocr_page", new=AsyncMock(return_value=("ocr text", "low"))),
+        patch(
+            "app.services.document_parser.ocr_page",
+            new=AsyncMock(return_value=("ocr text", "low")),
+        ),
         patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
         patch.object(pipeline, "_retriever") as mock_retriever,
     ):
@@ -165,7 +168,10 @@ async def test_ingest_sets_ocr_quality_in_qdrant_payload() -> None:
     with (
         patch("app.services.document_parser.PdfReader", return_value=mock_reader),
         patch("app.services.document_parser.convert_from_path", return_value=[fake_image]),
-        patch("app.services.document_parser.ocr_page", new=AsyncMock(return_value=("ocr text", "medium"))),
+        patch(
+            "app.services.document_parser.ocr_page",
+            new=AsyncMock(return_value=("ocr text", "medium")),
+        ),
         patch.object(pipeline, "_embed_batch", new=AsyncMock(return_value=[FAKE_EMBEDDING])),
         patch.object(pipeline, "_retriever") as mock_retriever,
     ):
@@ -346,12 +352,21 @@ async def test_staged_ingest_marks_inactive_and_skips_bm25() -> None:
             tmp_path = f.name
 
         await pipeline.ingest(
-            tmp_path, "doc-1", "test.pdf", "user-1", document_version=2, activate=False
+            tmp_path,
+            "doc-1",
+            "test.pdf",
+            "user-1",
+            document_version=2,
+            document_version_id="version-2",
+            activate=False,
         )
 
     points = pipeline._qdrant.upsert.call_args.kwargs["points"]
     assert points[0].payload["is_active"] is False
     assert points[0].payload["doc_version"] == 2
+    assert points[0].payload["document_version_id"] == "version-2"
+    added_chunk = db.add.call_args.args[0]
+    assert added_chunk.document_version_id == "version-2"
     mock_retriever.update_bm25_index.assert_not_called()
 
 

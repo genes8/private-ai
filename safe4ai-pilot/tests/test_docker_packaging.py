@@ -48,3 +48,22 @@ def test_airgap_package_verifier_passes() -> None:
     assert report["checks"]["ollama_overlay_pulls_required_models"] is True
     assert report["checks"]["runbook_present"] is True
     assert report["checks"]["audit_archive_volume"] is True
+
+
+def test_release_workflow_attaches_license_reports_and_blocks_high_vulnerabilities() -> None:
+    workflow = yaml.safe_load((ROOT.parent / ".github" / "workflows" / "release.yml").read_text())
+    image_steps = workflow["jobs"]["images"]["steps"]
+
+    trivy_steps = [
+        step for step in image_steps if step.get("uses") == "aquasecurity/trivy-action@master"
+    ]
+    assert trivy_steps
+    assert all(step["with"]["severity"] == "CRITICAL,HIGH" for step in trivy_steps)
+    assert all(step["with"]["exit-code"] == "1" for step in trivy_steps)
+
+    release_step = next(
+        step for step in image_steps if step.get("uses") == "softprops/action-gh-release@v2"
+    )
+    release_files = release_step["with"]["files"]
+    assert "release-evidence/license-reports/license-report-backend.md" in release_files
+    assert "release-evidence/license-reports/license-report-frontend.md" in release_files

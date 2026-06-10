@@ -1,6 +1,3 @@
-Now I have a comprehensive understanding of the new security components. Let me update the security and compliance architecture documentation to reflect these changes:
-
-<docs>
 # Security and Compliance Architecture
 
 <cite>
@@ -38,15 +35,16 @@ Now I have a comprehensive understanding of the new security components. Let me 
 - [seed.py](file://safe4ai-pilot/scripts/seed.py)
 - [LoginPage.tsx](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx)
 - [UsersPage.tsx](file://safe4ai-pilot/frontend/src/pages/admin/UsersPage.tsx)
+- [2026-06-03-rag-grounded-inference-design.md](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added new security layer for HTTP transport hardening against DNS rebinding attacks
-- Integrated URL validator with SSRF protection mechanisms
-- Enhanced provider URL validation with IP address pinning for outbound connections
-- Updated security architecture to include transport-level security controls
-- Added comprehensive SSRF protection through URL validation and transport pinning
+- Enhanced output validation system with new Rule 3 inference labeling guard implementation
+- Added comprehensive coverage of inference language detection and disclaimer requirements
+- Updated output validation rules to include citation presence checking as Rule 0
+- Improved grounding enforcement for general inference and model knowledge responses
+- Added new test coverage for inference labeling guard functionality
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -61,10 +59,10 @@ Now I have a comprehensive understanding of the new security components. Let me 
 10. [Appendices](#appendices)
 
 ## Introduction
-This document describes the security and compliance architecture of the Private AI system. It focuses on the three-tier security architecture: input validation, content filtering, and output validation. It also documents audit logging, compliance reporting, data privacy measures, access control, threat detection, PII detection and masking, content safety filters, human review workflows, regulatory compliance posture, data retention, and incident response capabilities. The system now implements enhanced authentication security measures including 12+ character minimum requirements with mixed case, digits, and special characters, real-time validation feedback, and dynamic admin password generation via SEED_ADMIN_PASSWORD environment variable. **The system has been enhanced with new transport-level security controls that prevent DNS rebinding attacks and provide comprehensive SSRF protection through URL validation and IP address pinning mechanisms.** The goal is to provide a clear, actionable understanding of how the system protects data, ensures responsible AI usage, and remains compliant with applicable regulations.
+This document describes the security and compliance architecture of the Private AI system. It focuses on the three-tier security architecture: input validation, content filtering, and output validation. It also documents audit logging, compliance reporting, data privacy measures, access control, threat detection, PII detection and masking, content safety filters, human review workflows, regulatory compliance posture, data retention, and incident response capabilities. The system now implements enhanced authentication security measures including 12+ character minimum requirements with mixed case, digits, and special characters, real-time validation feedback, and dynamic admin password generation via SEED_ADMIN_PASSWORD environment variable. **The system has been enhanced with new transport-level security controls that prevent DNS rebinding attacks and provide comprehensive SSRF protection through URL validation and IP address pinning mechanisms.** **A new Rule 3 inference labeling guard has been implemented to ensure proper disclosure of general inference and model knowledge responses, requiring clear disclaimers when inference language is used without supporting documentation.** The goal is to provide a clear, actionable understanding of how the system protects data, ensures responsible AI usage, and remains compliant with applicable regulations.
 
 ## Project Structure
-The security and compliance features are implemented across backend services, security guards, audit and observability modules, and administrative UI components. The backend pipeline integrates security checks early and often, while the frontend provides administrative dashboards for auditing and compliance oversight. Enhanced authentication security now includes comprehensive password validation at both frontend and backend levels. **The system now includes transport-level security controls that provide additional protection against DNS rebinding attacks and SSRF vulnerabilities through URL validation and IP address pinning.**
+The security and compliance features are implemented across backend services, security guards, audit and observability modules, and administrative UI components. The backend pipeline integrates security checks early and often, while the frontend provides administrative dashboards for auditing and compliance oversight. Enhanced authentication security now includes comprehensive password validation at both frontend and backend levels. **The system now includes transport-level security controls that provide additional protection against DNS rebinding attacks and SSRF vulnerabilities through URL validation and IP address pinning.** **The output validation system now includes a comprehensive inference labeling guard that enforces proper disclosure of general inference responses.**
 
 ```mermaid
 graph TB
@@ -135,7 +133,7 @@ SeedScript --> AuthRouter
 **Diagram sources**
 - [input_guard.py:1-49](file://safe4ai-pilot/app/security/input_guard.py#L1-L49)
 - [content_filter.py:1-64](file://safe4ai-pilot/app/security/content_filter.py#L1-L64)
-- [output_filter.py:1-61](file://safe4ai-pilot/app/security/output_filter.py#L1-L61)
+- [output_filter.py:1-109](file://safe4ai-pilot/app/security/output_filter.py#L1-L109)
 - [upload_validator.py:1-73](file://safe4ai-pilot/app/security/upload_validator.py#L1-L73)
 - [url_validator.py:1-75](file://safe4ai-pilot/app/security/url_validator.py#L1-L75)
 - [pinned_http.py:1-117](file://safe4ai-pilot/app/security/pinned_http.py#L1-L117)
@@ -166,7 +164,7 @@ This section outlines the core security and compliance building blocks and their
 
 - Input Validation Layer (InputGuard): Sanitizes and validates user queries to prevent prompt injection and enforce length limits.
 - Content Filtering Layer (ContentFilter): Detects and removes sensitive information from retrieved document chunks prior to LLM processing.
-- Output Validation Layer (OutputFilter): Ensures generated answers do not contain hallucinated PII and meet length heuristics.
+- Output Validation Layer (OutputFilter): **Enhanced with Rule 3 inference labeling guard** - ensures generated answers do not contain hallucinated PII, meet length heuristics, and properly label general inference responses with required disclaimers.
 - Upload Validation (UploadValidator): Enforces allowed file types, MIME types, magic bytes, and size limits.
 - **Enhanced Authentication Security**: Implements comprehensive password strength requirements (12+ characters with mixed case, digits, special characters), real-time validation feedback, and dynamic admin password generation via SEED_ADMIN_PASSWORD environment variable.
 - **Transport-Level Security Controls**: Prevents DNS rebinding attacks through IP address pinning and provides SSRF protection via URL validation with private/reserved IP range blocking.
@@ -178,7 +176,7 @@ This section outlines the core security and compliance building blocks and their
 **Section sources**
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 - [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
-- [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
+- [output_filter.py:47-109](file://safe4ai-pilot/app/security/output_filter.py#L47-L109)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [url_validator.py:11-21](file://safe4ai-pilot/app/security/url_validator.py#L11-L21)
 - [pinned_http.py:17-108](file://safe4ai-pilot/app/security/pinned_http.py#L17-L108)
@@ -194,7 +192,7 @@ This section outlines the core security and compliance building blocks and their
 The system employs a layered security architecture integrated into the RAG pipeline. The three security layers operate as follows:
 - Input Guard: Validates and sanitizes queries before rewriting and retrieval.
 - Content Filter: Removes PII-containing chunks from the retrieval context.
-- Output Filter: Reviews generated answers for hallucinated PII and suspicious length.
+- Output Filter: **Enhanced with Rule 3 inference labeling guard** - Reviews generated answers for hallucinated PII, suspicious length, citation presence, and proper inference labeling with required disclaimers.
 - **Transport Security**: Validates provider URLs and pins resolved IP addresses to prevent DNS rebinding attacks.
 
 ```mermaid
@@ -210,7 +208,7 @@ OF --> RESP["Respond"]
 subgraph "Security Layers"
 IG["InputGuard"]
 CF["ContentFilter"]
-OF["OutputFilter"]
+OF["OutputFilter<br/>+ Rule 3 Inference Guard"]
 end
 subgraph "Transport Security"
 URLV["URL Validator"]
@@ -224,7 +222,7 @@ PH --> GEN
 - [architecture.md:20-28](file://safe4ai-pilot/docs/architecture.md#L20-L28)
 - [input_guard.py:27-49](file://safe4ai-pilot/app/security/input_guard.py#L27-L49)
 - [content_filter.py:29-64](file://safe4ai-pilot/app/security/content_filter.py#L29-L64)
-- [output_filter.py:32-61](file://safe4ai-pilot/app/security/output_filter.py#L32-L61)
+- [output_filter.py:47-109](file://safe4ai-pilot/app/security/output_filter.py#L47-L109)
 - [url_validator.py:54-75](file://safe4ai-pilot/app/security/url_validator.py#L54-L75)
 - [pinned_http.py:95-117](file://safe4ai-pilot/app/security/pinned_http.py#L95-L117)
 
@@ -277,32 +275,57 @@ Loop --> Done["Return clean list"]
 **Section sources**
 - [content_filter.py:25-64](file://safe4ai-pilot/app/security/content_filter.py#L25-L64)
 
-### Output Validation Layer
-The OutputFilter component:
-- Identifies PII in generated answers and compares against source chunk content to detect hallucinations.
-- Applies a length heuristic to flag suspiciously long outputs.
-- Returns a GuardResult indicating whether the answer is safe to return.
+### Enhanced Output Validation Layer
+**Updated** The OutputFilter component now implements a comprehensive three-rule validation system:
+
+#### Rule 0: Citation Presence Check
+- **New Rule** - When source documents are present, answers must include citations
+- Prevents code paths that skip citation population
+- Blocks responses with no sources when grounded answers are expected
+
+#### Rule 1: PII Hallucination Detection
+- Identifies PII in generated answers and compares against source chunk content
+- Excludes hallucinated personal information not present in source documents
+- Prevents data leakage of sensitive information
+
+#### Rule 3: Inference Labeling Guard (NEW)
+- **New Rule** - Detects general inference and model knowledge language
+- Requires clear "not stated in the documents" disclaimers for inference responses
+- Prevents misleading presentation of model-generated information as factual
+- Only applies when inference language is detected
+
+#### Rule 2: Suspicious Length Heuristic
+- Applies 4,000 character threshold for suspiciously long outputs
+- Logs warnings for excessive output length while allowing continuation
 
 ```mermaid
 flowchart TD
-StartOF(["check(answer, source_chunks)"]) --> FindPII["_find_pii_matches(answer)"]
-FindPII --> HasPII{"Any PII matches?"}
-HasPII --> |Yes| BuildText["Join all source chunk contents"]
-BuildText --> CheckAll{"Is each PII in source text?"}
-CheckAll --> |No| BlockHallu["Return GuardResult(allowed=False,<br/>reason='Output contains PII not in source documents'"]
-CheckAll --> |Yes| LongHeuristic["Check answer length vs threshold"]
-HasPII --> |No| LongHeuristic
-LongHeuristic --> WarnLong{"Length > threshold?"}
-WarnLong --> |Yes| LogWarn["Log 'output_suspiciously_long'"]
-WarnLong --> |No| AllowOF["Return GuardResult(allowed=True, reason='ok')"]
-LogWarn --> AllowOF
+StartOF(["check(answer, source_chunks, citations)"]) --> Rule0["Rule 0: Citation Check<br/>(if source_chunks present)"]
+Rule0 --> HasCitations{"Citations provided?"}
+HasCitations --> |No| BlockNoCite["Return GuardResult(allowed=False,<br/>reason='Answer cites no sources'"]
+HasCitations --> |Yes| Rule1["Rule 1: PII Detection"]
+Rule1 --> HasPII{"PII in answer?"}
+HasPII --> |Yes| CheckSource["Check PII in source chunks"]
+CheckSource --> FoundPII{"PII found in sources?"}
+FoundPII --> |No| BlockPII["Return GuardResult(allowed=False,<br/>reason='Output contains PII not in source documents'"]
+FoundPII --> |Yes| Rule3["Rule 3: Inference Labeling"]
+HasPII --> |No| Rule3
+Rule3 --> HasInference{"Inference language detected?"}
+HasInference --> |Yes| HasDisclaimer{"Disclaimer present?"}
+HasDisclaimer --> |No| BlockInference["Return GuardResult(allowed=False,<br/>reason='Inference answer missing required disclaimer'"]
+HasDisclaimer --> |Yes| Rule2["Rule 2: Length Check"]
+HasInference --> |No| Rule2
+Rule2 --> CheckLength{"Length > 4000 chars?"}
+CheckLength --> |Yes| WarnLength["Log 'output_suspiciously_long'<br/>Allow with warning"]
+CheckLength --> |No| AllowOF["Return GuardResult(allowed=True, reason='ok')"]
+WarnLength --> AllowOF
 ```
 
 **Diagram sources**
-- [output_filter.py:32-61](file://safe4ai-pilot/app/security/output_filter.py#L32-L61)
+- [output_filter.py:47-109](file://safe4ai-pilot/app/security/output_filter.py#L47-L109)
 
 **Section sources**
-- [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
+- [output_filter.py:47-109](file://safe4ai-pilot/app/security/output_filter.py#L47-L109)
 
 ### Upload Validation
 The UploadValidator enforces:
@@ -488,14 +511,14 @@ Reports --> Retention
 
 **Diagram sources**
 - [content_filter.py:34-38](file://safe4ai-pilot/app/security/content_filter.py#L34-L38)
-- [output_filter.py:54-58](file://safe4ai-pilot/app/security/output_filter.py#L54-L58)
+- [output_filter.py:102-107](file://safe4ai-pilot/app/security/output_filter.py#L102-L107)
 - [router.py:104-105](file://safe4ai-pilot/app/auth/router.py#L104-L105)
 - [config.py:16](file://safe4ai-pilot/app/config.py#L16)
 - [admin_audit.tsx:1-200](file://design/components/AdminAudit.tsx#L1-L200)
 
 **Section sources**
 - [content_filter.py:34-38](file://safe4ai-pilot/app/security/content_filter.py#L34-L38)
-- [output_filter.py:54-58](file://safe4ai-pilot/app/security/output_filter.py#L54-L58)
+- [output_filter.py:102-107](file://safe4ai-pilot/app/security/output_filter.py#L102-L107)
 - [router.py:104-105](file://safe4ai-pilot/app/auth/router.py#L104-L105)
 - [config.py:16](file://safe4ai-pilot/app/config.py#L16)
 - [admin_audit.tsx:1-200](file://design/components/AdminAudit.tsx#L1-L200)
@@ -507,6 +530,7 @@ Reports --> Retention
 - Password hashing with bcrypt and secure JWT signing.
 - **Enhanced Password Security**: Comprehensive password validation and generation mechanisms.
 - **Transport Security**: URL validation and IP pinning prevent unauthorized network access and data exfiltration.
+- **Inference Labeling Guard**: Prevents misleading presentation of model-generated information as factual documentation.
 
 **Section sources**
 - [content_filter.py:13-18](file://safe4ai-pilot/app/security/content_filter.py#L13-L18)
@@ -540,6 +564,7 @@ Resolved --> Active : "continue"
 - Administrative dashboards enable compliance reporting and oversight.
 - **Enhanced Password Security**: Meets regulatory requirements for strong authentication practices.
 - **Transport Security**: Provides additional protection against network-based attacks and data exfiltration.
+- **Inference Labeling Compliance**: Ensures compliance with regulations requiring transparency in AI-generated information disclosure.
 
 **Section sources**
 - [config.py:16-21](file://safe4ai-pilot/app/config.py#L16-L21)
@@ -552,6 +577,7 @@ Resolved --> Active : "continue"
 - Feedback collection supports continuous monitoring of content safety.
 - **Enhanced Authentication**: Strong password policies integrate with external identity management systems.
 - **Transport Security**: URL validation and IP pinning integrate with network security monitoring systems.
+- **Inference Labeling**: Output filtering integrates with content safety monitoring and compliance reporting systems.
 
 **Section sources**
 - [tracer.py:1-200](file://safe4ai-pilot/observability/tracer.py#L1-L200)
@@ -569,13 +595,13 @@ Resolved --> Active : "continue"
 - [verify_deletion.py:1-200](file://safe4ai-pilot/scripts/verify_deletion.py#L1-L200)
 
 ## Dependency Analysis
-The security guards depend on shared models and configuration, while authentication depends on database-backed user records. Observability integrates with admin routes for reporting. Enhanced password security creates additional dependencies between frontend validation, backend enforcement, and seed script generation. **The transport security components create dependencies across provider configuration, authentication flows, and runtime configuration management.**
+The security guards depend on shared models and configuration, while authentication depends on database-backed user records. Observability integrates with admin routes for reporting. Enhanced password security creates additional dependencies between frontend validation, backend enforcement, and seed script generation. **The transport security components create dependencies across provider configuration, authentication flows, and runtime configuration management.** **The new inference labeling guard introduces dependencies on citation processing and enhanced output validation logic.**
 
 ```mermaid
 graph TB
 IG["InputGuard"] --> M["GuardResult"]
 CF["ContentFilter"] --> RC["RankedChunk"]
-OF["OutputFilter"] --> RC
+OF["OutputFilter<br/>+ Rule 3"] --> RC
 UV["UploadValidator"] --> C["Settings"]
 MW["Auth Middleware"] --> U["User"]
 AR["Auth Router"] --> MW
@@ -624,6 +650,7 @@ SettingsRoutes --> PH
 - **Enhanced Password Security**: Additional computational overhead for password validation is minimal and occurs only during user creation and authentication.
 - **Transport Security**: URL resolution and IP pinning add minimal overhead to provider configuration and authentication flows.
 - **SSRF Protection**: URL validation occurs during provider setup and OIDC configuration, with minimal impact on runtime performance.
+- **Inference Labeling Guard**: Text processing for inference markers adds minimal overhead to output validation, only when inference language is detected.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -634,17 +661,19 @@ Common issues and resolutions:
 - **Password validation issues**: Ensure passwords meet 12+ character requirement with mixed case, digits, and special characters. Check both frontend and backend validation messages.
 - **SSRF validation errors**: Verify provider URLs use allowed schemes (http/https) and resolve to public IP addresses. Check firewall and network configuration.
 - **DNS rebinding issues**: Ensure provider URLs resolve to stable IP addresses. Verify DNS configuration and network security policies.
+- **Inference labeling failures**: Ensure answers using general inference language include required "not stated in the documents" disclaimers. Check citation presence for grounded answers.
+- **Citation-related rejections**: Verify that grounded answers include proper citations when source documents are present.
 
 **Section sources**
 - [config.py:22-31](file://safe4ai-pilot/app/config.py#L22-L31)
 - [router.py:53-82](file://safe4ai-pilot/app/auth/router.py#L53-L82)
 - [upload_validator.py:39-68](file://safe4ai-pilot/app/security/upload_validator.py#L39-L68)
-- [test_security_guards.py:1-200](file://safe4ai-pilot/tests/test_security_guards.py#L1-L200)
+- [test_security_guards.py:286-341](file://safe4ai-pilot/tests/test_security_guards.py#L286-L341)
 - [test_security_headers.py:1-200](file://safe4ai-pilot/tests/test_security_headers.py#L1-L200)
 - [url_validator.py:26-51](file://safe4ai-pilot/app/security/url_validator.py#L26-L51)
 
 ## Conclusion
-The Private AI system implements a robust, multi-layered security architecture integrated into the RAG pipeline. Input, content, and output guards protect against prompt injection, PII leakage, and hallucinations. Strong access control, structured audit logging, and configurable retention support compliance reporting. Human review workflows and observability tooling enable continuous monitoring and incident response. **The enhanced authentication security measures now provide comprehensive password validation, real-time feedback, and dynamic password generation capabilities that significantly strengthen the system's overall security posture.** **The new transport-level security controls provide critical protection against DNS rebinding attacks and SSRF vulnerabilities through URL validation and IP address pinning mechanisms, ensuring secure outbound connections to provider services and external APIs.** Together, these controls form a comprehensive foundation for responsible AI deployment and regulatory compliance.
+The Private AI system implements a robust, multi-layered security architecture integrated into the RAG pipeline. Input, content, and output guards protect against prompt injection, PII leakage, and hallucinations. Strong access control, structured audit logging, and configurable retention support compliance reporting. Human review workflows and observability tooling enable continuous monitoring and incident response. **The enhanced authentication security measures now provide comprehensive password validation, real-time feedback, and dynamic password generation capabilities that significantly strengthen the system's overall security posture.** **The new transport-level security controls provide critical protection against DNS rebinding attacks and SSRF vulnerabilities through URL validation and IP address pinning mechanisms, ensuring secure outbound connections to provider services and external APIs.** **The newly implemented Rule 3 inference labeling guard adds a crucial layer of transparency and compliance by requiring clear disclaimers for general inference responses, preventing misleading presentation of model-generated information as factual documentation.** Together, these controls form a comprehensive foundation for responsible AI deployment and regulatory compliance.
 
 ## Appendices
 
@@ -655,13 +684,14 @@ The Private AI system implements a robust, multi-layered security architecture i
 graph TB
 T1["Prompt Injection"] --> M1["InputGuard"]
 T2["PII in Retrieved Chunks"] --> M2["ContentFilter"]
-T3["Hallucinated PII in Output"] --> M3["OutputFilter"]
+T3["Hallucinated PII in Output"] --> M3["OutputFilter<br/>Rule 1"]
 T4["Malicious Uploads"] --> M4["UploadValidator"]
 T5["Unauthorized Access"] --> M5["Auth Middleware + RBAC"]
 T6["Brute Force Login"] --> M6["Rate Limiting + Lockout"]
 T7["Weak Passwords"] --> M7["Password Strength Validation"]
 T8["DNS Rebinding Attack"] --> M8["URL Validator + Pinned Transport"]
 T9["SSRF via Private IPs"] --> M9["Private IP Blocking"]
+T10["Misleading Inference Info"] --> M10["Rule 3 Inference Guard"]
 M1 --> R1["Sanitized Query"]
 M2 --> R2["PII-Free Context"]
 M3 --> R3["Verified Answer"]
@@ -671,6 +701,7 @@ M6 --> R6["Locked Account"]
 M7 --> R7["Strong Password"]
 M8 --> R8["Secure Transport"]
 M9 --> R9["Blocked SSRF"]
+M10 --> R10["Transparent Inference"]
 ```
 
 #### Enhanced Password Security Flow
@@ -700,6 +731,20 @@ style URLV fill:#ffebee
 style PHT fill:#e8f5e8
 ```
 
+#### Enhanced Output Validation Flow
+```mermaid
+flowchart TD
+Start(["OutputFilter.check()"]) --> Rule0["Rule 0: Citation Check"]
+Rule0 --> Rule1["Rule 1: PII Detection"]
+Rule1 --> Rule3["Rule 3: Inference Labeling"]
+Rule3 --> Rule2["Rule 2: Length Check"]
+Rule2 --> Result["GuardResult"]
+style Rule0 fill:#ffebee
+style Rule1 fill:#e8f5e8
+style Rule3 fill:#fff3e0
+style Rule2 fill:#e1f5fe
+```
+
 **Diagram sources**
 - [router.py:63-65](file://safe4ai-pilot/app/auth/router.py#L63-L65)
 - [admin_routes.py:103-115](file://safe4ai-pilot/app/api/admin_routes.py#L103-L115)
@@ -707,6 +752,7 @@ style PHT fill:#e8f5e8
 - [LoginPage.tsx:11-14](file://safe4ai-pilot/frontend/src/pages/LoginPage.tsx#L11-L14)
 - [url_validator.py:54-75](file://safe4ai-pilot/app/security/url_validator.py#L54-L75)
 - [pinned_http.py:95-117](file://safe4ai-pilot/app/security/pinned_http.py#L95-L117)
+- [output_filter.py:47-109](file://safe4ai-pilot/app/security/output_filter.py#L47-L109)
 
 ### Regulatory Compliance Checklist
 - Data minimization: Limit query and chunk sizes; retain audit logs per policy.
@@ -718,4 +764,5 @@ style PHT fill:#e8f5e8
 - **Transport Security**: Provides additional protection against network-based attacks and data exfiltration through URL validation and IP pinning mechanisms.
 - **SSRF Protection**: Complies with security standards requiring protection against server-side request forgery attacks targeting internal networks.
 - **DNS Rebinding Prevention**: Protects against modern attack vectors that exploit DNS resolution timing to bypass security controls.
-</existing_wiki_content>
+- **Inference Transparency**: Ensures compliance with regulations requiring transparency in AI-generated information disclosure, preventing misleading presentation of model knowledge as factual documentation.
+- **Grounded Response Enforcement**: Maintains compliance with responsible AI principles by requiring proper citations and disclaimers for inference responses.

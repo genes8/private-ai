@@ -86,6 +86,7 @@ class RagPipeline:
         uploaded_by: str,
         *,
         document_version: int = 1,
+        document_version_id: str | None = None,
         activate: bool = True,
     ) -> None:
         """Parse, chunk, embed, and index a document.
@@ -98,17 +99,14 @@ class RagPipeline:
         ext = Path(file_path).suffix.lower()
 
         if ext == ".pdf":
-            pages, low_confidence_count = await self._load_pdf(file_path)
+            pages, _low_confidence_count = await self._load_pdf(file_path)
         elif ext == ".docx":
             pages = document_parser.load_docx(file_path)
-            low_confidence_count = 0
         elif ext == ".xlsx":
             pages = document_parser.load_xlsx(file_path)
-            low_confidence_count = 0
         else:
             text = Path(file_path).read_text(encoding="utf-8", errors="replace")
             pages = [(text, 0, "native")]
-            low_confidence_count = 0
 
         # Chunk all pages
         all_chunks: list[dict[str, Any]] = []
@@ -152,6 +150,7 @@ class RagPipeline:
                     "content": all_chunks[i]["content"],
                     "ocr_quality": all_chunks[i]["ocr_quality"],
                     "doc_version": document_version,
+                    "document_version_id": document_version_id,
                     "is_active": activate,
                 },
             )
@@ -165,6 +164,7 @@ class RagPipeline:
             chunk = DocumentChunk(
                 id=chunk_ids[i],
                 document_id=doc_id,
+                document_version_id=document_version_id,
                 chunk_index=all_chunks[i]["chunk_index"],
                 chunk_version=document_version,
                 content_preview=all_chunks[i]["content"][:200],
@@ -173,7 +173,6 @@ class RagPipeline:
             self._db.add(chunk)
 
         # Update document status
-        total_pages = len(pages)
         # Even with low OCR confidence, chunks are already in Qdrant — mark as indexed.
         # Low-confidence pages are detectable via the ocr_quality payload field in Qdrant.
         self._set_status(doc_id, IngestionStatus.indexed)

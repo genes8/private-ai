@@ -36,21 +36,57 @@ def test_database_metadata_contains_phase_one_tables() -> None:
         "query_feedback",
         "ingestion_jobs",
         "human_review_queue",
+        "document_versions",
     }
 
     assert expected_tables.issubset(set(Base.metadata.tables))
 
 
 def test_document_and_semantic_cache_columns_match_plan() -> None:
-    from app.db.models import Document, DocumentChunk, IngestionStatus, SemanticCache
+    from app.db.models import (
+        Document,
+        DocumentChunk,
+        DocumentVersion,
+        DocumentVersionStatus,
+        IngestionJob,
+        IngestionStatus,
+        SemanticCache,
+    )
 
     document_columns = set(Document.__table__.columns.keys())
     chunk_columns = set(DocumentChunk.__table__.columns.keys())
+    version_columns = set(DocumentVersion.__table__.columns.keys())
+    job_columns = set(IngestionJob.__table__.columns.keys())
     cache_columns = set(SemanticCache.__table__.columns.keys())
 
-    assert {"version", "active_version"}.issubset(document_columns)
-    assert "chunk_version" in chunk_columns
+    assert {
+        "active_version_id",
+        "title",
+    }.issubset(document_columns)
+    assert {
+        "id",
+        "document_id",
+        "version_number",
+        "filename",
+        "storage_filename",
+        "file_type",
+        "file_size_bytes",
+        "checksum",
+        "status",
+        "created_by",
+        "created_at",
+        "ingestion_started_at",
+        "ingested_at",
+        "activated_at",
+        "failed_at",
+        "failed_reason",
+    }.issubset(version_columns)
+    assert {"chunk_version", "document_version_id"}.issubset(chunk_columns)
+    assert "document_version_id" in job_columns
     assert {"source_document_ids", "source_chunk_ids"}.issubset(cache_columns)
+    assert DocumentVersionStatus.pending.value == "pending"
+    assert DocumentVersionStatus.active.value == "active"
+    assert DocumentVersionStatus.superseded.value == "superseded"
     assert IngestionStatus.skipped.value == "skipped"
 
 
@@ -128,7 +164,11 @@ def test_upsert_app_config_encrypts_provider_api_key() -> None:
 async def test_prewarm_provider_skips_non_ollama() -> None:
     from app.main import _prewarm_provider
 
-    runtime = type("Runtime", (), {"provider_type": "openai_compatible", "chat_model": "DeepSeek-V4-Flash"})()
+    runtime = type(
+        "Runtime",
+        (),
+        {"provider_type": "openai_compatible", "chat_model": "DeepSeek-V4-Flash"},
+    )()
     with pytest.MonkeyPatch.context() as mp:
         called = {"post": False}
 

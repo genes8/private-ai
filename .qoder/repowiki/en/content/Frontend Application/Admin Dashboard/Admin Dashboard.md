@@ -38,11 +38,11 @@
 
 ## Update Summary
 **Changes Made**
-- Added documentation for enhanced OIDC authentication integration in SettingsPage
-- Updated security features documentation to include blocked terms filtering
-- Enhanced SettingsPage configuration options with OIDC settings and blocked terms management
-- Updated authentication flows documentation to reflect improved OIDC integration
-- Added security guard documentation for input filtering and prompt injection prevention
+- Enhanced OverviewPage with real 14-day sparkline charts using new timeseries endpoint
+- Added document inspector panel with metadata, chunk previews, and ingestion history
+- Updated ActivityPage with kind-based filtering and badge counts
+- Improved data visualization with enhanced chart series mapping
+- Expanded document management with detailed inspection capabilities
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -58,7 +58,7 @@
 11. [Conclusion](#conclusion)
 
 ## Introduction
-This document describes the enhanced admin dashboard system for the private·ai platform. The system now includes comprehensive administrative interfaces covering monitoring, document management, activity auditing, feedback administration, user management, and system configuration. The dashboard features six core pages: OverviewPage for system monitoring, DocumentsPage for document management, ActivityPage for audit trails, FeedbackPage for user feedback analysis, UsersPage for team administration, and SettingsPage for system configuration. The system leverages a consistent admin layout with navigation patterns, real-time data visualization through Sparkline charts, and robust API integration for all administrative functions.
+This document describes the enhanced admin dashboard system for the private·ai platform. The system now includes comprehensive administrative interfaces covering monitoring, document management, activity auditing, feedback administration, user management, and system configuration. The dashboard features six core pages: OverviewPage for system monitoring, DocumentsPage for document management, ActivityPage for audit trails, FeedbackPage for user feedback analysis, UsersPage for team administration, and SettingsPage for system configuration. The system leverages a consistent admin layout with navigation patterns, real-time data visualization through enhanced Sparkline charts, and robust API integration for all administrative functions.
 
 **Updated** Enhanced with improved authentication flows including OIDC integration, better security measures with blocked terms filtering, and updated frontend hooks/components supporting modern authentication and content filtering systems.
 
@@ -147,9 +147,9 @@ IG --> BT
 The admin dashboard now encompasses six comprehensive pages with distinct responsibilities, enhanced by seamless navigation between admin and chat interfaces and strengthened security measures:
 
 **AdminLayout**: Enhanced with Settings navigation, improved feedback badge display, and the new 'Back to chat' navigation option
-**OverviewPage**: System monitoring and analytics with real-time metrics
-**DocumentsPage**: Document lifecycle management with upload, indexing, and inspection
-**ActivityPage**: Comprehensive audit trail with filtering and export capabilities
+**OverviewPage**: System monitoring and analytics with real-time metrics and enhanced 14-day sparkline visualization
+**DocumentsPage**: Document lifecycle management with upload, indexing, inspection, and detailed metadata viewing
+**ActivityPage**: Comprehensive audit trail with filtering, export capabilities, and kind-based badge counts
 **FeedbackPage**: User feedback analysis with rating categorization and trace details
 **UsersPage**: Team management with invitation, status control, and role assignment
 **SettingsPage**: Complete system configuration with redesigned mode selector cards, OIDC authentication settings, and blocked terms management
@@ -172,10 +172,10 @@ The admin dashboard now encompasses six comprehensive pages with distinct respon
 - **Auto-Provisioning**: Controlled user creation after successful OIDC authentication
 
 **Enhanced Components**:
-- Sparkline: Lightweight trend visualization
-- DocumentRow: Document status and action management
+- Sparkline: Enhanced trend visualization with 14-day real-time data
+- DocumentRow: Document status and action management with inspection capabilities
 - FeedbackListItem: Feedback item presentation
-- ActivityEvent: Audit event display
+- ActivityEvent: Audit event display with kind-based filtering
 
 **Enhanced Navigation Features**:
 - **Back to chat**: Dedicated navigation option in admin sidebar for seamless interface switching
@@ -219,10 +219,10 @@ Note over Admin,Chat : Seamless navigation between admin and chat
 The AdminLayout now includes comprehensive navigation for all six admin pages with improved feedback integration, active route detection, and the new 'Back to chat' navigation option.
 
 **Navigation Structure**:
-- Overview: System monitoring and analytics
-- Documents: Document management and indexing
-- Activity: Audit trail and monitoring
-- Feedback: User feedback analysis
+- Overview: System monitoring and analytics with 14-day sparklines
+- Documents: Document management, indexing, and detailed inspection
+- Activity: Audit trail with kind-based filtering and badge counts
+- Feedback: User feedback analysis with rating categorization
 - Users: Team management and administration
 - Settings: System configuration and controls
 - **Back to chat**: Seamless navigation back to main chat interface
@@ -286,6 +286,147 @@ AutoRedirect --> OverviewPage["Render OverviewPage"]
 **Section sources**
 - [App.tsx:29-34](file://safe4ai-pilot/frontend/src/App.tsx#L29-L34)
 - [App.tsx:50-57](file://safe4ai-pilot/frontend/src/App.tsx#L50-L57)
+
+### Enhanced OverviewPage - Real-Time 14-Day Monitoring
+The OverviewPage has been significantly enhanced with real-time 14-day sparkline visualization using a new timeseries endpoint, providing comprehensive system monitoring and analytics.
+
+**Enhanced Monitoring Features**:
+- **14-Day Timeseries Data**: Real-time queries, unique users, and cost metrics
+- **Enhanced Sparkline Charts**: Interactive visualization with configurable time ranges
+- **Multi-Metric Dashboard**: Queries, unique users, and cost USD tracking
+- **Responsive Chart Layout**: Adaptive sizing with consistent styling
+- **Real-Time Data Updates**: Automatic refresh with 60-second intervals
+
+**Timeseries Data Processing**:
+- **Data Structure**: Array of objects containing daily metrics
+- **Series Mapping**: Direct mapping of timeseries data to chart series
+- **Date Handling**: Proper timestamp conversion and date formatting
+- **Missing Data**: Graceful handling of incomplete 14-day periods
+
+**Chart Configuration**:
+- **Queries Chart**: Line chart showing daily query volumes
+- **Unique Users Chart**: Area chart displaying user engagement trends
+- **Cost Chart**: Bar chart illustrating daily spending patterns
+- **Interactive Elements**: Hover effects and tooltip displays
+
+```mermaid
+flowchart TD
+OverviewPage["OverviewPage"] --> Query["useQuery: stats.timeseries"]
+Query --> TimeseriesData["Fetch 14-day timeseries data"]
+TimeseriesData --> ProcessData["Process daily metrics"]
+ProcessData --> Chart1["Queries Sparkline Chart"]
+ProcessData --> Chart2["Unique Users Sparkline Chart"]
+ProcessData --> Chart3["Cost USD Sparkline Chart"]
+Chart1 --> Series1["Map series: timeseries.queries"]
+Chart2 --> Series2["Map series: timeseries.uniqueUsers"]
+Chart3 --> Series3["Map series: timeseries.costUsd"]
+Series1 --> RenderCharts["Render Enhanced Charts"]
+Series2 --> RenderCharts
+Series3 --> RenderCharts
+RenderCharts --> UpdateUI["Update Dashboard UI"]
+```
+
+**Diagram sources**
+- [OverviewPage.tsx:32-33](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L32-L33)
+- [OverviewPage.tsx:119-129](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L119-L129)
+
+**Section sources**
+- [OverviewPage.tsx:25-40](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L25-L40)
+- [OverviewPage.tsx:110-135](file://safe4ai-pilot/frontend/src/pages/admin/OverviewPage.tsx#L110-L135)
+
+### Enhanced DocumentsPage - Document Inspector Panel
+The DocumentsPage now features a comprehensive document inspector panel that provides detailed metadata, chunk previews, and ingestion history for individual documents.
+
+**Enhanced Document Inspection Features**:
+- **Metadata Display**: Document name, type, size, chunks, status, and processing date
+- **Chunk Previews**: Visual representation of document chunking and retrieval patterns
+- **Ingestion History**: Complete processing timeline with status updates
+- **Status Indicators**: Color-coded status chips (indexed, embedding, failed, skipped)
+- **Progress Tracking**: Real-time progress bars for ongoing operations
+
+**Document Status Management**:
+- **Status Chips**: Interactive status indicators with hover details
+- **Action Buttons**: Re-index, delete, and inspect document actions
+- **Batch Operations**: Multiple document selection and bulk actions
+- **Search and Filter**: Enhanced document discovery with status filtering
+
+**Enhanced User Experience**:
+- **Responsive Layout**: Adaptive grid system for document listings
+- **Drag-and-Drop Upload**: Intuitive file upload interface
+- **Real-Time Updates**: Automatic refresh of document statuses
+- **Error Handling**: Comprehensive error messages and recovery options
+
+```mermaid
+flowchart TD
+DocumentsPage["DocumentsPage"] --> InspectorPanel["Document Inspector Panel"]
+InspectorPanel --> Metadata["Document Metadata"]
+Metadata --> FileName["File Name & Type"]
+Metadata --> FileSize["File Size"]
+Metadata --> ChunkCount["Chunk Count"]
+Metadata --> ProcessingStatus["Processing Status"]
+InspectorPanel --> ChunkPreviews["Chunk Previews"]
+ChunkPreviews --> TopChunks["Top Retrieved Chunks"]
+ChunkPreviews --> ChunkDistribution["Chunk Distribution"]
+InspectorPanel --> IngestionHistory["Ingestion History"]
+IngestionHistory --> ProcessingTimeline["Processing Timeline"]
+IngestionHistory --> StatusUpdates["Status Updates"]
+```
+
+**Diagram sources**
+- [DocumentsPage.tsx:150-200](file://safe4ai-pilot/frontend/src/pages/admin/DocumentsPage.tsx#L150-L200)
+- [AdminDocs.tsx:150-238](file://design/components/AdminDocs.tsx#L150-L238)
+
+**Section sources**
+- [DocumentsPage.tsx:120-220](file://safe4ai-pilot/frontend/src/pages/admin/DocumentsPage.tsx#L120-L220)
+- [AdminDocs.tsx:41-238](file://design/components/AdminDocs.tsx#L41-L238)
+
+### Enhanced ActivityPage - Kind-Based Filtering and Badge Counts
+The ActivityPage has been updated with advanced filtering capabilities and badge counts, providing more granular control over audit trail analysis.
+
+**Enhanced Activity Filtering Features**:
+- **Kind-Based Filtering**: Filter by event type (queries, uploads, feedback, auth)
+- **Badge Counts**: Visual indicators showing event counts by kind
+- **Multi-Level Filtering**: Combine kind, user, and date range filters
+- **Live Updates**: Real-time activity monitoring with status indicators
+
+**Activity Event Categorization**:
+- **Query Events**: User query activities with latency and model details
+- **Upload Events**: Document upload and processing activities
+- **Feedback Events**: User feedback and rating activities
+- **Auth Events**: Authentication and authorization activities
+- **System Events**: Platform maintenance and system activities
+
+**Enhanced User Interface**:
+- **Filter Rail**: Persistent filter sidebar with expand/collapse functionality
+- **Timeline Visualization**: Chronological event display with visual indicators
+- **Export Functionality**: Download filtered activity reports
+- **Search Integration**: Quick search within filtered results
+
+```mermaid
+flowchart TD
+ActivityPage["ActivityPage"] --> FilterRail["Enhanced Filter Rail"]
+FilterRail --> KindFilter["Kind Filter with Badges"]
+KindFilter --> QueryBadge["Query Badge Count"]
+KindFilter --> UploadBadge["Upload Badge Count"]
+KindFilter --> FeedbackBadge["Feedback Badge Count"]
+KindFilter --> AuthBadge["Auth Badge Count"]
+ActivityPage --> ActivityStream["Enhanced Activity Stream"]
+ActivityStream --> Timeline["Timeline Visualization"]
+Timeline --> EventNodes["Event Nodes with Kind Indicators"]
+EventNodes --> QueryEvents["Query Events"]
+EventNodes --> UploadEvents["Upload Events"]
+EventNodes --> FeedbackEvents["Feedback Events"]
+EventNodes --> AuthEvents["Auth Events"]
+EventNodes --> FallbackEvents["Fallback Events"]
+```
+
+**Diagram sources**
+- [ActivityPage.tsx:1-50](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx#L1-L50)
+- [AdminAudit.tsx:68-278](file://design/components/AdminAudit.tsx#L68-L278)
+
+**Section sources**
+- [ActivityPage.tsx:1-80](file://safe4ai-pilot/frontend/src/pages/admin/ActivityPage.tsx#L1-L80)
+- [AdminAudit.tsx:5-278](file://design/components/AdminAudit.tsx#L5-L278)
 
 ### SettingsPage - Redesigned Configuration Management
 The SettingsPage provides complete system configuration with redesigned mode selector cards and context-specific model management, now enhanced with OIDC authentication and blocked terms filtering capabilities.
@@ -411,7 +552,7 @@ The SettingsPage now features redesigned mode selector cards that provide intuit
 **Card Interaction Logic**:
 - Visual selection with border highlighting and background color change
 - Badge display for recommended mode
-- Immediate provider mode change without form submission
+- immediate provider mode change without form submission
 - Contextual model dropdown population based on selected mode
 
 ```mermaid
@@ -843,25 +984,28 @@ The enhanced admin system implements optimized data fetching strategies and effi
 - SettingsPage: Configuration changes propagate within 30 seconds
 - UsersPage: User list refresh every 60 seconds with caching
 - FeedbackPage: Negative feedback count updates every 60 seconds
-- ActivityPage: Audit logs refresh every 30 seconds
-- DocumentsPage: Document status polling every 10 seconds
-- OverviewPage: System metrics refresh every 60 seconds
+- ActivityPage: Audit logs refresh every 30 seconds with enhanced filtering
+- DocumentsPage: Document status polling every 10 seconds with inspector panel
+- OverviewPage: Enhanced 14-day sparkline data refresh every 60 seconds
 - **New**: Mode selector cards with instant visual feedback
 - **New**: Context-specific model dropdowns with cached model lists
 - **New**: Back-to-chat navigation with instant routing
 - **New**: OIDC configuration validation with debounced requests
 - **New**: Blocked terms filtering with efficient pattern matching
+- **New**: Document inspector panel with lazy loading for large documents
+- **New**: Activity page kind-based filtering with real-time badge updates
 
 **Efficient Rendering**:
 - Virtualized scrolling for large datasets
 - Lazy loading for detailed views
-- Optimized SVG rendering for charts
+- Optimized SVG rendering for enhanced charts
 - Debounced search and filtering
 - Efficient state management with React Query
 - **New**: Instant mode card selection without form submission
 - **New**: Context-aware model dropdown rendering
 - **New**: Seamless navigation without page reloads
 - **New**: Real-time security validation feedback
+- **New**: Responsive chart rendering with adaptive sizing
 
 **Network Optimization**:
 - Shared API client with authentication
@@ -873,6 +1017,7 @@ The enhanced admin system implements optimized data fetching strategies and effi
 - **New**: Client-side navigation optimization
 - **New**: OIDC endpoint discovery with caching
 - **New**: Blocked terms validation with batch processing
+- **New**: Timeseries data caching with 14-day rolling window
 
 ## Troubleshooting Guide
 Enhanced troubleshooting procedures for the expanded admin functionality, including navigation-related issues and new security features.
@@ -908,11 +1053,20 @@ Enhanced troubleshooting procedures for the expanded admin functionality, includ
 - Missing audit events: Verify audit retention settings and storage configuration
 - Performance degradation: Check database indexes and query optimization
 - Export failures: Validate file system permissions and storage quotas
+- **New**: Activity page filtering not working: Check kind-based filter configuration
+- **New**: Badge counts not updating: Verify real-time data streaming
 
 **Document Management Issues**:
 - Upload failures: Check file size limits and supported formats
 - Indexing errors: Verify document preprocessing and embedding model availability
 - Search performance: Monitor Elasticsearch indices and query optimization
+- **New**: Document inspector panel not loading: Check document metadata availability
+- **New**: Chunk preview errors: Verify document chunking and retrieval configuration
+
+**OverviewPage Issues**:
+- **Timeseries data not loading**: Check stats API endpoint and authentication
+- **Sparkline charts not rendering**: Verify chart library integration and data formatting
+- **14-day period errors**: Check date calculations and timezone handling
 
 **Security and Authentication Issues**:
 - **OIDC Login Failures**: Verify issuer URL, client credentials, and redirect URI configuration
@@ -962,6 +1116,7 @@ The enhanced admin system implements comprehensive security measures across all 
 - **New**: Navigation endpoint security validation
 - **New**: OIDC endpoint discovery with SSRF protection
 - **New**: Blocked terms validation with regex sanitization
+- **New**: Timeseries data endpoint with appropriate access controls
 
 **Compliance**:
 - Audit retention policies (30-365 days configurable)
@@ -979,6 +1134,7 @@ The enhanced admin system implements comprehensive security measures across all 
 - **New**: OIDC authentication with domain restriction
 - **New**: Input guard with blocked terms filtering
 - **New**: Prompt injection detection and prevention
+- **New**: Enhanced timeseries data access controls
 
 ## Practical Extensions
 The enhanced admin system provides numerous opportunities for customization and extension, including navigation enhancements and advanced security features.
@@ -1008,8 +1164,10 @@ The enhanced admin system provides numerous opportunities for customization and 
 **Extending Monitoring Capabilities**:
 - Add custom metrics and KPIs to OverviewPage
 - Implement real-time alerting and notifications
-- Create custom dashboard widgets with Sparkline integration
+- Create custom dashboard widgets with enhanced Sparkline integration
 - Add historical trend analysis and forecasting
+- **New**: Extend timeseries data with additional metrics (uptime, error rates)
+- **New**: Implement custom chart types for specialized monitoring needs
 
 **Improving User Experience**:
 - Implement user preference management
@@ -1018,6 +1176,7 @@ The enhanced admin system provides numerous opportunities for customization and 
 - Add team collaboration features
 - **New**: Enhance navigation UX with progress indicators and tooltips
 - **New**: Implement user session management with activity monitoring
+- **New**: Add document search and filtering capabilities
 
 **Enhancing Provider Management**:
 - **New**: Add support for additional provider types (Azure, Anthropic, etc.)
@@ -1034,8 +1193,9 @@ The enhanced admin system provides numerous opportunities for customization and 
 - **New**: Implement rate limiting for authentication attempts
 - **New**: Add IP-based access control and monitoring
 - **New**: Implement advanced input validation and sanitization
+- **New**: Add document access logging and monitoring
 
 ## Conclusion
 The enhanced admin dashboard provides comprehensive administrative capabilities through six specialized pages, each designed for specific management tasks. The system combines modern React patterns with robust backend integration, offering real-time monitoring, detailed analytics, and complete configuration management. With enhanced security measures, efficient data management, and extensible architecture, the admin system supports both current operational needs and future growth requirements. The modular design ensures maintainability while the comprehensive feature set addresses all aspects of system administration and monitoring.
 
-**Updated** The addition of the 'Back to chat' navigation option creates seamless navigation between the admin interface and the main chat interface, improving user workflow efficiency and reducing context switching overhead. The enhanced admin layout with improved navigation patterns and real-time data visualization provides administrators with reliable and actionable insights into system performance and document indexing status. The integration of OIDC authentication and blocked terms filtering significantly enhances security while maintaining usability. These enhancements demonstrate the system's commitment to providing both powerful administrative capabilities and strong security protections.
+**Updated** The addition of the 'Back to chat' navigation option creates seamless navigation between the admin interface and the main chat interface, improving user workflow efficiency and reducing context switching overhead. The enhanced admin layout with improved navigation patterns and real-time data visualization provides administrators with reliable and actionable insights into system performance and document indexing status. The integration of OIDC authentication and blocked terms filtering significantly enhances security while maintaining usability. The new 14-day sparkline charts, document inspector panel, and enhanced activity filtering represent significant improvements in monitoring and analysis capabilities. These enhancements demonstrate the system's commitment to providing both powerful administrative capabilities and strong security protections.

@@ -24,16 +24,17 @@
 - [document_grader.py](file://safe4ai-pilot/app/agents/document_grader.py)
 - [adaptive_router.py](file://safe4ai-pilot/app/agents/adaptive_router.py)
 - [2026-06-03-rag-grounded-inference-design.md](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md)
+- [test_agents.py](file://safe4ai-pilot/tests/test_agents.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added comprehensive documentation for the RAG grounded inference design specification
-- Updated answer contract system documentation covering document-grounded facts, general inference, and entity-specific fact restrictions
-- Enhanced answer generation documentation with v2 rag_answer prompt implementation
-- Added lightweight output guard specifications for inference labeling enforcement
-- Updated context packing improvements for stable source labels
-- Expanded testing plan and implementation requirements for local qwen3.5:9b model
+- Enhanced documentation for RAG answer contract v2 with numbered citations system
+- Updated grounded inference answer contract with six specific rules and systematic source numbering [1], [2], etc.
+- Improved prompt templates documentation with comprehensive rag_answer v2 implementation
+- Added detailed context source numbering system for stable citation alignment
+- Updated citation management to support numbered source labels in generation context
+- Enhanced answer contract enforcement through improved template structure
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -51,7 +52,7 @@
 ## Introduction
 This document describes the Retrieval-Augmented Generation (RAG) pipeline service responsible for orchestrating hybrid search, retrieval augmentation, reranking, and answer synthesis. The pipeline has evolved to use a LangGraph-based architecture where all queries flow through a stateful, streaming RAG orchestrated by a LangGraph StateGraph. Queries are decomposed, multi-modal retrieval integrates dense vector search with sparse BM25 ranking, and the system ensures safety and quality through content filtering, input/output guards, and adaptive routing. The document covers streaming response generation, citation management, and source attribution, along with practical configuration, optimization tips, and troubleshooting guidance.
 
-**Updated** The pipeline now implements a comprehensive grounded inference design that establishes a strict answer contract for the local qwen3.5:9b model, ensuring confidential local documents remain the primary source of truth while enabling useful assistant-like behavior through clear distinction between document-grounded facts and model inference.
+**Updated** The pipeline now implements a comprehensive grounded inference design that establishes a strict answer contract for the local qwen3.5:9b model, ensuring confidential local documents remain the primary source of truth while enabling useful assistant-like behavior through clear distinction between document-grounded facts and model inference. The enhanced rag_answer v2 prompt template introduces systematic source numbering [1], [2], etc. for precise citation management and improved answer quality.
 
 ## Project Structure
 The RAG pipeline spans backend services, components, agents, and frontend UI. The most relevant parts for this documentation are:
@@ -164,9 +165,9 @@ TPL -.-> Graph
 - API and Streaming: FastAPI endpoints supporting blocking and streaming responses with step events and token streaming through graph-based processing.
 - Conversation Management: Session persistence and optional summarization for graph state management.
 - Models and Configuration: Typed state, citations, database models, and runtime settings for graph orchestration.
-- **Updated** Answer Contract System: Implements strict answer contract for grounded inference, enforcing document-grounded facts vs model inference distinction and entity-specific fact restrictions for the local qwen3.5:9b model.
+- **Updated** Answer Contract System: Implements strict answer contract for grounded inference, enforcing document-grounded facts vs model inference distinction and entity-specific fact restrictions for the local qwen3.5:9b model with systematic source numbering [1], [2], etc.
 
-**Updated** The RagPipeline class now serves as a supporting service providing ingestion capabilities and underlying components for the graph-based query processing system, with all query processing handled centrally through the LangGraph StateGraph. The answer contract system ensures confidential local documents remain the primary source of truth while enabling assistant-like behavior.
+**Updated** The RagPipeline class now serves as a supporting service providing ingestion capabilities and underlying components for the graph-based query processing system, with all query processing handled centrally through the LangGraph StateGraph. The answer contract system ensures confidential local documents remain the primary source of truth while enabling assistant-like behavior through precise citation management and numbered source labels.
 
 **Section sources**
 - [hybrid_retriever.py:14-145](file://safe4ai-pilot/app/components/hybrid_retriever.py#L14-L145)
@@ -490,11 +491,16 @@ The answer contract is enforced through a comprehensive v2 rag_answer prompt tem
 - Avoid "the statement is false" unless the user is explicitly checking a claim
 - Not force fixed headings - allow conversational responses when inference is not needed
 
+**Updated** The rag_answer v2 template now includes systematic source numbering [1], [2], etc. for precise citation management and improved answer quality. The template enforces six specific rules that govern answer construction and citation practices.
+
 ### Context Packing Improvements
 Generation context is formatted with stable source labels for cleaner model anchoring:
-- Format: `[S1] Business-AI-Alliance-New-Joiner-Welcome-Pack-November-2025.pdf p.2`
+- Format: `[1] filename p.page_number`, `[2] filename p.page_number`, etc.
 - Preserves existing UI citation list functionality
 - Enables precise source attribution for grounded responses
+- Aligns numbered source labels with citation chips in the frontend
+
+**Updated** The context packing system now systematically numbers sources [1], [2], [3], etc. to match the citation chips rendered in the frontend interface. This creates a seamless experience where users can click on citation chips to see the corresponding numbered source in the generation context.
 
 ### Lightweight Output Guard
 Additional enforcement through output filtering:
@@ -510,6 +516,8 @@ Additional enforcement through output filtering:
 - `app/agents/adaptive_router.py` maintains deterministic routing for local model performance
 - `app/agents/document_grader.py` preserves score-only grading when rerank_threshold is set
 
+**Updated** The answer contract system now includes comprehensive testing through `tests/test_agents.py` which validates that the rag_answer v2 template contains inference labeling instructions and forbidden entity-specific categories. The testing confirms proper enforcement of the six specific rules governing answer construction.
+
 **Section sources**
 - [2026-06-03-rag-grounded-inference-design.md:38-185](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md#L38-L185)
 - [templates.py:58-121](file://safe4ai-pilot/app/prompts/templates.py#L58-L121)
@@ -517,6 +525,7 @@ Additional enforcement through output filtering:
 - [output_filter.py:17-110](file://safe4ai-pilot/app/security/output_filter.py#L17-L110)
 - [adaptive_router.py:6-18](file://safe4ai-pilot/app/agents/adaptive_router.py#L6-L18)
 - [document_grader.py:17-72](file://safe4ai-pilot/app/agents/document_grader.py#L17-L72)
+- [test_agents.py:489-501](file://safe4ai-pilot/tests/test_agents.py#L489-L501)
 
 ## Dependency Analysis
 Key dependencies and relationships:
@@ -591,6 +600,7 @@ CONTRACT --> OF
 - **Updated** Graph execution: The LangGraph system provides efficient state management and node execution, reducing overhead compared to direct method calls.
 - **Updated** Answer contract performance: The rag_answer v2 prompt is designed to be explicit but compact, avoiding additional LLM calls that could slow the local qwen3.5:9b model.
 - **Updated** Output guard efficiency: Lightweight inference labeling checks only trigger when inference language is detected, minimizing processing overhead.
+- **Updated** Source numbering efficiency: The systematic [1], [2], etc. numbering system reduces citation parsing overhead and improves model grounding performance.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -606,6 +616,8 @@ Common issues and resolutions:
 - **Updated** Answer contract violations: Monitor OutputFilter "inference answer missing required disclaimer" errors and verify rag_answer v2 prompt is being used.
 - **Updated** Entity-specific fact issues: Ensure answers don't fill headquarters, founders, addresses, websites, dates, counts, prices, or policy commitments without direct document support.
 - **Updated** Performance degradation: Verify answer contract implementation isn't causing excessive prompt length; monitor local model response times.
+- **Updated** Citation numbering issues: Verify that source labels [1], [2], etc. are properly formatted in the generation context and align with frontend citation chips.
+- **Updated** Template validation failures: Check that rag_answer v2 template contains required inference labeling instructions and forbidden category mentions.
 
 **Section sources**
 - [rag_pipeline.py:160-161](file://safe4ai-pilot/app/services/rag_pipeline.py#L160-L161)
@@ -614,14 +626,14 @@ Common issues and resolutions:
 - [output_filter.py:52-59](file://safe4ai-pilot/app/security/output_filter.py#L52-L59)
 
 ## Conclusion
-The RAG pipeline integrates hybrid retrieval, reranking, adaptive routing, and safety guards to deliver reliable, auditable, and secure answers through a centralized LangGraph system. The graph-based architecture enables transparent, user-friendly interactions with streaming interfaces and structured state management. The enhanced PII redaction approach ensures comprehensive content protection while maintaining system performance and audit capabilities. The new grounded inference answer contract system establishes a strict framework for the local qwen3.5:9b model, ensuring confidential local documents remain the primary source of truth while enabling useful assistant-like behavior through clear distinction between document-grounded facts and model inference. Proper tuning of chunking, rerank thresholds, and hybrid fusion yields robust performance, while guards ensure content safety and compliance. The elimination of direct query() methods in favor of graph-centric processing provides better maintainability and scalability.
+The RAG pipeline integrates hybrid retrieval, reranking, adaptive routing, and safety guards to deliver reliable, auditable, and secure answers through a centralized LangGraph system. The graph-based architecture enables transparent, user-friendly interactions with streaming interfaces and structured state management. The enhanced PII redaction approach ensures comprehensive content protection while maintaining system performance and audit capabilities. The new grounded inference answer contract system establishes a strict framework for the local qwen3.5:9b model, ensuring confidential local documents remain the primary source of truth while enabling useful assistant-like behavior through clear distinction between document-grounded facts and model inference. The systematic source numbering [1], [2], etc. provides precise citation management and improved answer quality. Proper tuning of chunking, rerank thresholds, and hybrid fusion yields robust performance, while guards ensure content safety and compliance. The elimination of direct query() methods in favor of graph-centric processing provides better maintainability and scalability.
 
 ## Appendices
 
 ### Practical Configuration Examples
 - Runtime settings: Configure Ollama URL/model, Qdrant URL, embedding model, and semantic cache threshold via environment variables.
 - **Updated** PII redaction configuration: Enable the redact_pii setting to activate the enhanced redaction approach during document ingestion.
-- **Updated** Answer contract configuration: The rag_answer v2 template is automatically used by the graph system for grounded responses.
+- **Updated** Answer contract configuration: The rag_answer v2 template is automatically used by the graph system for grounded responses with systematic source numbering.
 - Upload handling: Set maximum upload size and retention policies for audit logs and semantic cache.
 - Frontend integration: Use streaming endpoints to render step progress and answer tokens through the graph system.
 
@@ -719,16 +731,18 @@ USERS ||--o{ HUMAN_REVIEW_QUEUE : "queues"
 ### Grounded Inference Implementation Details
 **Updated** The answer contract system provides strict enforcement of document-grounded responses:
 
-- **Contract Enforcement**: rag_answer v2 template enforces three-tier answer structure
-- **Source Labeling**: Stable [1], [2], etc. labels for precise citation tracking
+- **Contract Enforcement**: rag_answer v2 template enforces three-tier answer structure with six specific rules
+- **Source Labeling**: Systematic [1], [2], etc. labels for precise citation tracking and model grounding
 - **Inference Guard**: OutputFilter detects and blocks inference without proper disclaimers
 - **Entity Restrictions**: Prevents filling of entity-specific facts from pretraining
 - **Performance Optimization**: Compact contract design avoids additional LLM calls
+- **Testing Validation**: Comprehensive test coverage ensures proper template enforcement
 
 **Section sources**
 - [2026-06-03-rag-grounded-inference-design.md:38-185](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md#L38-L185)
 - [templates.py:58-121](file://safe4ai-pilot/app/prompts/templates.py#L58-L121)
 - [output_filter.py:17-110](file://safe4ai-pilot/app/security/output_filter.py#L17-L110)
+- [test_agents.py:489-501](file://safe4ai-pilot/tests/test_agents.py#L489-L501)
 
 ### Graph-Based Query Processing Flow
 **Updated** The query processing flow now operates entirely through the LangGraph system with answer contract enforcement:
@@ -736,7 +750,7 @@ USERS ||--o{ HUMAN_REVIEW_QUEUE : "queues"
 - **Initialization**: Chat routes create PrivateAIState with initial messages and session context
 - **Graph Execution**: The StateGraph processes queries through specialized nodes (intake, rewrite, retrieve, grade, decompose, generate, output_filter, quality_gate)
 - **State Management**: Each node updates the state with intermediate results and context
-- **Answer Contract**: The generate node uses rag_answer v2 template with answer contract enforcement
+- **Answer Contract**: The generate node uses rag_answer v2 template with answer contract enforcement and systematic source numbering
 - **Streaming**: Nodes emit step events and final results through SSE streaming
 - **Finalization**: Conversation manager persists state and final results
 

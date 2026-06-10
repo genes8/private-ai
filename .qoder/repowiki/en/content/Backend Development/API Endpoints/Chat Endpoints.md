@@ -18,15 +18,16 @@
 - [models.py (db)](file://safe4ai-pilot/app/db/models.py)
 - [cost_tracker.py](file://safe4ai-pilot/observability/cost_tracker.py)
 - [audit_cleanup.py](file://safe4ai-pilot/scripts/audit_cleanup.py)
+- [follow_ups.py](file://safe4ai-pilot/app/services/follow_ups.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Updated architecture overview to reflect centralized _prepare_chat_run preflight validation logic
-- Revised endpoint processing flows to show shared preflight validation through _prepare_chat_run
-- Added documentation for unified error handling and validation consistency
-- Updated streaming endpoint to show async vs strict post-processing modes with centralized finalization
-- Enhanced error handling documentation for centralized preflight validation failures
+- Added new session management endpoints: GET /chat/sessions and GET /chat/sessions/{id}/messages
+- Enhanced SSE done payload with deterministic follow-up suggestions built from citations
+- Improved session persistence with automatic summarization when conversation exceeds threshold
+- Updated architecture to support conversation history restoration and session listing
+- Enhanced error handling for session management operations
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -44,7 +45,10 @@
 This document provides comprehensive API documentation for the chat endpoints that power both synchronous and streaming interactions. It covers:
 - POST /chat: a blocking endpoint designed for evaluation scripts and tests
 - POST /chat/stream: a Server-Sent Events (SSE) endpoint for real-time streaming responses
-- Session management and conversation persistence
+- **New** GET /chat/sessions: lists a user's non-empty sessions with titles and metadata
+- **New** GET /chat/sessions/{id}/messages: restores conversation history from session state
+- Session management and conversation persistence with automatic summarization
+- Deterministic follow-up suggestions in SSE done payload
 - Trace ID tracking and observability
 - PrivateAIState model, citation handling, and semantic caching
 - Rate limiting, input validation, and security measures
@@ -52,12 +56,12 @@ This document provides comprehensive API documentation for the chat endpoints th
 - Centralized preflight validation through _prepare_chat_run helper function
 
 ## Project Structure
-The chat endpoints are implemented in the backend FastAPI application and consumed by the React frontend. The evaluation suite uses the blocking endpoint for automated scoring. All preflight validation operations are now centralized through the _prepare_chat_run helper function, eliminating code duplication between endpoints.
+The chat endpoints are implemented in the backend FastAPI application and consumed by the React frontend. The evaluation suite uses the blocking endpoint for automated scoring. All preflight validation operations are now centralized through the _prepare_chat_run helper function. **Updated** Session management now includes dedicated endpoints for browsing and restoring conversation history.
 
 ```mermaid
 graph TB
 subgraph "Backend"
-A["FastAPI App<br/>Routes: /chat, /chat/stream"]
+A["FastAPI App<br/>Routes: /chat, /chat/stream, /chat/sessions, /chat/sessions/{id}/messages"]
 B["Chat Routes<br/>chat_routes.py"]
 C["Chat Finalizer<br/>chat_finalizer.py"]
 D["Models<br/>models.py"]
@@ -69,19 +73,20 @@ I["Semantic Cache<br/>semantic_cache.py"]
 J["DB Models<br/>db/models.py"]
 K["Cost Tracker<br/>cost_tracker.py"]
 L["_prepare_chat_run<br/>Centralized Preflight"]
+M["Follow-up Suggestions<br/>follow_ups.py"]
 end
 subgraph "Frontend"
-M["SSE Client<br/>frontend/src/api/chat.ts"]
-N["React Hook<br/>frontend/src/hooks/useChat.ts"]
-O["UI Pipeline Steps<br/>frontend/src/components/chat/StreamingPipeline.tsx"]
+N["SSE Client<br/>frontend/src/api/chat.ts"]
+O["React Hook<br/>frontend/src/hooks/useChat.ts"]
+P["UI Pipeline Steps<br/>frontend/src/components/chat/StreamingPipeline.tsx"]
 end
 subgraph "Evaluation"
-P["Offline Evaluation<br/>evaluation/offline_eval.py"]
+Q["Offline Evaluation<br/>evaluation/offline_eval.py"]
 end
-M --> A
-N --> M
+N --> A
 O --> N
-P --> A
+P --> O
+Q --> A
 A --> B
 B --> L
 B --> C
@@ -92,6 +97,7 @@ B --> G
 B --> H
 B --> I
 B --> K
+B --> M
 E --> J
 ```
 
@@ -99,7 +105,7 @@ E --> J
 - [chat_routes.py:123-160](file://safe4ai-pilot/app/api/chat_routes.py#L123-L160)
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
 - [models.py:49-95](file://safe4ai-pilot/app/models.py#L49-L95)
-- [conversation.py:26-117](file://safe4ai-pilot/app/services/conversation.py#L26-L117)
+- [conversation.py:26-122](file://safe4ai-pilot/app/services/conversation.py#L26-L122)
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
 - [router.py:39-105](file://safe4ai-pilot/app/auth/router.py#L39-L105)
@@ -110,9 +116,10 @@ E --> J
 - [useChat.ts:30-93](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L30-L93)
 - [StreamingPipeline.tsx:13-29](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L13-L29)
 - [offline_eval.py:121-134](file://safe4ai-pilot/evaluation/offline_eval.py#L121-L134)
+- [follow_ups.py:15-31](file://safe4ai-pilot/app/services/follow_ups.py#L15-L31)
 
 **Section sources**
-- [chat_routes.py:1-361](file://safe4ai-pilot/app/api/chat_routes.py#L1-L361)
+- [chat_routes.py:1-462](file://safe4ai-pilot/app/api/chat_routes.py#L1-L462)
 - [chat_finalizer.py:1-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L1-L71)
 - [models.py:1-95](file://safe4ai-pilot/app/models.py#L1-L95)
 - [conversation.py:1-122](file://safe4ai-pilot/app/services/conversation.py#L1-L122)
@@ -126,13 +133,16 @@ E --> J
 - [useChat.ts:1-131](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L131)
 - [StreamingPipeline.tsx:1-30](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L1-L30)
 - [offline_eval.py:1-244](file://safe4ai-pilot/evaluation/offline_eval.py#L1-L244)
-- [test_chat.py:1-271](file://safe4ai-pilot/tests/test_chat.py#L1-L271)
+- [test_chat.py:1-462](file://safe4ai-pilot/tests/test_chat.py#L1-L462)
+- [follow_ups.py:1-31](file://safe4ai-pilot/app/services/follow_ups.py#L1-L31)
 
 ## Core Components
 - ChatRequest and ChatResponse define the shape of requests and synchronous responses.
 - PrivateAIState encapsulates conversation state, retrieval metadata, generation context, and observability fields.
-- ConversationManager handles session creation, loading, saving, and optional summarization.
+- ConversationManager handles session creation, loading, saving, and **Enhanced** automatic summarization of long conversations.
 - SSE streaming endpoint emits structured events for step transitions, token deltas, citations, and completion metadata.
+- **New** Session management endpoints provide programmatic access to conversation history.
+- **New** Deterministic follow-up suggestions are generated from cited documents in the SSE done payload.
 - Authentication middleware enforces JWT-based access and role checks.
 - Rate limiting is applied via SlowAPI decorators on endpoints.
 - InputGuard performs pre-processing and validation of user queries.
@@ -146,9 +156,11 @@ E --> J
 - [input_guard.py:24-49](file://safe4ai-pilot/app/security/input_guard.py#L24-L49)
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
 - [router.py:21-22](file://safe4ai-pilot/app/auth/router.py#L21-L22)
+- [chat_routes.py:407-462](file://safe4ai-pilot/app/api/chat_routes.py#L407-L462)
+- [follow_ups.py:15-31](file://safe4ai-pilot/app/services/follow_ups.py#L15-L31)
 
 ## Architecture Overview
-The chat system orchestrates authentication, centralized preflight validation, session resolution, graph execution, and unified post-processing. The _prepare_chat_run helper function centralizes validation logic, eliminating code duplication between /chat and /chat/stream endpoints. The SSE endpoint streams intermediate steps and final tokens, while the blocking endpoint returns a single aggregated response. Both endpoints now share the same preflight validation logic.
+The chat system orchestrates authentication, centralized preflight validation, session resolution, graph execution, and unified post-processing. The _prepare_chat_run helper function centralizes validation logic, eliminating code duplication between endpoints. The SSE endpoint streams intermediate steps and final tokens, while the blocking endpoint returns a single aggregated response. Both endpoints now share the same preflight validation logic. **Updated** Session management endpoints provide RESTful access to conversation history, enabling users to browse and restore previous conversations.
 
 ```mermaid
 sequenceDiagram
@@ -160,7 +172,7 @@ participant Conv as "ConversationManager"
 participant Graph as "LangGraph"
 participant Finalizer as "Chat Finalizer"
 participant DB as "DB Sessions"
-Client->>Auth : "POST /chat or /chat/stream"
+Client->>Auth : "POST /chat, /chat/stream, GET /chat/sessions, GET /chat/sessions/{id}/messages"
 Auth-->>Client : "401 if missing/invalid token"
 Auth->>Routes : "Authenticated request"
 Routes->>Preflight : "Validate question + quotas"
@@ -178,7 +190,7 @@ Routes-->>Client : "ChatResponse"
 else Streaming endpoint
 Routes->>Finalizer : "finalize_chat_run(final, usage, costs)"
 Note over Routes,Finalizer : "Async mode : run in background task"
-Routes-->>Client : "SSE stream"
+Routes-->>Client : "SSE stream with follow-ups"
 Routes->>Finalizer : "Post-processing completes asynchronously"
 end
 ```
@@ -281,7 +293,7 @@ Purpose: Streams real-time updates using Server-Sent Events for step transitions
   - event: cite
     - data: { id: string, file: string, page: number, score: number, excerpt: string }
   - event: done
-    - data: { traceId: string, latencyMs: number, cache: boolean, model: string, kRetrieved: number, sessionId: string, error?: string }
+    - data: { traceId: string, latencyMs: number, cache: boolean, model: string, kRetrieved: number, sessionId: string, error?: string, followUps: string[] }
 
 **Updated Client-Side Handling (Frontend):**
 - Uses fetch with credentials and SSE parsing
@@ -289,6 +301,7 @@ Purpose: Streams real-time updates using Server-Sent Events for step transitions
 - Updates citations and final trust metrics upon done
 - Supports AbortController for cancellation
 - **Enhanced error handling for post-processing failures**
+- **New** Processes deterministic follow-up suggestions from the done event
 
 ```mermaid
 sequenceDiagram
@@ -311,7 +324,7 @@ Routes-->>FE : "SSE token events (delayed)"
 Routes-->>FE : "SSE cite events"
 Routes->>Finalizer : "finalize_chat_run()"
 Note over Routes,Finalizer : "Async mode : run in background task"
-Routes-->>FE : "SSE done event"
+Routes-->>FE : "SSE done event with follow-ups"
 Finalizer->>Finalizer : "post-processing completes asynchronously"
 ```
 
@@ -328,6 +341,50 @@ Finalizer->>Finalizer : "post-processing completes asynchronously"
 - [chat.ts:1-103](file://safe4ai-pilot/frontend/src/api/chat.ts#L1-L103)
 - [useChat.ts:1-131](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L131)
 - [StreamingPipeline.tsx:1-30](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L1-L30)
+
+### GET /chat/sessions (Session Listing)
+**New Section** - Lists a user's non-empty sessions with titles and metadata for sidebar navigation.
+
+- Endpoint: GET /chat/sessions
+- Authentication: Required via JWT cookie
+- Rate Limit: 100 per minute
+- Query Parameters:
+  - limit: integer (default 30, min 1, max 100)
+- Response: array of SessionSummary
+  - session_id: string
+  - title: string (first user message content, truncated to 80 chars)
+  - updated_at: datetime | null
+  - message_count: integer
+- Behavior:
+  - Returns only sessions with actual messages (non-empty)
+  - Orders by most recently updated first
+  - Limits results by the limit parameter
+
+**Section sources**
+- [chat_routes.py:407-442](file://safe4ai-pilot/app/api/chat_routes.py#L407-L442)
+- [test_chat.py:410-430](file://safe4ai-pilot/tests/test_chat.py#L410-L430)
+
+### GET /chat/sessions/{session_id}/messages (Session Restoration)
+**New Section** - Restores conversation history from a specific session for resuming discussions.
+
+- Endpoint: GET /chat/sessions/{session_id}/messages
+- Authentication: Required via JWT cookie
+- Rate Limit: 100 per minute
+- Path Parameters:
+  - session_id: string (UUID format)
+- Response: SessionMessagesResponse
+  - session_id: string
+  - messages: array of SessionMessage
+    - role: string ("user" | "assistant")
+    - content: string
+- Behavior:
+  - Returns only owned sessions (404 for missing or foreign sessions)
+  - Excludes system messages from restored history
+  - Filters to user and assistant messages only
+
+**Section sources**
+- [chat_routes.py:443-462](file://safe4ai-pilot/app/api/chat_routes.py#L443-L462)
+- [test_chat.py:432-462](file://safe4ai-pilot/tests/test_chat.py#L432-L462)
 
 ### Centralized Preflight Validation with _prepare_chat_run
 **New Section** - The _prepare_chat_run helper function centralizes preflight validation logic for both chat endpoints.
@@ -365,8 +422,11 @@ Finalizer->>Finalizer : "post-processing completes asynchronously"
   - load_session retrieves and reconstructs PrivateAIState from stored JSON
 - Session Saving:
   - **Updated** Now handled centrally through chat_finalizer during post-processing
+  - **Enhanced** Automatic summarization when conversation exceeds threshold
 - Optional Summarization:
-  - maybe_summarize can summarize long histories using an external model
+  - **New** maybe_summarize can automatically summarize long histories using an external model
+  - Threshold: 10 messages triggers summarization
+  - Preserves recent messages while replacing older conversation with summary
 - Frontend Session Tracking:
   - The done event supplies sessionId; the hook stores it for subsequent requests
 
@@ -375,8 +435,11 @@ flowchart TD
 Start(["Start"]) --> NewOrLoad{"Has session_id?"}
 NewOrLoad --> |Yes| Load["load_session(session_id)"]
 NewOrLoad --> |No| Create["new_session(user_id)"]
-Load --> RunState["Build run_state with trace_id"]
-Create --> RunState
+Load --> CheckSize{"Message count > 10?"}
+Create --> RunState["Build run_state with trace_id"]
+CheckSize --> |Yes| Summarize["maybe_summarize()"]
+CheckSize --> |No| RunState
+Summarize --> RunState
 RunState --> GraphExec["graph.ainvoke/astream"]
 GraphExec --> PostProcess["finalize_chat_run()"]
 PostProcess --> Save["save_session(final)"]
@@ -387,11 +450,36 @@ Save --> End(["End"])
 - [chat_routes.py:75-91](file://safe4ai-pilot/app/api/chat_routes.py#L75-L91)
 - [chat_finalizer.py:27-36](file://safe4ai-pilot/app/services/chat_finalizer.py#L27-L36)
 - [conversation.py:30-69](file://safe4ai-pilot/app/services/conversation.py#L30-L69)
+- [conversation.py:75-122](file://safe4ai-pilot/app/services/conversation.py#L75-L122)
 
 **Section sources**
 - [conversation.py:26-122](file://safe4ai-pilot/app/services/conversation.py#L26-L122)
 - [models.py (db):65-73](file://safe4ai-pilot/app/db/models.py#L65-L73)
 - [useChat.ts:76-82](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L76-L82)
+
+### Deterministic Follow-Up Suggestions
+**New Section** - Generates contextual follow-up questions from cited documents without additional LLM calls.
+
+#### Functionality
+- **Template-Based Generation**: Creates suggestions from actual cited documents
+- **Deterministic Output**: No hallucinations, always returns valid suggestions
+- **Contextual Relevance**: Suggestions reference the specific documents that provided answers
+- **Limit Control**: Maximum 3 suggestions per response
+
+#### Generation Logic
+1. **Empty Check**: Returns empty array when no citations exist
+2. **Unique Document Extraction**: Identifies distinct filenames from citations
+3. **Template Application**: Applies predefined templates to document names
+4. **Limit Enforcement**: Caps at 3 suggestions maximum
+
+#### SSE Integration
+- **Enhanced Done Payload**: Includes "followUps" array in SSE done event
+- **Frontend Usage**: Enables contextual suggestion UI in chat interfaces
+- **User Experience**: Provides natural conversation continuation options
+
+**Section sources**
+- [follow_ups.py:15-31](file://safe4ai-pilot/app/services/follow_ups.py#L15-L31)
+- [chat_routes.py:358-366](file://safe4ai-pilot/app/api/chat_routes.py#L358-L366)
 
 ### PrivateAIState Model
 PrivateAIState captures the conversation state and pipeline metadata. Key fields include:
@@ -468,10 +556,12 @@ RetrievedChunk <|-- RankedChunk
 - During streaming, the server emits cite events with id, file, page, and score.
 - The frontend accumulates citations into the assistant message.
 - The blocking endpoint returns a citations array in ChatResponse.
+- **Enhanced** SSE done payload includes deterministic follow-up suggestions derived from citations.
 
 **Section sources**
 - [chat_routes.py:287-294](file://safe4ai-pilot/app/api/chat_routes.py#L287-L294)
 - [useChat.ts:72-75](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L72-L75)
+- [chat_routes.py:358-366](file://safe4ai-pilot/app/api/chat_routes.py#L358-L366)
 
 ### Caching Mechanisms
 - Semantic Cache:
@@ -490,7 +580,10 @@ RetrievedChunk <|-- RankedChunk
 
 ### Rate Limiting, Input Validation, and Security
 - Rate Limiting:
-  - Both endpoints apply 30/minute rate limiting via decorator
+  - POST /chat: 30/minute
+  - POST /chat/stream: 30/minute
+  - **New** GET /chat/sessions: 100/minute
+  - **New** GET /chat/sessions/{id}/messages: 100/minute
 - Input Validation:
   - Empty question rejected with 422
   - Max length enforced at 2048 characters
@@ -507,6 +600,8 @@ RetrievedChunk <|-- RankedChunk
 **Section sources**
 - [chat_routes.py:170](file://safe4ai-pilot/app/api/chat_routes.py#L170)
 - [chat_routes.py:224](file://safe4ai-pilot/app/api/chat_routes.py#L224)
+- [chat_routes.py:409](file://safe4ai-pilot/app/api/chat_routes.py#L409)
+- [chat_routes.py:445](file://safe4ai-pilot/app/api/chat_routes.py#L445)
 - [chat_routes.py:135-136](file://safe4ai-pilot/app/api/chat_routes.py#L135-L136)
 - [input_guard.py:27-48](file://safe4ai-pilot/app/security/input_guard.py#L27-L48)
 - [middleware.py:51-71](file://safe4ai-pilot/app/auth/middleware.py#L51-L71)
@@ -525,6 +620,9 @@ RetrievedChunk <|-- RankedChunk
   - Maintains step state UI and accumulates tokens into the assistant message
 - Trust Metrics:
   - Extracts latencyMs, cache, model, kRetrieved, and sessionId from done event
+- **New** Follow-up Suggestions:
+  - Processes the followUps array from SSE done event
+  - Integrates with chat interface for contextual suggestions
 
 **Section sources**
 - [chat.ts:21-103](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L103)
@@ -566,6 +664,7 @@ Key dependencies and their roles:
   - LangGraph for pipeline execution
   - **Updated** _prepare_chat_run for centralized preflight validation
   - **Updated** chat_finalizer for centralized post-processing
+  - **New** follow_ups service for deterministic suggestions
 - Frontend depends on:
   - SSE client for streaming
   - React hook for state orchestration
@@ -581,6 +680,7 @@ CR --> SC["services/semantic_cache.py"]
 CR --> PF["_prepare_chat_run"]
 CR --> CF["services/chat_finalizer.py"]
 CR --> CT["observability/cost_tracker.py"]
+CR --> FS["services/follow_ups.py"]
 CM --> DBM["db/models.py"]
 FE["frontend/src/api/chat.ts"] --> CR
 HC["frontend/src/hooks/useChat.ts"] --> FE
@@ -600,9 +700,10 @@ UI["frontend/src/components/chat/StreamingPipeline.tsx"] --> HC
 - [chat.ts:1-3](file://safe4ai-pilot/frontend/src/api/chat.ts#L1-L3)
 - [useChat.ts:1-4](file://safe4ai-pilot/frontend/src/hooks/useChat.ts#L1-L4)
 - [StreamingPipeline.tsx:1-3](file://safe4ai-pilot/frontend/src/components/chat/StreamingPipeline.tsx#L1-L3)
+- [follow_ups.py:1-31](file://safe4ai-pilot/app/services/follow_ups.py#L1-L31)
 
 **Section sources**
-- [chat_routes.py:1-361](file://safe4ai-pilot/app/api/chat_routes.py#L1-L361)
+- [chat_routes.py:1-462](file://safe4ai-pilot/app/api/chat_routes.py#L1-L462)
 - [chat_finalizer.py:1-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L1-L71)
 - [conversation.py:1-17](file://safe4ai-pilot/app/services/conversation.py#L1-L17)
 - [models.py (db):65-73](file://safe4ai-pilot/app/db/models.py#L65-L73)
@@ -615,10 +716,11 @@ UI["frontend/src/components/chat/StreamingPipeline.tsx"] --> HC
   - Tokens are emitted with a small delay to simulate streaming and reduce client overload
 - Session Size Limits:
   - Hard limit on session state JSON size; consider summarizing long histories
+  - **New** Automatic summarization triggers at 10+ messages threshold
 - Embedding and Vector Operations:
   - Semantic cache reduces repeated embedding work and improves latency
 - Rate Limiting:
-  - Prevents abuse; tune thresholds according to infrastructure capacity
+  - Prevents abuse; tuned differently for session management endpoints
 - **Updated Pre-flight Validation Performance**:
   - **Centralized validation**: Eliminates code duplication and reduces maintenance overhead
   - **Consistent error handling**: Standardized HTTPException responses across endpoints
@@ -634,6 +736,7 @@ Common issues and resolutions:
 - 422 Unprocessable Entity:
   - Verify question is non-empty and under 2048 characters
   - **Updated**: Check _prepare_chat_run validation for empty questions
+  - **New**: Session ID validation for UUID format
 - 503 Service Unavailable:
   - Confirm the AI pipeline graph is initialized on the application state
   - **Updated**: Verify _prepare_chat_run graph availability check
@@ -648,6 +751,13 @@ Common issues and resolutions:
   - **Async mode failures**: Check background task execution and database connectivity
   - **Strict mode failures**: Review finalize_chat_run() transaction logs
   - **Audit/Cost recording failures**: Verify database permissions and transaction integrity
+- **New Session Management Issues**:
+  - **Limit validation**: Ensure limit parameter is between 1 and 100
+  - **Foreign session access**: 404 responses for sessions owned by other users
+  - **Empty session filtering**: Non-empty sessions only in listing endpoint
+- **New Automatic Summarization Issues**:
+  - **Threshold trigger**: Summarization activates at 10+ messages
+  - **Fallback behavior**: Truncation to recent messages if summarization fails
 - SSE Parsing Errors:
   - The client logs malformed events and continues; check network interruptions
 - Session Persistence Failures:
@@ -660,9 +770,18 @@ Common issues and resolutions:
 - [chat_finalizer.py:379-384](file://safe4ai-pilot/app/services/chat_finalizer.py#L379-L384)
 - [chat.ts:64-71](file://safe4ai-pilot/frontend/src/api/chat.ts#L64-L71)
 - [conversation.py:63-67](file://safe4ai-pilot/app/services/conversation.py#L63-L67)
+- [conversation.py:75-122](file://safe4ai-pilot/app/services/conversation.py#L75-L122)
 
 ## Conclusion
 The chat endpoints provide a robust foundation for both synchronous evaluation and interactive streaming experiences. They integrate authentication, centralized preflight validation, session persistence, observability, and security measures while offering flexible client-side consumption patterns. The centralized _prepare_chat_run approach ensures consistent validation logic across both streaming and blocking endpoints, with unified error handling and standardized HTTPException responses. The SSE stream enables rich UX with step progress and incremental token delivery, while the blocking endpoint remains ideal for automated workflows. The centralized chat_finalizer approach ensures consistent post-processing across both streaming and blocking endpoints, with unified audit logging, cost recording, and session management.
+
+**New Features**:
+- **Session Management**: RESTful endpoints for browsing and restoring conversation history
+- **Automatic Summarization**: Intelligent conversation management for long discussions
+- **Deterministic Follow-ups**: Contextual suggestions derived from cited documents
+- **Enhanced SSE Payload**: Richer done event with actionable suggestions
+
+These enhancements significantly improve the user experience by providing better conversation continuity, intelligent assistance, and streamlined session management capabilities.
 
 ## Appendices
 
@@ -704,7 +823,7 @@ The chat endpoints provide a robust foundation for both synchronous evaluation a
     - step: { name, state, t }
     - token: { delta }
     - cite: { id, file, page, score, excerpt }
-    - done: { traceId, latencyMs, cache, model, kRetrieved, sessionId, error? }
+    - done: { traceId, latencyMs, cache, model, kRetrieved, sessionId, error?, followUps: string[] }
 - Status Codes:
   - 200 OK (stream)
   - 401 Unauthorized
@@ -716,6 +835,46 @@ The chat endpoints provide a robust foundation for both synchronous evaluation a
 - [chat_routes.py:224-360](file://safe4ai-pilot/app/api/chat_routes.py#L224-L360)
 - [chat.ts:14-19](file://safe4ai-pilot/frontend/src/api/chat.ts#L14-L19)
 
+### API Reference: GET /chat/sessions
+- Method: GET
+- Path: /chat/sessions
+- Authentication: Required (JWT cookie)
+- Rate Limit: 100 per minute
+- Query Parameters:
+  - limit: integer (default 30, min 1, max 100)
+- Response: array of SessionSummary
+  - session_id: string
+  - title: string
+  - updated_at: datetime | null
+  - message_count: integer
+- Status Codes:
+  - 200 OK
+  - 401 Unauthorized
+  - 422 Unprocessable Entity
+
+**Section sources**
+- [chat_routes.py:407-442](file://safe4ai-pilot/app/api/chat_routes.py#L407-L442)
+
+### API Reference: GET /chat/sessions/{session_id}/messages
+- Method: GET
+- Path: /chat/sessions/{session_id}/messages
+- Authentication: Required (JWT cookie)
+- Rate Limit: 100 per minute
+- Path Parameters:
+  - session_id: string (UUID format)
+- Response: SessionMessagesResponse
+  - session_id: string
+  - messages: array of SessionMessage
+    - role: string ("user" | "assistant")
+    - content: string
+- Status Codes:
+  - 200 OK
+  - 401 Unauthorized
+  - 404 Not Found
+
+**Section sources**
+- [chat_routes.py:443-462](file://safe4ai-pilot/app/api/chat_routes.py#L443-L462)
+
 ### Client-Side SSE Handling Checklist
 - Initialize fetch with credentials and AbortController
 - Parse event lines and handle malformed data
@@ -723,6 +882,7 @@ The chat endpoints provide a robust foundation for both synchronous evaluation a
 - Persist sessionId from done event for subsequent requests
 - Handle error events and surface user-friendly messages
 - **Monitor post-processing completion in async mode**
+- **Process follow-up suggestions from done event**
 
 **Section sources**
 - [chat.ts:21-103](file://safe4ai-pilot/frontend/src/api/chat.ts#L21-L103)
@@ -775,3 +935,53 @@ The chat endpoints provide a robust foundation for both synchronous evaluation a
 - [chat_finalizer.py:14-71](file://safe4ai-pilot/app/services/chat_finalizer.py#L14-L71)
 - [chat_routes.py:313-360](file://safe4ai-pilot/app/api/chat_routes.py#L313-L360)
 - [chat_routes.py:196-216](file://safe4ai-pilot/app/api/chat_routes.py#L196-L216)
+
+### Automatic Conversation Summarization
+**New Section** - Understanding the automatic summarization feature and its benefits.
+
+#### Benefits
+- **Memory Management**: Prevents unbounded session growth
+- **Performance Optimization**: Reduces storage and processing overhead
+- **User Experience**: Maintains conversational context while managing size
+- **Intelligent Preservation**: Keeps recent context while summarizing older history
+
+#### Implementation Details
+- **Trigger Threshold**: Activates when message count exceeds 10
+- **Summarization Process**: Uses external model to create concise conversation summary
+- **Fallback Behavior**: Truncates to recent messages if summarization fails
+- **Preservation Strategy**: Maintains recent 9 messages plus summary for context
+
+#### Operation Flow
+1. **Count Check**: Evaluate message count in conversation
+2. **Threshold Evaluation**: Compare against 10-message threshold
+3. **Summarization Attempt**: Generate summary using external model
+4. **Fallback Handling**: Truncate to recent messages if needed
+5. **State Update**: Replace old conversation with summary plus recent messages
+
+**Section sources**
+- [conversation.py:75-122](file://safe4ai-pilot/app/services/conversation.py#L75-L122)
+- [conversation.py:17](file://safe4ai-pilot/app/services/conversation.py#L17)
+
+### Deterministic Follow-up Suggestions Architecture
+**New Section** - Understanding the follow-up suggestions system and its benefits.
+
+#### Benefits
+- **Contextual Relevance**: Suggestions directly reference cited documents
+- **No Additional Cost**: Template-based generation avoids extra LLM calls
+- **Predictable Output**: Consistent, non-hallucinating suggestions
+- **User Guidance**: Natural conversation continuation points
+
+#### Generation Algorithm
+- **Citation Analysis**: Extract unique document filenames from citations
+- **Template Application**: Apply predefined templates to document names
+- **Suggestion Construction**: Create 1-3 contextually relevant questions
+- **Quality Control**: Ensure suggestions reference actual cited sources
+
+#### SSE Integration
+- **Payload Enhancement**: Adds followUps array to done event
+- **Frontend Consumption**: Enables contextual suggestion UI
+- **User Experience**: Provides natural conversation flow continuations
+
+**Section sources**
+- [follow_ups.py:15-31](file://safe4ai-pilot/app/services/follow_ups.py#L15-L31)
+- [chat_routes.py:358-366](file://safe4ai-pilot/app/api/chat_routes.py#L358-L366)

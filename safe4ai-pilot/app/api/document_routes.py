@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import uuid
 from pathlib import Path
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from sqlalchemy import func
 from sqlalchemy.orm import Query, Session
 
 from app.auth.middleware import get_current_user, require_role
@@ -18,6 +20,8 @@ from app.db import get_db
 from app.db.models import (
     Document,
     DocumentChunk,
+    DocumentVersion,
+    DocumentVersionStatus,
     IngestionJob,
     IngestionJobStatus,
     IngestionStatus,
@@ -56,7 +60,7 @@ async def _run_ingestion_task(
     filename: str,
     uploaded_by: str,
     retriever: Any,
-    activate_version: int | None = None,
+    document_version_id: str | None = None,
     cleanup_raw_path: str | None = None,
 ) -> None:
     async with _INGESTION_TASK_SEMAPHORE:
@@ -67,7 +71,7 @@ async def _run_ingestion_task(
             filename=filename,
             uploaded_by=uploaded_by,
             retriever=retriever,
-            activate_version=activate_version,
+            document_version_id=document_version_id,
             cleanup_raw_path=cleanup_raw_path,
         )
 
@@ -81,7 +85,7 @@ def _schedule_ingestion_task(
     filename: str,
     uploaded_by: str,
     retriever: Any,
-    activate_version: int | None = None,
+    document_version_id: str | None = None,
     cleanup_raw_path: str | None = None,
 ) -> None:
     task = asyncio.create_task(
@@ -92,7 +96,7 @@ def _schedule_ingestion_task(
             filename=filename,
             uploaded_by=uploaded_by,
             retriever=retriever,
-            activate_version=activate_version,
+            document_version_id=document_version_id,
             cleanup_raw_path=cleanup_raw_path,
         )
     )
@@ -130,6 +134,57 @@ def _lock_query(query: Query[Any]) -> Query[Any]:
     if callable(with_for_update):
         return with_for_update()
     return query
+
+
+def _document_active_version(db: Session, doc: Document) -> DocumentVersion | None:
+    active_version_id = getattr(doc, "active_version_id", None)
+    if not active_version_id:
+        return None
+    active = db.get(DocumentVersion, active_version_id)
+    if isinstance(active, DocumentVersion):
+        return active
+    return None
+
+
+def _document_filename(doc: Document, active_version: DocumentVersion | None) -> str:
+    return active_version.filename if active_version is not None else str(doc.filename)
+
+
+def _document_file_type(doc: Document, active_version: DocumentVersion | None) -> str:
+    return active_version.file_type if active_version is not None else str(doc.file_type)
+
+
+def _document_file_size(doc: Document, active_version: DocumentVersion | None) -> int | None:
+    if active_version is not None:
+        return active_version.file_size_bytes
+    return doc.file_size_bytes
+
+
+def _document_version_number(doc: Document, active_version: DocumentVersion | None) -> int:
+    if active_version is not None:
+        return int(active_version.version_number)
+    return int(doc.active_version or doc.version or 1)
+
+
+def _serialize_document_version(version: DocumentVersion) -> dict[str, Any]:
+    return {
+        "id": version.id,
+        "document_id": version.document_id,
+        "version_number": version.version_number,
+        "filename": version.filename,
+        "storage_filename": version.storage_filename,
+        "file_type": version.file_type,
+        "file_size_bytes": version.file_size_bytes,
+        "checksum": version.checksum,
+        "status": version.status,
+        "created_by": version.created_by,
+        "created_at": version.created_at,
+        "ingestion_started_at": version.ingestion_started_at,
+        "ingested_at": version.ingested_at,
+        "activated_at": version.activated_at,
+        "failed_at": version.failed_at,
+        "failed_reason": version.failed_reason,
+    }
 
 
 async def _read_upload_with_limit(file: UploadFile) -> bytes:
@@ -181,6 +236,7 @@ async def upload_document(
     storage_path.write_bytes(file_bytes)
 
     doc_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
 
     doc = Document(
@@ -191,9 +247,28 @@ async def upload_document(
         ingestion_status=IngestionStatus.queued,
         uploaded_by=current_user.id,
         file_size_bytes=len(file_bytes),
+        title=file.filename or storage_name,
     )
-    job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
+    version = DocumentVersion(
+        id=version_id,
+        document_id=doc_id,
+        version_number=1,
+        filename=file.filename or storage_name,
+        storage_filename=storage_name,
+        file_type=suffix.lstrip("."),
+        file_size_bytes=len(file_bytes),
+        checksum=hashlib.sha256(file_bytes).hexdigest(),
+        status=DocumentVersionStatus.pending,
+        created_by=current_user.id,
+    )
+    job = IngestionJob(
+        id=job_id,
+        document_id=doc_id,
+        document_version_id=version_id,
+        status=IngestionJobStatus.pending,
+    )
     db.add(doc)
+    db.add(version)
     db.add(job)
     try:
         db.commit()
@@ -212,9 +287,10 @@ async def upload_document(
         filename=file.filename or storage_name,
         uploaded_by=str(current_user.id),
         retriever=getattr(request.app.state, "retriever", None),
+        document_version_id=version_id,
     )
     logger.info("document_upload_queued", doc_id=doc_id, filename=file.filename)
-    return {"doc_id": doc_id, "job_id": job_id}
+    return {"doc_id": doc_id, "job_id": job_id, "document_version_id": version_id}
 
 
 @router.get("/admin/corpus-stats")
@@ -236,8 +312,6 @@ def list_documents(
     _admin: User = Depends(require_role("admin")),
 ) -> list[dict[str, Any]]:
     """List all documents with their ingestion status."""
-    from sqlalchemy import func
-
     chunk_count_sq = (
         db.query(DocumentChunk.document_id, func.count(DocumentChunk.id).label("cnt"))
         .group_by(DocumentChunk.document_id)
@@ -250,21 +324,26 @@ def list_documents(
         .order_by(Document.uploaded_at.desc())
         .all()
     )
-    return [
-        {
+    documents = []
+    for d, cnt, email in rows:
+        active_version = _document_active_version(db, d)
+        version_number = _document_version_number(d, active_version)
+        documents.append(
+            {
             "id": d.id,
-            "filename": d.filename,
-            "file_type": d.file_type,
+            "filename": _document_filename(d, active_version),
+            "file_type": _document_file_type(d, active_version),
             "ingestion_status": d.ingestion_status,
             "uploaded_at": d.uploaded_at,
             "uploaded_by_email": email,
-            "version": d.version,
-            "active_version": d.active_version,
+            "version": version_number,
+            "active_version": version_number,
+            "active_version_id": getattr(d, "active_version_id", None),
             "chunk_count": cnt,
-            "file_size_bytes": d.file_size_bytes,
-        }
-        for d, cnt, email in rows
-    ]
+            "file_size_bytes": _document_file_size(d, active_version),
+            }
+        )
+    return documents
 
 
 @router.get("/admin/documents/{doc_id}/status")
@@ -291,6 +370,7 @@ def get_document_status(
         "job_status": job.status if job else None,
         "job_error": job.error if job else None,
         "ingestion_started_at": doc.ingestion_started_at,
+        "active_version_id": getattr(doc, "active_version_id", None),
     }
 
 
@@ -313,8 +393,8 @@ def inspect_document(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    active_version = _document_active_version(db, doc)
     uploader = db.get(User, doc.uploaded_by) if doc.uploaded_by else None
-    from sqlalchemy import func
 
     chunk_count = (
         db.query(func.count(DocumentChunk.id))
@@ -340,14 +420,15 @@ def inspect_document(
     return {
         "document": {
             "id": doc.id,
-            "filename": doc.filename,
-            "file_type": doc.file_type,
+            "filename": _document_filename(doc, active_version),
+            "file_type": _document_file_type(doc, active_version),
             "ingestion_status": doc.ingestion_status,
             "uploaded_at": doc.uploaded_at,
             "uploaded_by_email": uploader.email if uploader else None,
-            "file_size_bytes": doc.file_size_bytes,
-            "version": doc.version,
-            "active_version": doc.active_version,
+            "file_size_bytes": _document_file_size(doc, active_version),
+            "version": _document_version_number(doc, active_version),
+            "active_version": _document_version_number(doc, active_version),
+            "active_version_id": getattr(doc, "active_version_id", None),
             "metadata": doc.doc_metadata,
         },
         "chunk_count": int(chunk_count),
@@ -369,6 +450,32 @@ def inspect_document(
             }
             for j in jobs
         ],
+    }
+
+
+@router.get("/admin/documents/{doc_id}/versions")
+@limiter.limit("100/minute")
+def list_document_versions(
+    request: Request,
+    doc_id: str,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Read-only version history for a logical document."""
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    versions = (
+        db.query(DocumentVersion)
+        .filter(DocumentVersion.document_id == doc_id)
+        .order_by(DocumentVersion.version_number.desc())
+        .all()
+    )
+    return {
+        "doc_id": doc_id,
+        "active_version_id": getattr(doc, "active_version_id", None),
+        "versions": [_serialize_document_version(version) for version in versions],
     }
 
 
@@ -442,8 +549,11 @@ async def reindex_document(
     doc = db.get(Document, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    active_version = _document_active_version(db, doc)
 
-    raw_path = _RAW_DIR / doc.storage_filename
+    raw_path = _RAW_DIR / (
+        active_version.storage_filename if active_version is not None else doc.storage_filename
+    )
     if not raw_path.exists():
         raise HTTPException(status_code=409, detail="Raw file not found; upload again")
 
@@ -463,7 +573,12 @@ async def reindex_document(
                 status_code=409,
                 detail="Document is currently being ingested. Wait for completion before reindexing.",  # noqa: E501
             )
-        job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
+        job = IngestionJob(
+            id=job_id,
+            document_id=doc_id,
+            document_version_id=active_version.id if active_version is not None else None,
+            status=IngestionJobStatus.pending,
+        )
         db.add(job)
         db.commit()
     except HTTPException:
@@ -491,8 +606,12 @@ async def reindex_document(
     try:
         invalidate_cache_for_document(db, doc_id, commit=False)
         db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
-        doc.version = (doc.version or 1) + 1
-        doc.active_version = doc.version
+        if active_version is not None:
+            active_version.status = DocumentVersionStatus.pending
+            active_version.ingestion_started_at = None
+            active_version.ingested_at = None
+            active_version.failed_at = None
+            active_version.failed_reason = None
         doc.ingestion_status = IngestionStatus.queued
         doc.ingestion_started_at = None
         db.commit()
@@ -505,9 +624,10 @@ async def reindex_document(
         doc_id=doc_id,
         job_id=job_id,
         file_path=str(raw_path),
-        filename=str(doc.filename),
+        filename=active_version.filename if active_version is not None else str(doc.filename),
         uploaded_by=str(current_user.id),
         retriever=retriever,
+        document_version_id=active_version.id if active_version is not None else None,
     )
     return {"job_id": job_id}
 
@@ -548,6 +668,7 @@ async def upload_new_version(
         )
 
     job_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
     old_storage_path = _RAW_DIR / str(doc.storage_filename)
     storage_name = validator.safe_filename() + suffix
     storage_path = _RAW_DIR / storage_name
@@ -567,15 +688,36 @@ async def upload_new_version(
                 detail="Document is currently being ingested. Wait for completion first.",
             )
         storage_path.write_bytes(file_bytes)
-        new_version = (doc.version or 1) + 1
-        doc.version = new_version
-        doc.filename = file.filename or storage_name
-        doc.storage_filename = storage_name
-        doc.file_type = suffix.lstrip(".")
-        doc.file_size_bytes = len(file_bytes)
+        latest_version = (
+            db.query(func.max(DocumentVersion.version_number))
+            .filter(DocumentVersion.document_id == doc_id)
+            .scalar()
+            or doc.version
+            or doc.active_version
+            or 1
+        )
+        new_version = int(latest_version) + 1
         doc.ingestion_status = IngestionStatus.queued
         doc.ingestion_started_at = None
-        job = IngestionJob(id=job_id, document_id=doc_id, status=IngestionJobStatus.pending)
+        version = DocumentVersion(
+            id=version_id,
+            document_id=doc_id,
+            version_number=new_version,
+            filename=file.filename or storage_name,
+            storage_filename=storage_name,
+            file_type=suffix.lstrip("."),
+            file_size_bytes=len(file_bytes),
+            checksum=hashlib.sha256(file_bytes).hexdigest(),
+            status=DocumentVersionStatus.pending,
+            created_by=current_user.id,
+        )
+        job = IngestionJob(
+            id=job_id,
+            document_id=doc_id,
+            document_version_id=version_id,
+            status=IngestionJobStatus.pending,
+        )
+        db.add(version)
         db.add(job)
         db.commit()
     except HTTPException:
@@ -593,16 +735,21 @@ async def upload_new_version(
         doc_id=doc_id,
         job_id=job_id,
         file_path=str(storage_path),
-        filename=str(doc.filename),
+        filename=file.filename or storage_name,
         uploaded_by=str(current_user.id),
         retriever=getattr(request.app.state, "retriever", None),
-        activate_version=new_version,
+        document_version_id=version_id,
         cleanup_raw_path=(
             str(old_storage_path) if old_storage_path != storage_path else None
         ),
     )
     logger.info("document_new_version_queued", doc_id=doc_id, version=new_version)
-    return {"doc_id": doc_id, "job_id": job_id, "version": new_version}
+    return {
+        "doc_id": doc_id,
+        "job_id": job_id,
+        "document_version_id": version_id,
+        "version": new_version,
+    }
 
 
 @router.get("/admin/documents/{doc_id}/verify-deletion")

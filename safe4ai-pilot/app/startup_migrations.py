@@ -29,6 +29,7 @@ _DELETED_USER_EMAIL = "deleted@redacted.local"
 def run_startup_migrations() -> None:
     """Run all boot-time schema fixes and sanity checks in order."""
     _ensure_documents_columns()
+    _ensure_document_version_schema()
     _ensure_user_columns()
     _ensure_document_foreign_keys()
     _ensure_agentrun_fk()
@@ -44,6 +45,13 @@ def _ensure_documents_columns() -> None:
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS active_version INTEGER DEFAULT 1",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS active_version_id TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS title TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS pending_version INTEGER",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS pending_filename TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS pending_storage_filename TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS pending_file_type TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS pending_file_size_bytes INTEGER",
     ]
     try:
         with engine.begin() as conn:
@@ -51,6 +59,163 @@ def _ensure_documents_columns() -> None:
                 conn.execute(text(statement))
     except Exception as exc:
         logger.warning("document_columns_ensure_failed", error=str(exc))
+
+
+def _ensure_document_version_schema() -> None:
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS document_versions (
+            id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            version_number INTEGER NOT NULL,
+            filename TEXT NOT NULL,
+            storage_filename TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            file_size_bytes INTEGER,
+            checksum TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_by TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
+                REFERENCES users(id) ON DELETE SET DEFAULT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            ingestion_started_at TIMESTAMPTZ,
+            ingested_at TIMESTAMPTZ,
+            activated_at TIMESTAMPTZ,
+            failed_at TIMESTAMPTZ,
+            failed_reason TEXT,
+            CONSTRAINT uq_document_versions_document_id_version_number
+                UNIQUE (document_id, version_number)
+        )
+        """,
+        "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS document_version_id TEXT",
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS document_version_id TEXT",
+        (
+            "CREATE INDEX IF NOT EXISTS ix_document_versions_document_id "
+            "ON document_versions(document_id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_document_chunks_document_version_id "
+            "ON document_chunks(document_version_id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_ingestion_jobs_document_version_id "
+            "ON ingestion_jobs(document_version_id)"
+        ),
+        """
+        INSERT INTO document_versions (
+            id,
+            document_id,
+            version_number,
+            filename,
+            storage_filename,
+            file_type,
+            file_size_bytes,
+            status,
+            created_by,
+            created_at,
+            ingested_at,
+            activated_at
+        )
+        SELECT
+            documents.id || ':v' || COALESCE(documents.active_version, documents.version, 1)::text,
+            documents.id,
+            COALESCE(documents.active_version, documents.version, 1),
+            documents.filename,
+            documents.storage_filename,
+            documents.file_type,
+            documents.file_size_bytes,
+            'active',
+            documents.uploaded_by,
+            documents.uploaded_at,
+            documents.uploaded_at,
+            documents.uploaded_at
+        FROM documents
+        WHERE NOT EXISTS (
+            SELECT 1 FROM document_versions
+            WHERE document_versions.document_id = documents.id
+        )
+        """,
+        """
+        UPDATE documents
+        SET active_version_id = document_versions.id,
+            title = COALESCE(documents.title, document_versions.filename)
+        FROM document_versions
+        WHERE document_versions.document_id = documents.id
+          AND document_versions.version_number =
+              COALESCE(documents.active_version, documents.version, 1)
+          AND documents.active_version_id IS NULL
+        """,
+        """
+        UPDATE document_chunks
+        SET document_version_id = document_versions.id
+        FROM document_versions
+        WHERE document_versions.document_id = document_chunks.document_id
+          AND document_versions.version_number = COALESCE(document_chunks.chunk_version, 1)
+          AND document_chunks.document_version_id IS NULL
+        """,
+        """
+        UPDATE ingestion_jobs
+        SET document_version_id = documents.active_version_id
+        FROM documents
+        WHERE ingestion_jobs.document_id = documents.id
+          AND ingestion_jobs.document_version_id IS NULL
+        """,
+        """
+        UPDATE documents
+        SET active_version_id = NULL
+        WHERE active_version_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM document_versions
+              WHERE document_versions.id = documents.active_version_id
+          )
+        """,
+        """
+        UPDATE document_chunks
+        SET document_version_id = NULL
+        WHERE document_version_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM document_versions
+              WHERE document_versions.id = document_chunks.document_version_id
+          )
+        """,
+        """
+        UPDATE ingestion_jobs
+        SET document_version_id = NULL
+        WHERE document_version_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM document_versions
+              WHERE document_versions.id = ingestion_jobs.document_version_id
+          )
+        """,
+        "ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_active_version_id_fkey",
+        (
+            "ALTER TABLE documents ADD CONSTRAINT documents_active_version_id_fkey "
+            "FOREIGN KEY (active_version_id) REFERENCES document_versions(id) ON DELETE SET NULL"
+        ),
+        (
+            "ALTER TABLE document_chunks DROP CONSTRAINT IF EXISTS "
+            "document_chunks_document_version_id_fkey"
+        ),
+        (
+            "ALTER TABLE document_chunks ADD CONSTRAINT document_chunks_document_version_id_fkey "
+            "FOREIGN KEY (document_version_id) REFERENCES document_versions(id) "
+            "ON DELETE SET NULL"
+        ),
+        (
+            "ALTER TABLE ingestion_jobs DROP CONSTRAINT IF EXISTS "
+            "ingestion_jobs_document_version_id_fkey"
+        ),
+        (
+            "ALTER TABLE ingestion_jobs ADD CONSTRAINT ingestion_jobs_document_version_id_fkey "
+            "FOREIGN KEY (document_version_id) REFERENCES document_versions(id) "
+            "ON DELETE SET NULL"
+        ),
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+    except Exception as exc:
+        logger.warning("document_version_schema_ensure_failed", error=str(exc))
 
 
 def _ensure_user_columns() -> None:
@@ -219,7 +384,7 @@ def _ensure_qdrant_collection() -> None:
 
 
 def _ensure_semantic_cache_dimension() -> None:
-    """Warn if the configured embedding model's dimension doesn't match the SemanticCache column (768)."""
+    """Warn if the configured embedding dimension does not match SemanticCache."""
     try:
         from app.services.runtime_config import expected_vector_size, load_runtime_config
 
@@ -232,7 +397,10 @@ def _ensure_semantic_cache_dimension() -> None:
                 embedding_model=runtime.embedding_model,
                 model_dimension=expected,
                 cache_column_dimension=768,
-                action="Cache similarity searches will fail — migrate the query_embedding column or switch to a 768-dim model",
+                action=(
+                    "Cache similarity searches will fail — migrate the query_embedding "
+                    "column or switch to a 768-dim model"
+                ),
             )
     except Exception as exc:
         logger.warning("semantic_cache_dimension_check_failed", error=str(exc))
@@ -243,7 +411,7 @@ def _warn_default_credentials() -> None:
 
     In enforce_https mode (production), block startup entirely.
     """
-    _DEFAULT_SECRET = "68d543ad135bb451bf0e0a26a7fa6cf5151cb1d0b0c6b1366d18f5543a93927e"
+    _DEFAULT_SECRET = "68d543ad135bb451bf0e0a26a7fa6cf5151cb1d0b0c6b1366d18f5543a93927e"  # noqa: S105
     _DEFAULT_PG_URL = "postgresql+psycopg2://safe4ai:safe4ai@"
     if settings.secret_key == _DEFAULT_SECRET:
         if settings.enforce_https:

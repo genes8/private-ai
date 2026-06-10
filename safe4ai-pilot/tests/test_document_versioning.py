@@ -6,19 +6,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.db.models import IngestionJob, IngestionStatus
+from app.db.models import DocumentVersionStatus, IngestionJob, IngestionStatus
 from app.services.document_service import (
     activate_document_version,
     cleanup_superseded_chunk_rows,
     delete_superseded_points,
+    flip_qdrant_active_version,
     verify_document_deletion,
 )
-from tests.test_admin import (
-    _close_and_return_task,
-    _make_admin_user,
-    _make_document,
-    _make_test_client,
-    _mock_db_with_admin,
+from tests.helpers.admin_routes import (
+    close_and_return_task,
+    make_admin_user,
+    make_document,
+    make_document_version,
+    make_test_client,
+    mock_db_with_admin,
 )
 
 # ---------------------------------------------------------------------------
@@ -29,7 +31,7 @@ from tests.test_admin import (
 def test_activate_sets_new_version_active_before_superseding_old() -> None:
     with patch("app.services.document_service.QdrantClient") as mock_client_cls:
         client = mock_client_cls.return_value
-        activate_document_version("doc-1", 3)
+        flip_qdrant_active_version("doc-1", 3, document_version_id="version-3")
 
     calls = client.set_payload.call_args_list
     assert len(calls) == 2
@@ -37,6 +39,11 @@ def test_activate_sets_new_version_active_before_superseding_old() -> None:
     assert calls[0].kwargs["payload"] == {"is_active": True}
     assert calls[1].kwargs["payload"]["is_active"] is False
     assert "superseded_at" in calls[1].kwargs["payload"]
+
+
+def test_activate_document_version_requires_db_lifecycle_arguments() -> None:
+    with pytest.raises(TypeError):
+        activate_document_version("doc-1", 3)  # type: ignore[arg-type]
 
 
 def test_delete_superseded_points_filters_on_age() -> None:
@@ -52,7 +59,7 @@ def test_delete_superseded_points_filters_on_age() -> None:
 
 def test_cleanup_superseded_chunk_rows_deletes_non_active_versions() -> None:
     db = MagicMock()
-    db.query.return_value.all.return_value = [("doc-1", 2)]
+    db.query.return_value.all.return_value = [("doc-1", 2, "version-2")]
     db.query.return_value.filter.return_value.delete.return_value = 5
 
     deleted = cleanup_superseded_chunk_rows(db)
@@ -72,9 +79,38 @@ async def test_replacement_ingest_stages_then_activates() -> None:
 
     job = MagicMock()
     doc = MagicMock()
-    doc.version = 2
+    doc.version = 1
+    doc.active_version = 1
+    doc.filename = "old.pdf"
+    doc.storage_filename = "old-storage.pdf"
+    doc.file_type = "pdf"
+    doc.file_size_bytes = 123
+    doc.active_version_id = "version-1"
+    doc.pending_version = 2
+    doc.pending_filename = "v2.pdf"
+    doc.pending_storage_filename = "v2-storage.pdf"
+    doc.pending_file_type = "pdf"
+    doc.pending_file_size_bytes = 456
+    active_version = make_document_version("version-1", version_number=1)
+    new_version = make_document_version(
+        "version-2", version_number=2, status=DocumentVersionStatus.pending
+    )
     mock_db = MagicMock()
-    mock_db.get.side_effect = lambda model, pk: job if model is IngestionJob else doc
+
+    def _get(model: object, pk: str) -> object:
+        from app.db.models import Document, DocumentVersion
+
+        if model is IngestionJob:
+            return job
+        if model is DocumentVersion:
+            if pk == "version-1":
+                return active_version
+            return new_version
+        if model is Document:
+            return doc
+        return active_version
+
+    mock_db.get.side_effect = _get
 
     mock_pipeline = MagicMock()
     mock_pipeline.ingest = AsyncMock()
@@ -83,8 +119,8 @@ async def test_replacement_ingest_stages_then_activates() -> None:
     with patch("app.services.ingestion_service.SessionLocal", return_value=mock_db), patch(
         "app.services.ingestion_service.Reranker"
     ), patch("app.services.ingestion_service.RagPipeline", return_value=mock_pipeline), patch(
-        "app.services.ingestion_service.activate_document_version"
-    ) as mock_activate:
+        "app.services.document_service.QdrantClient"
+    ):
         await run_ingestion(
             "doc-1",
             "job-1",
@@ -92,14 +128,84 @@ async def test_replacement_ingest_stages_then_activates() -> None:
             "v2.pdf",
             "user-1",
             retriever=retriever,
-            activate_version=2,
+            document_version_id="version-2",
         )
 
     # Staged ingest: not active during embedding
     assert mock_pipeline.ingest.call_args.kwargs["activate"] is False
-    mock_activate.assert_called_once_with("doc-1", 2)
-    assert doc.active_version == 2
+    assert mock_pipeline.ingest.call_args.kwargs["document_version"] == 2
+    assert mock_pipeline.ingest.call_args.kwargs["document_version_id"] == "version-2"
+    assert doc.active_version_id == "version-2"
+    assert new_version.status == DocumentVersionStatus.active
+    assert active_version.status == DocumentVersionStatus.superseded
     retriever.rebuild_from_qdrant.assert_called_once()
+    assert job.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_replacement_activation_commit_failure_retries_without_marking_failed() -> None:
+    from app.services.ingestion_service import run_ingestion
+
+    job = MagicMock()
+    doc = MagicMock()
+    doc.id = "doc-1"
+    doc.version = 1
+    doc.active_version = 1
+    doc.filename = "old.pdf"
+    doc.storage_filename = "old-storage.pdf"
+    doc.file_type = "pdf"
+    doc.file_size_bytes = 123
+    doc.active_version_id = "version-1"
+    active_version = make_document_version("version-1", version_number=1)
+    new_version = make_document_version(
+        "version-2", version_number=2, status=DocumentVersionStatus.pending
+    )
+    mock_db = MagicMock()
+    mock_db.commit.side_effect = [
+        None,  # initial embedding status
+        None,  # staged version checkpoint
+        RuntimeError("transient commit failure"),
+        None,  # activation retry commit
+        None,  # job completed
+    ]
+
+    def _get(model: object, pk: str) -> object:
+        from app.db.models import Document, DocumentVersion
+
+        if model is IngestionJob:
+            return job
+        if model is DocumentVersion:
+            if pk == "version-1":
+                return active_version
+            return new_version
+        if model is Document:
+            return doc
+        return active_version
+
+    mock_db.get.side_effect = _get
+    mock_pipeline = MagicMock()
+    mock_pipeline.ingest = AsyncMock()
+    retriever = MagicMock()
+
+    with patch("app.services.ingestion_service.SessionLocal", return_value=mock_db), patch(
+        "app.services.ingestion_service.Reranker"
+    ), patch("app.services.ingestion_service.RagPipeline", return_value=mock_pipeline), patch(
+        "app.services.document_service.QdrantClient"
+    ):
+        await run_ingestion(
+            "doc-1",
+            "job-1",
+            "/nonexistent/v2.pdf",
+            "v2.pdf",
+            "user-1",
+            retriever=retriever,
+            document_version_id="version-2",
+        )
+
+    mock_db.rollback.assert_called_once()
+    assert doc.active_version_id == "version-2"
+    assert new_version.status == DocumentVersionStatus.active
+    assert active_version.status == DocumentVersionStatus.superseded
     assert job.status == "completed"
 
 
@@ -109,10 +215,35 @@ async def test_failed_replacement_keeps_previous_version_serving() -> None:
 
     job = MagicMock()
     doc = MagicMock()
-    doc.version = 2
+    doc.version = 1
     doc.active_version = 1
+    doc.filename = "old.pdf"
+    doc.storage_filename = "old-storage.pdf"
+    doc.file_type = "pdf"
+    doc.file_size_bytes = 123
+    doc.active_version_id = "version-1"
+    doc.pending_version = 2
+    doc.pending_filename = "v2.pdf"
+    doc.pending_storage_filename = "v2-storage.pdf"
+    doc.pending_file_type = "pdf"
+    doc.pending_file_size_bytes = 456
+    failed_version = make_document_version(
+        "version-2", version_number=2, status=DocumentVersionStatus.pending
+    )
     mock_db = MagicMock()
-    mock_db.get.side_effect = lambda model, pk: job if model is IngestionJob else doc
+
+    def _get(model: object, pk: str) -> object:
+        from app.db.models import Document, DocumentVersion
+
+        if model is IngestionJob:
+            return job
+        if model is DocumentVersion:
+            return failed_version
+        if model is Document:
+            return doc
+        return None
+
+    mock_db.get.side_effect = _get
 
     mock_pipeline = MagicMock()
     mock_pipeline.ingest = AsyncMock(side_effect=RuntimeError("embedding service down"))
@@ -123,13 +254,21 @@ async def test_failed_replacement_keeps_previous_version_serving() -> None:
         "app.services.ingestion_service.RagPipeline", return_value=mock_pipeline
     ), patch("app.services.ingestion_service.activate_document_version") as mock_activate:
         await run_ingestion(
-            "doc-1", "job-1", "/nonexistent/v2.pdf", "v2.pdf", "user-1", activate_version=2
+            "doc-1",
+            "job-1",
+            "/nonexistent/v2.pdf",
+            "v2.pdf",
+            "user-1",
+            document_version_id="version-2",
         )
 
     # The switch never happened: previous version remains active and the
-    # document is still usable (indexed), only the job records the failure.
+    # canonical document row remains consistent with the old version. Only the
+    # job records the failed replacement.
     mock_activate.assert_not_called()
-    assert doc.active_version == 1
+    assert doc.active_version_id == "version-1"
+    assert failed_version.status == DocumentVersionStatus.failed
+    assert failed_version.failed_reason == "embedding service down"
     assert doc.ingestion_status == IngestionStatus.indexed
     assert job.status == "failed"
 
@@ -139,15 +278,15 @@ async def test_failed_replacement_keeps_previous_version_serving() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _db_with_counts(chunks: int, jobs: int, cache: int) -> MagicMock:
+def _db_with_counts(chunks: int, jobs: int, versions: int, cache: int) -> MagicMock:
     db = MagicMock()
-    db.query.return_value.filter.return_value.scalar.side_effect = [chunks, jobs]
+    db.query.return_value.filter.return_value.scalar.side_effect = [chunks, jobs, versions]
     db.execute.return_value.scalar.return_value = cache
     return db
 
 
 def test_verify_deletion_clean_when_all_stores_empty() -> None:
-    db = _db_with_counts(0, 0, 0)
+    db = _db_with_counts(0, 0, 0, 0)
     retriever = MagicMock()
     retriever._bm25_payloads = {"c1": {"doc_id": "other-doc"}}
 
@@ -160,7 +299,7 @@ def test_verify_deletion_clean_when_all_stores_empty() -> None:
 
 
 def test_verify_deletion_flags_lingering_vectors() -> None:
-    db = _db_with_counts(0, 0, 0)
+    db = _db_with_counts(0, 0, 0, 0)
 
     with patch("app.services.document_service.QdrantClient") as mock_client_cls:
         mock_client_cls.return_value.count.return_value.count = 7
@@ -176,20 +315,27 @@ def test_verify_deletion_flags_lingering_vectors() -> None:
 
 
 class TestUploadNewVersion:
-    def test_upload_new_version_returns_202_and_bumps_version(self) -> None:
-        admin = _make_admin_user()
-        db = _mock_db_with_admin(admin)
-        doc = _make_document()
+    def test_upload_new_version_returns_202_and_creates_pending_version(self) -> None:
+        admin = make_admin_user()
+        db = mock_db_with_admin(admin)
+        doc = make_document()
         doc.version = 1
+        doc.active_version = 1
+        doc.active_version_id = "version-1"
+        doc.filename = "old.pdf"
+        doc.storage_filename = "old-storage.pdf"
+        doc.file_type = "pdf"
+        doc.file_size_bytes = 123
         from app.db.models import User
 
         db.get.side_effect = lambda model, pk: admin if model is User else doc
         db.query.return_value.filter.return_value.first.return_value = None
+        db.query.return_value.filter.return_value.scalar.return_value = 1
 
         with patch(
-            "app.api.document_routes.asyncio.create_task", side_effect=_close_and_return_task
+            "app.api.document_routes.asyncio.create_task", side_effect=close_and_return_task
         ):
-            client = _make_test_client(db, admin)
+            client = make_test_client(db, admin)
             with patch("app.api.document_routes.UploadValidator.validate") as mock_validate, patch(
                 "app.api.document_routes.UploadValidator.safe_filename",
                 return_value="safe-v2",
@@ -203,23 +349,46 @@ class TestUploadNewVersion:
         assert resp.status_code == 202
         body = resp.json()
         assert body["version"] == 2
-        assert doc.version == 2
-        # Serving version must NOT switch at upload time — only after ingest.
-        assert doc.active_version != 2 or doc.active_version == 1
+        assert "document_version_id" in body
+        assert doc.active_version_id == "version-1"
+
+        from app.db.models import DocumentVersion
+
+        added_versions = [
+            call.args[0]
+            for call in db.add.call_args_list
+            if isinstance(call.args[0], DocumentVersion)
+        ]
+        assert len(added_versions) == 1
+        version = added_versions[0]
+        assert version.document_id == "doc-1"
+        assert version.version_number == 2
+        assert version.status == DocumentVersionStatus.pending
+        assert version.filename == "v2.pdf"
+        assert version.storage_filename == "safe-v2.pdf"
+        assert version.file_type == "pdf"
+        assert version.file_size_bytes == len(b"%PDF-1.4 v2")
+
+        jobs = [
+            call.args[0]
+            for call in db.add.call_args_list
+            if isinstance(call.args[0], IngestionJob)
+        ]
+        assert jobs[0].document_version_id == version.id
         from app.main import app
 
         app.dependency_overrides.clear()
 
     def test_upload_new_version_409_when_ingestion_active(self) -> None:
-        admin = _make_admin_user()
-        db = _mock_db_with_admin(admin)
-        doc = _make_document()
+        admin = make_admin_user()
+        db = mock_db_with_admin(admin)
+        doc = make_document()
         from app.db.models import User
 
         db.get.side_effect = lambda model, pk: admin if model is User else doc
         db.query.return_value.filter.return_value.first.return_value = MagicMock()  # active job
 
-        client = _make_test_client(db, admin)
+        client = make_test_client(db, admin)
         with patch("app.api.document_routes.UploadValidator.validate") as mock_validate, patch(
             "pathlib.Path.write_bytes"
         ), patch("pathlib.Path.mkdir"):
@@ -235,13 +404,13 @@ class TestUploadNewVersion:
         app.dependency_overrides.clear()
 
     def test_upload_new_version_404_for_unknown_document(self) -> None:
-        admin = _make_admin_user()
-        db = _mock_db_with_admin(admin)
+        admin = make_admin_user()
+        db = mock_db_with_admin(admin)
         from app.db.models import User
 
         db.get.side_effect = lambda model, pk: admin if model is User else None
 
-        client = _make_test_client(db, admin)
+        client = make_test_client(db, admin)
         with patch("pathlib.Path.mkdir"):
             resp = client.post(
                 "/admin/documents/nope/upload-new-version",
@@ -256,14 +425,14 @@ class TestUploadNewVersion:
 
 class TestVerifyDeletion:
     def test_verify_deletion_409_while_document_exists(self) -> None:
-        admin = _make_admin_user()
-        db = _mock_db_with_admin(admin)
-        doc = _make_document()
+        admin = make_admin_user()
+        db = mock_db_with_admin(admin)
+        doc = make_document()
         from app.db.models import User
 
         db.get.side_effect = lambda model, pk: admin if model is User else doc
 
-        client = _make_test_client(db, admin)
+        client = make_test_client(db, admin)
         with patch("pathlib.Path.mkdir"):
             resp = client.get("/admin/documents/doc-1/verify-deletion")
 
@@ -273,13 +442,13 @@ class TestVerifyDeletion:
         app.dependency_overrides.clear()
 
     def test_verify_deletion_reports_after_delete(self) -> None:
-        admin = _make_admin_user()
-        db = _mock_db_with_admin(admin)
+        admin = make_admin_user()
+        db = mock_db_with_admin(admin)
         from app.db.models import User
 
         db.get.side_effect = lambda model, pk: admin if model is User else None
 
-        client = _make_test_client(db, admin)
+        client = make_test_client(db, admin)
         with patch("pathlib.Path.mkdir"), patch(
             "app.api.document_routes.verify_document_deletion",
             return_value={"doc_id": "doc-1", "clean": True, "counts": {}},

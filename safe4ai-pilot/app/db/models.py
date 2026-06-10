@@ -1,10 +1,6 @@
 import enum
 
 from pgvector.sqlalchemy import Vector
-
-# Canonical sentinel ID for the ghost "deleted" user.  Every file that filters
-# or creates this user must import this constant instead of copying the string.
-DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -16,10 +12,15 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 
 from app.db import Base
+
+# Canonical sentinel ID for the ghost "deleted" user.  Every file that filters
+# or creates this user must import this constant instead of copying the string.
+DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 class UserRole(str, enum.Enum):
@@ -40,6 +41,16 @@ class IngestionJobStatus(str, enum.Enum):
     embedding = "embedding"
     completed = "completed"
     failed = "failed"
+
+
+class DocumentVersionStatus(str, enum.Enum):
+    pending = "pending"
+    ingesting = "ingesting"
+    staged = "staged"
+    activating = "activating"
+    active = "active"
+    failed = "failed"
+    superseded = "superseded"
 
 
 class FeedbackRating(str, enum.Enum):
@@ -99,13 +110,72 @@ class Document(Base):
     file_size_bytes = Column(Integer, nullable=True)
     version = Column(Integer, default=1)
     active_version = Column(Integer, default=1)
+    active_version_id = Column(
+        String,
+        ForeignKey(
+            "document_versions.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="documents_active_version_id_fkey",
+        ),
+        nullable=True,
+        index=True,
+    )
+    title = Column(String, nullable=True)
+    pending_version = Column(Integer, nullable=True)
+    pending_filename = Column(String, nullable=True)
+    pending_storage_filename = Column(String, nullable=True)
+    pending_file_type = Column(String, nullable=True)
+    pending_file_size_bytes = Column(Integer, nullable=True)
+
+
+class DocumentVersion(Base):
+    __tablename__ = "document_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "version_number",
+            name="uq_document_versions_document_id_version_number",
+        ),
+    )
+
+    id = Column(String, primary_key=True)
+    document_id = Column(
+        String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version_number = Column(Integer, nullable=False)
+    filename = Column(String, nullable=False)
+    storage_filename = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)
+    file_size_bytes = Column(Integer, nullable=True)
+    checksum = Column(String, nullable=True)
+    status = Column(
+        Enum(DocumentVersionStatus), nullable=False, default=DocumentVersionStatus.pending
+    )
+    created_by = Column(
+        String,
+        ForeignKey("users.id", ondelete="SET DEFAULT"),
+        nullable=False,
+        server_default=DELETED_USER_ID,
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    ingestion_started_at = Column(DateTime(timezone=True), nullable=True)
+    ingested_at = Column(DateTime(timezone=True), nullable=True)
+    activated_at = Column(DateTime(timezone=True), nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
+    failed_reason = Column(Text, nullable=True)
 
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
     id = Column(String, primary_key=True)
-    document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(
+        String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_version_id = Column(
+        String, ForeignKey("document_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     chunk_index = Column(Integer, nullable=False)
     chunk_version = Column(Integer, default=1)
     content_preview = Column(String(500), nullable=True)
@@ -183,7 +253,12 @@ class IngestionJob(Base):
     __tablename__ = "ingestion_jobs"
 
     id = Column(String, primary_key=True)
-    document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(
+        String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_version_id = Column(
+        String, ForeignKey("document_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status = Column(Enum(IngestionJobStatus), nullable=False, default=IngestionJobStatus.pending)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)

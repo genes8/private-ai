@@ -11,13 +11,27 @@
 - [safe4ai-pilot/tests/test_seed.py](file://safe4ai-pilot/tests/test_seed.py)
 - [safe4ai-pilot/tests/test_integration_containers.py](file://safe4ai-pilot/tests/test_integration_containers.py)
 - [safe4ai-pilot/tests/test_real_services_smoke.py](file://safe4ai-pilot/tests/test_real_services_smoke.py)
+- [safe4ai-pilot/tests/test_agents.py](file://safe4ai-pilot/tests/test_agents.py)
+- [safe4ai-pilot/tests/test_security_guards.py](file://safe4ai-pilot/tests/test_security_guards.py)
+- [safe4ai-pilot/tests/test_rag_pipeline.py](file://safe4ai-pilot/tests/test_rag_pipeline.py)
+- [safe4ai-pilot/app/prompts/templates.py](file://safe4ai-pilot/app/prompts/templates.py)
+- [safe4ai-pilot/app/security/output_filter.py](file://safe4ai-pilot/app/security/output_filter.py)
 - [safe4ai-pilot/scripts/healthcheck.py](file://safe4ai-pilot/scripts/healthcheck.py)
 - [safe4ai-pilot/scripts/seed.py](file://safe4ai-pilot/scripts/seed.py)
 - [safe4ai-pilot/README.md](file://safe4ai-pilot/README.md)
 - [safe4ai-pilot/docs/deployment.md](file://safe4ai-pilot/docs/deployment.md)
+- [safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md)
 - [safe4ai-pilot/docker-compose.yml](file://safe4ai-pilot/docker-compose.yml)
 - [safe4ai-pilot/.pre-commit-config.yaml](file://safe4ai-pilot/.pre-commit-config.yaml)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive testing infrastructure for new RAG answer contract v2
+- Integrated inference labeling guards testing with output filter validation
+- Enhanced context numbering system testing for stable source labels
+- Expanded test coverage for partial evidence labeled inference answers
+- Improved user question handling validation in RAG pipeline tests
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -33,6 +47,8 @@
 
 ## Introduction
 This document describes the test automation and quality assurance framework for the Private AI system, focusing on continuous integration workflows, automated testing pipelines, and quality gates. It explains the GitHub Actions CI configuration, automated test execution, and deployment validation processes. It also documents health check testing, security header validation, and data seeding verification. Quality assurance processes covered include code coverage requirements, static analysis integration, and automated security scanning. Practical examples show how to configure CI/CD pipelines, implement quality gates, and handle test failures. Debugging techniques for automated test failures, log analysis, and test environment troubleshooting are included, along with best practices for maintaining test reliability and preventing flakiness.
+
+**Updated** Added comprehensive testing infrastructure for new RAG answer contract v2, inference labeling guards, and context numbering system. Enhanced test coverage for partial evidence labeled inference answers and proper user question handling.
 
 ## Project Structure
 The repository includes two primary CI configurations and a comprehensive test suite:
@@ -56,6 +72,14 @@ T_HEADERS["safe4ai-pilot/tests/test_security_headers.py"]
 T_SEED["safe4ai-pilot/tests/test_seed.py"]
 T_INTEG["safe4ai-pilot/tests/test_integration_containers.py"]
 T_SMOKE["safe4ai-pilot/tests/test_real_services_smoke.py"]
+T_AGENTS["safe4ai-pilot/tests/test_agents.py"]
+T_GUARDS["safe4ai-pilot/tests/test_security_guards.py"]
+T_RAG["safe4ai-pilot/tests/test_rag_pipeline.py"]
+end
+subgraph "RAG Infrastructure"
+TEMPLATES["safe4ai-pilot/app/prompts/templates.py"]
+OUTPUT_FILTER["safe4ai-pilot/app/security/output_filter.py"]
+DESIGN_DOC["safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md"]
 end
 subgraph "Scripts"
 HC["safe4ai-pilot/scripts/healthcheck.py"]
@@ -74,8 +98,16 @@ FIX --> T_HEADERS
 FIX --> T_SEED
 FIX --> T_INTEG
 FIX --> T_SMOKE
+FIX --> T_AGENTS
+FIX --> T_GUARDS
+FIX --> T_RAG
 PYCONF --> HC
 PYCONF --> SD
+TEMPLATES --> T_AGENTS
+OUTPUT_FILTER --> T_GUARDS
+DESIGN_DOC --> T_AGENTS
+DESIGN_DOC --> T_GUARDS
+DESIGN_DOC --> T_RAG
 DC --> DOC
 READ --> DC
 ```
@@ -90,6 +122,12 @@ READ --> DC
 - [safe4ai-pilot/tests/test_seed.py:1-14](file://safe4ai-pilot/tests/test_seed.py#L1-L14)
 - [safe4ai-pilot/tests/test_integration_containers.py:1-28](file://safe4ai-pilot/tests/test_integration_containers.py#L1-L28)
 - [safe4ai-pilot/tests/test_real_services_smoke.py:1-62](file://safe4ai-pilot/tests/test_real_services_smoke.py#L1-L62)
+- [safe4ai-pilot/tests/test_agents.py:489-501](file://safe4ai-pilot/tests/test_agents.py#L489-L501)
+- [safe4ai-pilot/tests/test_security_guards.py:286](file://safe4ai-pilot/tests/test_security_guards.py#L286)
+- [safe4ai-pilot/tests/test_rag_pipeline.py:1-200](file://safe4ai-pilot/tests/test_rag_pipeline.py#L1-L200)
+- [safe4ai-pilot/app/prompts/templates.py:60-79](file://safe4ai-pilot/app/prompts/templates.py#L60-L79)
+- [safe4ai-pilot/app/security/output_filter.py:16](file://safe4ai-pilot/app/security/output_filter.py#L16)
+- [safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md:38-180](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md#L38-L180)
 - [safe4ai-pilot/scripts/healthcheck.py:1-58](file://safe4ai-pilot/scripts/healthcheck.py#L1-L58)
 - [safe4ai-pilot/scripts/seed.py:1-47](file://safe4ai-pilot/scripts/seed.py#L1-L47)
 - [safe4ai-pilot/docker-compose.yml:1-119](file://safe4ai-pilot/docker-compose.yml#L1-L119)
@@ -197,7 +235,7 @@ SECRETS --> PASS["Pass"]
 - [safe4ai-pilot/pyproject.toml:84-98](file://safe4ai-pilot/pyproject.toml#L84-L98)
 
 ### Health Check Testing
-Health check tests validate the application’s readiness and prompt registry behavior under mocked dependencies. They ensure the health endpoint returns expected keys and that prompt retrieval works as expected.
+Health check tests validate the application's readiness and prompt registry behavior under mocked dependencies. They ensure the health endpoint returns expected keys and that prompt retrieval works as expected.
 
 ```mermaid
 sequenceDiagram
@@ -284,6 +322,88 @@ PYTEST-->>PYTEST : "Assertions Pass"
 - [safe4ai-pilot/tests/test_integration_containers.py:1-28](file://safe4ai-pilot/tests/test_integration_containers.py#L1-L28)
 - [safe4ai-pilot/tests/test_real_services_smoke.py:1-62](file://safe4ai-pilot/tests/test_real_services_smoke.py#L1-L62)
 
+### RAG Answer Contract v2 Testing Infrastructure
+**Updated** Added comprehensive testing infrastructure for the new RAG answer contract v2, which introduces strict answer contracts, inference labeling guards, and enhanced context numbering systems.
+
+The RAG answer contract v2 testing validates that the prompt template contains critical labeling instructions and forbidden entity-specific categories. The testing infrastructure ensures that:
+- Direct document answers remain grounded and cited
+- Partial-evidence answers include document facts plus labeled general inference
+- Entity-specific questions are not filled from model knowledge
+- Output guards reject inference answers lacking required disclaimers
+- Simple ordinary questions complete without extra LLM router calls
+
+```mermaid
+sequenceDiagram
+participant TEST as "test_rag_answer_v2_contract_content"
+participant PROMPT as "Prompt Registry"
+participant TEMPLATE as "rag_answer v2 Template"
+TEST->>PROMPT : "get_prompt('rag_answer', 'v2')"
+PROMPT->>TEMPLATE : "Load v2 template"
+TEMPLATE-->>TEST : "Template with answer contract"
+TEST->>TEST : "Assert labeling instructions present"
+TEST->>TEST : "Assert forbidden categories listed"
+```
+
+**Diagram sources**
+- [safe4ai-pilot/tests/test_agents.py:489-501](file://safe4ai-pilot/tests/test_agents.py#L489-L501)
+- [safe4ai-pilot/app/prompts/templates.py:60-79](file://safe4ai-pilot/app/prompts/templates.py#L60-L79)
+
+**Section sources**
+- [safe4ai-pilot/tests/test_agents.py:489-501](file://safe4ai-pilot/tests/test_agents.py#L489-L501)
+- [safe4ai-pilot/app/prompts/templates.py:60-79](file://safe4ai-pilot/app/prompts/templates.py#L60-L79)
+- [safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md:146-162](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md#L146-L162)
+
+### Inference Labeling Guards Testing
+**Updated** Enhanced testing infrastructure for inference labeling guards, particularly Rule 3 which enforces inference labeling requirements in output filtering.
+
+The inference labeling guard testing validates that:
+- Answers using general inference/model knowledge language include clear disclaimers
+- Output guards only enforce labeling when inference is present
+- Forbidden entity-specific categories trigger guard enforcement
+- Simple questions bypass unnecessary inference labeling requirements
+
+```mermaid
+flowchart TD
+INPUT["Generated Answer"] --> GUARD["Output Filter Guard"]
+GUARD --> CHECK_INFERENCE{"Contains inference language?"}
+CHECK_INFERENCE --> |Yes| CHECK_LABEL{"Has required disclaimer?"}
+CHECK_INFERENCE --> |No| PASS["Allow without labeling"]
+CHECK_LABEL --> |Yes| PASS
+CHECK_LABEL --> |No| REJECT["Reject with guard violation"]
+```
+
+**Diagram sources**
+- [safe4ai-pilot/tests/test_security_guards.py:286](file://safe4ai-pilot/tests/test_security_guards.py#L286)
+- [safe4ai-pilot/app/security/output_filter.py:16](file://safe4ai-pilot/app/security/output_filter.py#L16)
+
+**Section sources**
+- [safe4ai-pilot/tests/test_security_guards.py:286](file://safe4ai-pilot/tests/test_security_guards.py#L286)
+- [safe4ai-pilot/app/security/output_filter.py:16](file://safe4ai-pilot/app/security/output_filter.py#L16)
+- [safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md:112-120](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md#L112-L120)
+
+### Context Numbering System Testing
+**Updated** Enhanced test coverage for the context numbering system that provides stable source labels for better citation anchoring.
+
+The context numbering system testing ensures:
+- Stable source labels in format [S1], [S2], etc.
+- Proper citation anchoring for evidence tracking
+- Compatibility with existing UI citation list formatting
+- Clean anchors for model citation capabilities
+
+```mermaid
+flowchart TD
+CONTEXT["Retrieved Context"] --> NUMBER["Apply Context Numbering"]
+NUMBER --> LABEL["Format with [S1], [S2] labels"]
+LABEL --> ANCHOR["Provide clean citation anchors"]
+ANCHOR --> MODEL["Enable precise model citations"]
+```
+
+**Diagram sources**
+- [safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md:103-111](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md#L103-L111)
+
+**Section sources**
+- [safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md:103-111](file://safe4ai-pilot/docs/superpowers/specs/2026-06-03-rag-grounded-inference-design.md#L103-L111)
+
 ### Deployment Validation and Orchestration
 Deployment documentation outlines required smoke checks and local verification steps. Docker Compose defines health checks for all services, ensuring reliable CI and local development.
 
@@ -362,6 +482,7 @@ CI --> SECRET
 - Use Docker Compose health checks to reduce flakiness in service readiness.
 - Prefer mocking for network-dependent tests to avoid external latency and variability.
 - Limit integration tests to essential scenarios and skip them when Docker is unavailable to prevent CI timeouts.
+- **Updated** Optimize RAG pipeline tests to minimize unnecessary LLM calls while maintaining comprehensive coverage of answer contract behaviors.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -380,14 +501,20 @@ Common issues and resolutions:
 - Healthcheck failures:
   - Inspect service logs and network connectivity.
   - Validate database credentials and Qdrant/Ollama endpoints.
+- **Updated** RAG answer contract v2 test failures:
+  - Verify prompt template contains required labeling instructions and forbidden categories.
+  - Check that inference guard properly enforces labeling requirements.
+  - Ensure context numbering system generates stable source labels.
 
 **Section sources**
 - [safe4ai-pilot/docs/deployment.md:55-94](file://safe4ai-pilot/docs/deployment.md#L55-L94)
 - [safe4ai-pilot/scripts/healthcheck.py:12-53](file://safe4ai-pilot/scripts/healthcheck.py#L12-L53)
 - [safe4ai-pilot/tests/test_real_services_smoke.py:12-17](file://safe4ai-pilot/tests/test_real_services_smoke.py#L12-L17)
+- [safe4ai-pilot/tests/test_agents.py:489-501](file://safe4ai-pilot/tests/test_agents.py#L489-L501)
+- [safe4ai-pilot/tests/test_security_guards.py:286](file://safe4ai-pilot/tests/test_security_guards.py#L286)
 
 ## Conclusion
-The Private AI system employs robust CI/CD and QA practices that combine static analysis, security scanning, comprehensive testing, and deployment validation. Quality gates ensure code quality and security standards, while health checks and smoke tests validate runtime readiness. Integration and smoke tests provide confidence in real-world deployments orchestrated by Docker Compose.
+The Private AI system employs robust CI/CD and QA practices that combine static analysis, security scanning, comprehensive testing, and deployment validation. Quality gates ensure code quality and security standards, while health checks and smoke tests validate runtime readiness. Integration and smoke tests provide confidence in real-world deployments orchestrated by Docker Compose. **Updated** The recent enhancements to RAG answer contract v2 testing infrastructure, inference labeling guards, and context numbering system significantly improve the system's ability to maintain grounded, properly labeled inference answers while preserving performance and user experience.
 
 ## Appendices
 - Pre-commit configuration integrates linting, formatting, and secret scanning into local workflows to catch issues early.

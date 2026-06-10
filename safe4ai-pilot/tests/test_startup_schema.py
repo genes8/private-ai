@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -23,6 +22,35 @@ def test_startup_creates_schema_before_recovering_jobs() -> None:
     recover_idx = main_py.index("recover_stuck_jobs(db)")
 
     assert create_all_idx < recover_idx
+
+
+def test_document_version_startup_schema_adds_declared_foreign_keys() -> None:
+    from app.startup_migrations import _ensure_document_version_schema
+
+    executed: list[str] = []
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = lambda statement: executed.append(str(statement))
+    mock_engine = MagicMock()
+    mock_engine.begin.return_value.__enter__.return_value = mock_conn
+
+    with patch("app.startup_migrations.engine", mock_engine):
+        _ensure_document_version_schema()
+
+    ddl = "\n".join(executed)
+    assert "DROP CONSTRAINT IF EXISTS documents_active_version_id_fkey" in ddl
+    assert "ADD CONSTRAINT documents_active_version_id_fkey" in ddl
+    assert (
+        "FOREIGN KEY (active_version_id) REFERENCES document_versions(id) "
+        "ON DELETE SET NULL"
+    ) in ddl
+    assert "DROP CONSTRAINT IF EXISTS document_chunks_document_version_id_fkey" in ddl
+    assert "ADD CONSTRAINT document_chunks_document_version_id_fkey" in ddl
+    assert (
+        "FOREIGN KEY (document_version_id) REFERENCES document_versions(id) "
+        "ON DELETE SET NULL"
+    ) in ddl
+    assert "DROP CONSTRAINT IF EXISTS ingestion_jobs_document_version_id_fkey" in ddl
+    assert "ADD CONSTRAINT ingestion_jobs_document_version_id_fkey" in ddl
 
 
 # ---------------------------------------------------------------------------

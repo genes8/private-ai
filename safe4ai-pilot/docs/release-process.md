@@ -42,7 +42,8 @@ Consequences:
 
 `.github/workflows/release.yml`, triggered by `v*.*.*` tags:
 
-1. **Gates** — backend test suite, `pip-audit`, frontend production build.
+1. **Gates** — backend test suite, `pip-audit`, frontend production build,
+   and Trivy CRITICAL/HIGH image vulnerability scans.
 2. **Evidence** — dependency/license reports (backend `pip-licenses`,
    frontend `license-checker`), SBOMs (SPDX via syft) and vulnerability scans
    (trivy, CRITICAL/HIGH) for both images. All attached to the GitHub release;

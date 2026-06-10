@@ -14,6 +14,13 @@
 - [useAuditStream.ts](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Enhanced OutputFilter with new Rule 3 inference labeling guard for transparency and accountability
+- Added sophisticated detection of general inference language patterns and required disclaimer phrases
+- Updated validation rules to include inference labeling compliance checking
+- Revised troubleshooting guidance to address inference labeling failures
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
@@ -33,6 +40,8 @@ This document describes the output validation system that ensures generated AI r
 - Integration with streaming and real-time validation during content generation
 - Examples of filtering scenarios, validation failures, and fallback mechanisms
 - Relationship with content filtering and audit trail generation for monitored outputs
+
+**Updated** Enhanced with new Rule 3 inference labeling guard that detects general inference language and requires appropriate disclaimer phrases for transparency and accountability.
 
 ## Project Structure
 The output validation system spans backend security guards, stateful conversation orchestration, and frontend streaming indicators. The relevant modules are:
@@ -95,13 +104,15 @@ UA --> CH
 - [useAuditStream.ts:1-17](file://safe4ai-pilot/frontend/src/hooks/useAuditStream.ts#L1-L17)
 
 ## Core Components
-- OutputFilter: Validates generated answers for PII hallucinations and suspicious length; blocks answers containing synthetic PII not present in source chunks; logs warnings for long answers.
+- OutputFilter: Validates generated answers for PII hallucinations, inference labeling compliance, and suspicious length; blocks answers containing synthetic PII not present in source chunks; enforces disclaimer requirements for inference language; logs warnings for long answers.
 - ContentFilter: Removes source chunks containing PII or blocked terms prior to retrieval; logs exclusions.
 - InputGuard: Sanitizes and validates user queries; rejects overly long or potentially malicious inputs.
 - UploadValidator: Enforces allowed extensions, declared and detected MIME types, and file size limits.
 - PrivateAIState: Tracks generation context, draft answers, citations, grounding, and observability metadata.
 - RagPipeline: Builds prompts from ranked chunks, invokes the generator, and returns answers with citations.
 - ConversationManager: Persists session state, cleans control characters, and optionally summarizes long histories.
+
+**Updated** Enhanced OutputFilter now includes sophisticated inference labeling detection with dedicated markers for general inference language and required disclaimer phrases.
 
 **Section sources**
 - [output_filter.py:31-61](file://safe4ai-pilot/app/security/output_filter.py#L31-L61)
@@ -113,7 +124,7 @@ UA --> CH
 - [conversation.py:26-117](file://safe4ai-pilot/app/services/conversation.py#L26-L117)
 
 ## Architecture Overview
-The output validation lifecycle integrates input guards, content filtering, generation, and output filtering. Citations are derived from the ranked chunks used to build the generation context. The state snapshot of generation context is validated after generation to prevent PII hallucinations.
+The output validation lifecycle integrates input guards, content filtering, generation, and output filtering. Citations are derived from the ranked chunks used to build the generation context. The state snapshot of generation context is validated after generation to prevent PII hallucinations and ensure proper inference labeling compliance.
 
 ```mermaid
 sequenceDiagram
@@ -133,7 +144,7 @@ API->>Filter : "filter_chunks(graded_chunks)"
 Filter-->>API : "filtered_chunks"
 API->>RAG : "query(query, filtered_chunks)"
 RAG-->>API : "answer, citations"
-API->>OF : "check(answer, generation_context)"
+API->>OF : "check(answer, generation_context, citations)"
 OF-->>API : "GuardResult"
 API->>State : "update session with answer/citations"
 API-->>Frontend : "Response"
@@ -150,20 +161,30 @@ Frontend-->>User : "Display answer and citations"
 ## Detailed Component Analysis
 
 ### OutputFilter
-- Purpose: Post-generate validation to prevent synthetic PII in answers and to flag unusually long responses.
+- Purpose: Post-generate validation to prevent synthetic PII in answers, ensure inference labeling compliance, and flag unusually long responses.
 - PII detection: Scans the answer for known patterns (SSN, credit cards, passports) and compares against the combined source content to detect hallucinated PII.
+- Inference labeling detection: Identifies general inference language patterns and requires appropriate disclaimer phrases for transparency and accountability.
 - Threshold-based warning: Emits a warning when the answer exceeds a configured character threshold without blocking.
 - Outcome: Returns a GuardResult indicating whether the answer is allowed and the reason.
 
+**Updated** Enhanced with Rule 3 inference labeling guard that detects general inference language and requires clear disclaimers.
+
 ```mermaid
 flowchart TD
-Start(["check(answer, source_chunks)"]) --> FindPII["_find_pii_matches(answer)"]
+Start(["check(answer, source_chunks, citations)"]) --> Rule0["Rule 0: Citation presence check"]
+Rule0 --> FindPII["_find_pii_matches(answer)"]
 FindPII --> HasPII{"PII found?"}
-HasPII --> |No| LongCheck["Length check vs threshold"]
+HasPII --> |No| InferenceCheck["Rule 3: Inference labeling check"]
 HasPII --> |Yes| Combine["Join source content"]
 Combine --> VerifyPII{"All PII in source?"}
-VerifyPII --> |No| Block["Return GuardResult(allowed=False,<br/>reason='PII not in source')"]
-VerifyPII --> |Yes| LongCheck
+VerifyPII --> |No| BlockPII["Return GuardResult(allowed=False,<br/>reason='PII not in source')"]
+VerifyPII --> |Yes| InferenceCheck
+InferenceCheck --> Lower["Lowercase answer for matching"]
+Lower --> HasInference{"Contains inference markers?"}
+HasInference --> |No| LongCheck["Rule 2: Length check vs threshold"]
+HasInference --> |Yes| HasDisclaimer{"Contains disclaimer markers?"}
+HasDisclaimer --> |No| BlockInference["Return GuardResult(allowed=False,<br/>reason='Inference answer missing required disclaimer')"]
+HasDisclaimer --> |Yes| LongCheck
 LongCheck --> Over{"Length > threshold?"}
 Over --> |Yes| Warn["Log warning 'output_suspiciously_long'"]
 Over --> |No| Ok["Log info 'ok'"]
@@ -355,7 +376,7 @@ UV["UploadValidator"] --> RP
 - ContentFilter iterates chunks linearly; batching and early exits improve throughput.
 - InputGuard performs regex scanning and length checks; keep patterns minimal and compile once.
 - UploadValidator uses magic library; cache detections per file if uploading many duplicates.
-- RagPipeline’s embedding and OCR steps are asynchronous; ensure timeouts and backpressure to avoid resource exhaustion.
+- RagPipeline's embedding and OCR steps are asynchronous; ensure timeouts and backpressure to avoid resource exhaustion.
 
 ## Troubleshooting Guide
 Common validation failures and fallback mechanisms:
@@ -363,6 +384,10 @@ Common validation failures and fallback mechanisms:
   - Symptom: OutputFilter blocks the answer with a reason indicating synthetic PII.
   - Action: Review generation context; ensure only trusted chunks are used; re-run with stricter ContentFilter.
   - Reference: [output_filter.py:47-50](file://safe4ai-pilot/app/security/output_filter.py#L47-L50)
+- Inference labeling failure:
+  - Symptom: OutputFilter blocks the answer with reason "Inference answer missing required disclaimer".
+  - Action: Ensure generated answers using general inference language include appropriate disclaimer phrases such as "not stated directly in the documents" or "not found in the documents".
+  - Reference: [output_filter.py:93-99](file://safe4ai-pilot/app/security/output_filter.py#L93-L99)
 - Suspiciously long answer:
   - Symptom: Warning logged for excessive length; answer still returned.
   - Action: Investigate prompt construction; consider summarizing context or reducing top_k.
@@ -380,6 +405,8 @@ Common validation failures and fallback mechanisms:
   - Action: Verify file type and size; ensure correct Content-Type; retry with allowed formats.
   - Reference: [upload_validator.py:41-66](file://safe4ai-pilot/app/security/upload_validator.py#L41-L66)
 
+**Updated** Added inference labeling failure scenario with specific guidance for handling general inference language requirements.
+
 **Section sources**
 - [output_filter.py:32-61](file://safe4ai-pilot/app/security/output_filter.py#L32-L61)
 - [content_filter.py:29-59](file://safe4ai-pilot/app/security/content_filter.py#L29-L59)
@@ -387,7 +414,7 @@ Common validation failures and fallback mechanisms:
 - [upload_validator.py:25-68](file://safe4ai-pilot/app/security/upload_validator.py#L25-L68)
 
 ## Conclusion
-The output validation system enforces safety and accuracy by combining input sanitization, pre-retrieval content filtering, generation with strict context, and post-generation validation. It logs warnings and blocks for synthetic PII while allowing long answers as informational. The state model preserves generation context for validation, and the frontend provides visibility into pipeline steps and audit trails.
+The output validation system enforces safety and accuracy by combining input sanitization, pre-retrieval content filtering, generation with strict context, and post-generation validation. It logs warnings and blocks for synthetic PII while ensuring inference language compliance for transparency and accountability. The system now includes sophisticated detection of general inference patterns and requires appropriate disclaimer phrases. The state model preserves generation context for validation, and the frontend provides visibility into pipeline steps and audit trails.
 
 ## Appendices
 
