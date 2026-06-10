@@ -423,52 +423,56 @@ Exit criteria — met (2026-06-10):
 
 Goal: make document updates/deletes reliable enough for customer pilots with changing corpora.
 
-Tasks:
+Tasks — **all done 2026-06-10**:
 
-- [ ] Implement `POST /admin/documents/{id}/upload-new-version`.
-- [ ] Ingest replacement chunks under a new version before switching `active_version`.
-- [ ] Keep old vectors for a short rollback window.
-- [ ] Add cleanup job for stale old-version vectors.
-- [ ] Ensure retrieval filters on active document/chunk version.
-- [ ] Add tests proving users never retrieve a partial reindex.
-- [ ] Extend deletion verification to cover Qdrant, semantic cache, raw file, chunks, jobs, and BM25 state.
+- [x] Implement `POST /admin/documents/{id}/upload-new-version`.
+- [x] Ingest replacement chunks under a new version before switching `active_version`. (Staged ingest: `is_active=False` in Qdrant payload, excluded from retrieval and BM25; switch happens in `run_ingestion` only after full success — Qdrant flip first, then DB `active_version`, then BM25 rebuild.)
+- [x] Keep old vectors for a short rollback window. (Superseded points get `superseded_at`; 24h window.)
+- [x] Add cleanup job for stale old-version vectors. (Daily 02:30 UTC job: `delete_superseded_points` + `cleanup_superseded_chunk_rows`.)
+- [x] Ensure retrieval filters on active document/chunk version. (Dense filter `must_not is_active=false`, BM25 payload skip, startup BM25 rebuild skip; legacy points without the field remain retrievable.)
+- [x] Add tests proving users never retrieve a partial reindex. (`test_document_versioning.py`: failed replacement leaves previous version serving with `active_version` untouched and document still `indexed`; staged ingest never enters retrieval.)
+- [x] Extend deletion verification to cover Qdrant, semantic cache, chunks, jobs, and BM25 state. (`GET /admin/documents/{id}/verify-deletion` returns per-store remnant counts + `clean` flag. Raw-file check is not included: after delete the doc row — and with it `storage_filename` — is gone; the delete path itself unlinks the file and logs failures.)
 
-Exit criteria:
+Exit criteria — met (2026-06-10):
 
-- Reindex/replacement is atomic from the user's point of view.
-- Delete leaves no retrievable vectors for the deleted document.
+- Reindex/replacement is atomic from the user's point of view. (Old `reindex` endpoint still uses delete-then-ingest and is kept for recovery scenarios; `upload-new-version` is the gap-free path.)
+- Delete leaves no retrievable vectors for the deleted document, with auditable verification.
 
 ### Phase E - Production deployment options
 
 Goal: turn the commercial deployment model into a production-ready packaging and release path.
 
+**2026-06-10 progress** — the decision layer and the release pipeline are done; see `docs/release-process.md` (canonical Phase E decisions). Done: delivery-target decision (Compose default, air-gap supported, Helm = open roadmap), closed-runtime boundary, production image pipeline (`.github/workflows/release.yml`: test gates, trivy vulnerability scans, SPDX SBOMs, license reports, immutable GHCR version tags, evidence attached to GitHub releases), private-registry + offline update flows with rollback notes, licensing decision (contract entitlement, no runtime license server, air-gap never gated), source escrow decision (enterprise-only, contract-triggered), observability decisions (Langfuse/Prometheus/Dokploy out of current support; vLLM not claimed), and the first security-pack artifact (`docs/security-pack/audit-log-reference.md` — audit + agent trail field reference incl. deletion evidence).
+
+Still open: Kubernetes/Helm package, data-flow diagram, threat model, controls mapping document, Enterprise WORM storage guide, image signing (deferred until a customer registry requires it).
+
 Tasks:
 
-- [ ] Decide the default customer delivery target:
+- [x] Decide the default customer delivery target (2026-06-10, `docs/release-process.md`):
   - Docker Compose for Evaluation and small pilots,
   - Kubernetes/Helm for Enterprise,
   - air-gapped bundle for locked-down environments.
-- [ ] Define the closed-runtime boundary:
+- [x] Define the closed-runtime boundary:
   - Safe4AI-owned source: orchestration, prompts, retrieval, chunking, reranking, guards, eval, deployment automation, UI workflows,
   - customer-owned data layer: documents, Postgres, Qdrant, users, audit logs, local model runtime, backups.
-- [ ] Add production image build pipeline:
+- [x] Add production image build pipeline:
   - backend image,
   - frontend image,
   - version labels,
   - immutable image tags,
   - release notes.
-- [ ] Add CI/CD release gates:
+- [x] Add CI/CD release gates:
   - backend tests,
   - frontend build,
   - vulnerability scan,
   - SBOM generation,
   - dependency/license report,
   - image signing if registry supports it.
-- [ ] Write private registry update flow:
+- [x] Write private registry update flow:
   - customer pulls approved versioned images,
   - migrations run through documented command,
   - rollback procedure is documented.
-- [ ] Write offline update flow:
+- [x] Write offline update flow:
   - export images,
   - export required model files,
   - transfer bundle,
@@ -484,7 +488,7 @@ Tasks:
   - ingress,
   - persistent volumes,
   - resource requests/limits.
-- [ ] Write license/subscription enforcement decision:
+- [x] Write license/subscription enforcement decision:
   - prefer contract/support entitlement first,
   - add runtime license check only if necessary,
   - never make customer data access depend on a remote license server in air-gapped mode.
@@ -498,12 +502,12 @@ Tasks:
   - audit-log field reference,
   - agent audit trail reference,
   - backup/restore/deletion verification docs.
-- [ ] Define source escrow option:
+- [x] Define source escrow option:
   - enterprise-only,
   - contract-triggered release conditions,
   - excludes routine source handoff from standard package.
 - [ ] Write Dokploy deployment guide if Dokploy is chosen as a supported deployment path.
-- [ ] Write Langfuse integration plan or explicitly keep Langfuse out of current support.
+- [x] Write Langfuse integration plan or explicitly keep Langfuse out of current support.
 - [ ] Add Prometheus/Grafana only if customer deployment needs metrics beyond current OTLP/Jaeger/admin stats.
 - [ ] Write vLLM/OpenAI-compatible deployment preset before mentioning vLLM in copy.
 - [ ] Write Enterprise WORM storage guide that explains storage-layer responsibility.
@@ -553,7 +557,8 @@ Exit criteria:
 | Grounded inference contract | Done (2026-06-03, commit 9b21a02) | Rule 3 language robustness is a C0 task |
 | Regression (tests + build) | Re-verified 2026-06-10 | 416 passed / 4 skipped; clean frontend build |
 | Provider base URL invariant | Done (2026-06-10) | `effective_provider_base_url()` is the single source; commit pending |
-| Closed-runtime deployment | Not done | Define image/bundle, CI/CD, SBOM, escrow path |
+| Closed-runtime deployment | Decisions + release pipeline done (2026-06-10) | `docs/release-process.md`; open: Helm, threat model, controls mapping |
+| Document lifecycle (Phase D) | Done (2026-06-10) | upload-new-version, rollback window, verify-deletion shipped |
 | Multi-tenant workspace | Not done | Enterprise candidate only |
 | vLLM | Partial via OpenAI-compatible provider | Need docs/preset before claiming |
 | Dokploy/Langfuse | Not integrated | Optional production guides |
@@ -564,10 +569,17 @@ Exit criteria:
 
 Next, in order:
 
-1. ~~**C0 hardening**~~ — **done 2026-06-10** (`provider_base_url` invariant, output filter Rule 3 contract, health check verification).
-2. ~~**Phase C — Productize pilot operations**~~ — **done 2026-06-10**, all five features shipped with tests; the two open decisions (chunk-detail endpoint, review-queue notifications) are recorded in Phase C as deliberate skips for the pilot.
-3. **Phase D — Harden document lifecycle** — **current next step**: atomic `upload-new-version` replacement, rollback window, version-filtered retrieval, extended deletion verification.
-4. **Phase E — closed-runtime packaging, CI/CD release gates, SBOM**: the largest remaining gap between "pilot-ready" and "sellable production product" — start its design decisions (delivery target, runtime boundary) alongside Phase D.
+1. ~~**C0 hardening**~~ — **done 2026-06-10**.
+2. ~~**Phase C — Productize pilot operations**~~ — **done 2026-06-10** (all five features; two decisions recorded as deliberate pilot skips).
+3. ~~**Phase D — Harden document lifecycle**~~ — **done 2026-06-10** (atomic `upload-new-version`, 24h rollback window + cleanup job, version-filtered retrieval, verify-deletion endpoint; 474 tests pass).
+4. **Phase E — packaging/release** — decisions and the release pipeline are **done 2026-06-10** (`docs/release-process.md`, `.github/workflows/release.yml`, `docs/security-pack/audit-log-reference.md`). Remaining Phase E items are documentation/packaging work that should be driven by the first paying customer: Kubernetes/Helm package, data-flow diagram, threat model, controls mapping, WORM storage guide, image signing.
+5. **Validate the pipeline**: push a `v0.x.y` tag and confirm the release workflow goes green end-to-end (images in GHCR, SBOM/scan/license artifacts on the release).
+6. **Phase F** stays gated on named buyer requirements.
+
+Operational follow-ups worth doing in the next working session:
+
+- Run a real-service smoke covering the new flows: upload → new-version upload mid-conversation → confirm no retrieval gap; delete → `verify-deletion` clean. Include a scanned PDF to finally exercise OCR.
+- The legacy `reindex` endpoint still uses delete-then-ingest; consider routing the admin UI "Reindex" through the staged path too, or documenting it as a recovery tool.
 
 Earlier smoke-run findings, current status:
 
