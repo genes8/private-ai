@@ -27,6 +27,7 @@ from app.security.pinned_http import create_pinned_transport
 from app.security.url_validator import validate_provider_url
 from app.services.app_config_store import load_app_config
 from app.services.provider_settings import (
+    effective_provider_base_url,
     expand_provider_mode,
     probe_cloud_embeddings,
     resolve_provider_config,
@@ -252,19 +253,15 @@ def _validate_embedding_model_dimension(model: str) -> None:
 def normalize_patch_request(
     body: PatchSettingsRequest,
     current_config: dict[str, Any],
-) -> tuple[PatchSettingsRequest, dict[str, Any], str, str, str, str]:
+) -> tuple[PatchSettingsRequest, str, str, str, str]:
     """Expand mode shorthands and derive canonical effective values.
 
     Returns:
-        (body, pre_updates, effective_provider, effective_embedding_source,
+        (body, effective_provider, effective_embedding_source,
          prev_embedding_model, prev_embedding_source)
     """
-    pre_updates: dict[str, Any] = {}
-
     if body.providerMode is not None:
-        patch = expand_provider_mode(body.providerMode, body.providerBaseUrl)
-        pre_updates.update(patch.pre_updates)
-        body = body.model_copy(update=patch.body_overrides)
+        body = body.model_copy(update=expand_provider_mode(body.providerMode, body.providerBaseUrl))
 
     prev_embedding_model = str(current_config.get("embedding_model", settings.embedding_model))
     prev_embedding_source = resolve_provider_config(current_config).embedding_source
@@ -277,7 +274,6 @@ def normalize_patch_request(
 
     return (
         body,
-        pre_updates,
         effective_provider,
         effective_embedding_source,
         prev_embedding_model,
@@ -665,7 +661,7 @@ def serialize_settings(db: Session) -> dict[str, Any]:
         "visionModel": _val("vision_model", "qwen3.5:9b"),
         "provider": {
             "type": provider_type,
-            "baseUrl": _val("provider_base_url", settings.ollama_url),
+            "baseUrl": effective_provider_base_url(provider_type, db_overrides),
             "apiKeyConfigured": bool(provider_api_key_raw),
             "chatModel": (
                 _val("generation_model", settings.ollama_model)

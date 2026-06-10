@@ -14,11 +14,19 @@ logger = structlog.get_logger(__name__)
 
 _LONG_ANSWER_THRESHOLD = 4000
 
-# Rule 3 — inference labeling guard.
+# Rule 2 — inference labeling guard.
 # If the answer uses general-inference / model-knowledge language, it must
 # carry a clear disclaimer that the information is not stated in the documents.
-# This checks labeling only; it does NOT verify factuality and cannot catch a
-# fabricated entity-specific fact stated with no marker at all.
+# Limitations:
+# - Labeling only: does NOT verify factuality and cannot catch a fabricated
+#   entity-specific fact stated with no marker at all.
+# - English-only markers, while the rag_answer v2 prompt asks the model to
+#   reply in the user's language. Non-English answers fail open (no marker
+#   matches, guard passes); a mixed-language answer using an English inference
+#   phrase with a localized disclaimer is falsely blocked. Accepted trade-off
+#   until a language-aware check exists.
+# The disclaimer phrasing is a contract with app.prompts.templates
+# INFERENCE_DISCLAIMER — pinned by tests/test_security_guards.py.
 _INFERENCE_MARKERS = (
     "general knowledge",
     "general inference",
@@ -61,9 +69,9 @@ class OutputFilter:
            code path that skipped citation population.
         1. If the answer contains PII that is absent from every source chunk,
            block the response.
-        3. If the answer uses general-inference / model-knowledge language but
+        2. If the answer uses general-inference / model-knowledge language but
            lacks a clear "not in the documents" disclaimer, block the response.
-        2. If the answer exceeds 4 000 chars, log a warning (still allowed).
+        3. If the answer exceeds 4 000 chars, log a warning (still allowed).
         """
         # Rule 0: Citation presence check
         # Only applies when source documents were retrieved. No-context
@@ -85,7 +93,7 @@ class OutputFilter:
                         reason="Output contains PII not in source documents",
                     )
 
-        # Rule 3: Inference labeling check
+        # Rule 2: Inference labeling check
         # When the answer uses general-inference / model-knowledge language but
         # carries no "not in the documents" disclaimer, block it. Only enforced
         # when inference language is present — grounded answers are unaffected.
@@ -98,7 +106,7 @@ class OutputFilter:
                 reason="Inference answer missing required disclaimer",
             )
 
-        # Rule 2: Suspicious length heuristic
+        # Rule 3: Suspicious length heuristic
         if len(answer) > _LONG_ANSWER_THRESHOLD:
             logger.warning(
                 "output_suspiciously_long",

@@ -284,7 +284,7 @@ def test_output_filter_pii_still_checked_when_citations_present() -> None:
 
 
 # ---------------------------------------------------------------------------
-# OutputFilter — inference labeling guard (Rule 3)
+# OutputFilter — inference labeling guard (Rule 2)
 # ---------------------------------------------------------------------------
 
 
@@ -318,7 +318,7 @@ def test_output_filter_allows_inference_with_disclaimer() -> None:
 
 
 def test_output_filter_allows_grounded_answer_without_inference_language() -> None:
-    """A plain grounded answer with no inference markers is unaffected by Rule 3."""
+    """A plain grounded answer with no inference markers is unaffected by Rule 2."""
     from app.security.output_filter import OutputFilter
 
     of = OutputFilter()
@@ -327,6 +327,24 @@ def test_output_filter_allows_grounded_answer_without_inference_language() -> No
     result = of.check(answer, [chunk], citations=[_make_citation()])
     assert result.allowed is True
     assert result.reason == "ok"
+
+
+def test_inference_disclaimer_contract_between_prompt_and_filter() -> None:
+    """The rag_answer v2 prompt and the output filter share one disclaimer contract.
+
+    The prompt teaches the model the canonical INFERENCE_DISCLAIMER sentence;
+    the filter must (a) recognize that exact sentence as both inference-labeled
+    and disclaimed, and (b) the v2 template must actually embed it. If either
+    side drifts, every well-behaved model answer would be falsely blocked.
+    """
+    from app.prompts.registry import get_prompt
+    from app.prompts.templates import INFERENCE_DISCLAIMER
+    from app.security.output_filter import _DISCLAIMER_MARKERS, _INFERENCE_MARKERS
+
+    lowered = INFERENCE_DISCLAIMER.lower()
+    assert any(m in lowered for m in _INFERENCE_MARKERS)
+    assert any(m in lowered for m in _DISCLAIMER_MARKERS)
+    assert INFERENCE_DISCLAIMER in get_prompt("rag_answer", "v2").template
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ policy out of the HTTP layer.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import httpx
@@ -26,12 +26,18 @@ class ProviderResolution:
     provider_mode: str   # "local" | "hybrid" | "cloud"
 
 
-@dataclass
-class ProviderPatch:
-    """Two-part delta from a mode shorthand: DB pre-updates and body field overrides."""
+def effective_provider_base_url(provider_type: str, raw_config: dict[str, Any]) -> str:
+    """Return the base URL the runtime actually uses for *provider_type*.
 
-    pre_updates: dict[str, Any] = field(default_factory=dict)
-    body_overrides: dict[str, Any] = field(default_factory=dict)
+    Local Ollama is environment-specific (host dev uses localhost, Docker uses
+    host.docker.internal), so the env URL always wins and no persisted value is
+    consulted. `provider_base_url` in the DB is an openai_compatible-only
+    setting; every ollama-mode read must go through this helper so a URL
+    persisted in one runtime can never leak into another.
+    """
+    if provider_type == "ollama":
+        return settings.ollama_url.rstrip("/")
+    return str(raw_config.get("provider_base_url", "https://api.openai.com/v1")).rstrip("/")
 
 
 def resolve_provider_config(raw_config: dict[str, Any]) -> ProviderResolution:
@@ -67,34 +73,28 @@ def resolve_provider_config(raw_config: dict[str, Any]) -> ProviderResolution:
 def expand_provider_mode(
     provider_mode: str,
     provider_base_url: str | None,
-) -> ProviderPatch:
-    """Expand a mode shorthand into constituent raw config fields.
+) -> dict[str, Any]:
+    """Expand a mode shorthand into request body field overrides.
 
-    local   → Ollama for everything, base URL reset to local address
+    local   → Ollama for everything; base URL is env-owned (effective_provider_base_url),
+              so nothing is persisted for it
     hybrid  → cloud LLM + local Ollama for embeddings/vision
     cloud   → cloud provider for everything (requires /embeddings support)
     """
     if provider_mode == "local":
-        return ProviderPatch(
-            pre_updates={"provider_base_url": settings.ollama_url.rstrip("/")},
-            body_overrides={
-                "providerType": "ollama",
-                "embeddingSource": "ollama",
-                "providerBaseUrl": None,
-            },
-        )
+        return {
+            "providerType": "ollama",
+            "embeddingSource": "ollama",
+            "providerBaseUrl": None,
+        }
     if provider_mode == "hybrid":
-        return ProviderPatch(
-            body_overrides={
-                "providerType": "openai_compatible",
-                "embeddingSource": "ollama",
-                "providerBaseUrl": provider_base_url or "https://api.deepseek.com/v1",
-            },
-        )
+        return {
+            "providerType": "openai_compatible",
+            "embeddingSource": "ollama",
+            "providerBaseUrl": provider_base_url or "https://api.deepseek.com/v1",
+        }
     if provider_mode == "cloud":
-        return ProviderPatch(
-            body_overrides={"providerType": "openai_compatible", "embeddingSource": "provider"},
-        )
+        return {"providerType": "openai_compatible", "embeddingSource": "provider"}
     raise SettingsValidationError("providerMode must be local, hybrid, or cloud")
 
 

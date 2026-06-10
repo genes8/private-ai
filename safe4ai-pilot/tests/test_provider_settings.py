@@ -6,13 +6,40 @@ SettingsValidationError, so assertions are straightforward.
 """
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from app.services.provider_settings import (
+    effective_provider_base_url,
     sanitize_ollama_role_models,
     validate_hybrid_embedding,
 )
 from app.services.settings_exceptions import SettingsValidationError
+
+# ---------------------------------------------------------------------------
+# effective_provider_base_url — env-owned URL for local Ollama
+# ---------------------------------------------------------------------------
+
+
+def test_effective_base_url_ollama_ignores_persisted_value() -> None:
+    """Local mode always uses the env URL — a stale DB value must never win."""
+    with patch("app.services.provider_settings.settings.ollama_url", "http://localhost:11434"):
+        url = effective_provider_base_url(
+            "ollama", {"provider_base_url": "http://host.docker.internal:11434"}
+        )
+    assert url == "http://localhost:11434"
+
+
+def test_effective_base_url_openai_uses_persisted_value() -> None:
+    url = effective_provider_base_url(
+        "openai_compatible", {"provider_base_url": "https://api.deepseek.com/v1/"}
+    )
+    assert url == "https://api.deepseek.com/v1"
+
+
+def test_effective_base_url_openai_defaults_when_unset() -> None:
+    assert effective_provider_base_url("openai_compatible", {}) == "https://api.openai.com/v1"
 
 _GEN = "qwen3.5:9b"
 _EMB = "nomic-embed-text"

@@ -10,13 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.auth.middleware import require_role
 from app.auth.router import limiter
-from app.config import settings
 from app.db import get_db
 from app.db.models import AuditLog, User
 from app.security.pinned_http import create_pinned_transport
 from app.security.url_validator import validate_provider_url
 from app.services.app_config_store import load_app_config, upsert_app_config
-from app.services.provider_settings import resolve_provider_config
+from app.services.provider_settings import effective_provider_base_url, resolve_provider_config
 from app.services.runtime_config import build_runtime_components
 from app.services.settings_exceptions import EmbeddingDimensionConflict, SettingsValidationError
 from app.services.settings_service import (
@@ -67,13 +66,12 @@ def patch_settings(
         # Stage 1: expand mode shorthands, snapshot prev state, derive effective values
         (
             body,
-            pre_updates,
             effective_provider,
             effective_embedding_source,
             prev_embedding_model,
             prev_embedding_source,
         ) = normalize_patch_request(body, current_config)
-        updates: dict[str, Any] = dict(pre_updates)
+        updates: dict[str, Any] = {}
 
         # Stage 2: probe Ollama / cloud reachability, sanitize stale model slots
         probe_updates, body = probe_provider_prerequisites(
@@ -171,11 +169,15 @@ def test_provider_connection(
     """Validate provider credentials with a lightweight connectivity check."""
     from app.services.provider_clients import OpenAICompatibleProvider  # noqa: F401
 
-    provider_type = body.providerType or str(load_app_config(db).get("provider_type", "ollama"))
-    base_url = body.providerBaseUrl or str(
-        load_app_config(db).get("provider_base_url", settings.ollama_url)
-    )
-    api_key = body.providerApiKey or load_app_config(db).get("provider_api_key", "")
+    cfg = load_app_config(db)
+    provider_type = body.providerType or str(cfg.get("provider_type", "ollama"))
+    # Test the URL the runtime will actually use: for ollama that is always the
+    # env URL (effective_provider_base_url), never a persisted or body value.
+    if provider_type == "ollama":
+        base_url = effective_provider_base_url("ollama", cfg)
+    else:
+        base_url = body.providerBaseUrl or effective_provider_base_url(provider_type, cfg)
+    api_key = body.providerApiKey or cfg.get("provider_api_key", "")
 
     if provider_type == "openai_compatible":
         if not api_key:

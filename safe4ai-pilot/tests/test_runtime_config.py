@@ -23,6 +23,25 @@ def test_runtime_config_defaults_to_ollama_provider() -> None:
     assert runtime.usage_source == "estimated"
 
 
+def test_local_ollama_runtime_ignores_stale_provider_base_url() -> None:
+    """Local mode must use the current env Ollama URL, not a stale DB URL."""
+    db = MagicMock()
+    with patch("app.services.runtime_config.settings.ollama_url", "http://localhost:11434"), patch(
+        "app.services.runtime_config.load_app_config",
+        return_value={
+            "provider_type": "ollama",
+            "provider_base_url": "http://host.docker.internal:11434",
+            "generation_model": "qwen3.5:9b",
+        },
+    ):
+        runtime = load_runtime_config(db)
+        provider = build_provider(runtime)
+
+    assert runtime.provider_base_url == "http://localhost:11434"
+    assert isinstance(provider, OllamaProvider)
+    assert provider._base_url == "http://localhost:11434"
+
+
 def test_runtime_config_loads_openai_compatible_provider() -> None:
     db = MagicMock()
     with patch(

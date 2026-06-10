@@ -15,7 +15,10 @@ from app.services.provider_clients import (
     OllamaProvider,
     OpenAICompatibleProvider,
 )
-from app.services.provider_settings import resolve_provider_config
+from app.services.provider_settings import (
+    effective_provider_base_url,
+    resolve_provider_config,
+)
 
 _DEFAULT_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 _DEFAULT_VISION_MODEL = "qwen3.5:9b"
@@ -133,12 +136,7 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
     vision_model_base = str(cfg.get("vision_model", _DEFAULT_VISION_MODEL))
     provider_embedding_model = str(cfg.get("provider_embedding_model", settings.embedding_model))
     provider_vision_model = str(cfg.get("provider_vision_model", _DEFAULT_VISION_MODEL))
-    provider_base_url = str(
-        cfg.get(
-            "provider_base_url",
-            settings.ollama_url if provider_type == "ollama" else "https://api.openai.com/v1",
-        )
-    )
+    provider_base_url = effective_provider_base_url(provider_type, cfg)
 
     sse_done_mode = str(cfg.get("sse_done_mode", "strict"))
     if sse_done_mode not in {"strict", "async"}:
@@ -156,7 +154,7 @@ def load_runtime_config(db: Session) -> RuntimeConfig:
 
     return RuntimeConfig(
         provider_type=provider_type,
-        provider_base_url=provider_base_url.rstrip("/"),
+        provider_base_url=provider_base_url,
         provider_resolved_ip=_provider_resolved_ip(
             provider_type=provider_type,
             provider_base_url=provider_base_url,

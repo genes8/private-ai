@@ -9,6 +9,15 @@ class PromptTemplate:
     input_variables: list[str] = field(default_factory=list)
 
 
+# Canonical disclaimer the rag_answer v2 contract requires on inference /
+# model-knowledge statements. The output filter's inference-labeling rule
+# matches answers against this phrasing — tests/test_security_guards.py pins
+# the contract between this constant and the filter's marker lists.
+INFERENCE_DISCLAIMER = (
+    "This is not stated directly in the documents; "
+    "it is general model knowledge or an inference."
+)
+
 TEMPLATES: list[PromptTemplate] = [
     PromptTemplate(
         name="query_rewriter",
@@ -84,8 +93,7 @@ TEMPLATES: list[PromptTemplate] = [
             "   - General inference / model knowledge: obvious general-world "
             "facts or simple inferences (e.g. 'the Houses of Parliament are in "
             "London'). You may use these, but you MUST label them clearly, for "
-            "example: 'This is not stated directly in the documents; it is "
-            "general model knowledge or an inference.'\n"
+            "example: '" + INFERENCE_DISCLAIMER + "'\n"
             "3. When the documents do not state something, say so explicitly: "
             "state what the documents do and do not confirm. Do not present an "
             "inference as a documented fact.\n"

@@ -800,8 +800,12 @@ class TestSettings:
         from app.main import app
         app.dependency_overrides.clear()
 
-    def test_patch_settings_provider_mode_local_resets_base_url(self) -> None:
-        """PATCH providerMode=local must reset provider_base_url to local Ollama URL."""
+    def test_patch_settings_provider_mode_local_does_not_persist_base_url(self) -> None:
+        """PATCH providerMode=local must not persist provider_base_url.
+
+        Local Ollama's URL is env-owned (effective_provider_base_url); persisting
+        it is how host-vs-Docker URLs used to leak between runtimes.
+        """
         from app.config import settings as app_settings
 
         admin = _make_admin_user()
@@ -828,8 +832,7 @@ class TestSettings:
         updates = mock_upsert.call_args.args[1]
         assert updates["provider_type"] == "ollama"
         assert updates["embedding_source"] == "ollama"
-        from app.config import settings as app_settings
-        assert updates["provider_base_url"] == app_settings.ollama_url.rstrip("/")
+        assert "provider_base_url" not in updates
         from app.main import app
         app.dependency_overrides.clear()
 

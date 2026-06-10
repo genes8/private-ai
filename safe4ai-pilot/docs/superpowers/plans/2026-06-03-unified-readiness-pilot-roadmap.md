@@ -1,7 +1,32 @@
 # Safe4AI Unified Readiness Pilot Roadmap
 
-Date: 2026-06-03
+Date: 2026-06-03 (updated 2026-06-10)
 Status: canonical working plan
+
+## 2026-06-10 Status Update
+
+Regression check on `main` (2026-06-10): backend `pytest tests/ -q` — 416 passed, 4 skipped; frontend `npm run build` — clean. No app file exceeds 1k lines.
+
+Work landed since 2026-06-03 (not yet reflected below in the original text):
+
+- Grounded inference answer contract (`rag_answer` v2): numbered context sources `[1], [2], ...` aligned with citation chips, inference/model-knowledge labeling rules, entity-specific fact restrictions. `generate_node` now answers the user's real question instead of the HyDE rewrite.
+- Output filter Rule 3: blocks answers that use inference/model-knowledge language without a "not in the documents" disclaimer.
+- Backend import unblock, SSE `trace_id` definition, safe delete order; compose Postgres single configurable host port.
+- In progress (uncommitted): `load_runtime_config` ignores persisted `provider_base_url` for local Ollama mode so a URL persisted in one runtime (host vs Docker) cannot break chat in the other. This addresses the root cause behind the 2026-06-03 smoke finding about chat-provider health.
+
+New hardening follow-ups from the 2026-06-10 code review — fold into Phase C as "C0" items:
+
+- [x] **Finish the `provider_base_url` ownership invariant.** (Done 2026-06-10.) Canonical helper `effective_provider_base_url()` in `provider_settings.py` is now the single source of truth: `provider_base_url` is an `openai_compatible`-only setting; every ollama-mode path (runtime, settings serializer `baseUrl`, `POST /settings/provider/test`) reads the env `settings.ollama_url`. The local-mode persisting write was deleted, which made the entire `ProviderPatch.pre_updates` mechanism dead — removed (`expand_provider_mode` now returns plain body overrides; `ProviderPatch` dataclass deleted). Covered by unit tests in `test_provider_settings.py`, `test_runtime_config.py`, and a flipped `test_admin.py` test asserting local mode persists no base URL.
+- [x] **Make output filter Rule 3 robust to answer language.** (Done 2026-06-10, scoped as planned.) Canonical `INFERENCE_DISCLAIMER` constant lives in `app/prompts/templates.py`, is embedded in the v2 template, and a contract test (`test_inference_disclaimer_contract_between_prompt_and_filter`) pins it against the filter's marker lists so drift on either side fails CI. The English-only language limitation (non-English fail-open; mixed-language false block) is documented in `output_filter.py` as an accepted trade-off until a language-aware check exists. Docstring rules renumbered to 0, 1, 2, 3.
+- [x] **Re-verify the chat-provider health gap after the runtime fix.** (Verified 2026-06-10.) `/health` local branch pings `settings.ollama_url`, which is now by construction the same URL chat uses (`effective_provider_base_url`); the `openai_compatible` branch pings `runtime.provider_base_url + "/models"` — the chat provider itself, with the pinned transport. No remaining divergence between health and chat.
+- [ ] Scanned-PDF OCR remains smoke-unverified (carried over from the 2026-06-03 run).
+
+What "full production" still needs, in priority order:
+
+1. **Phase E (closed-runtime packaging + release pipeline)** — the single biggest blocker. There are no production images, no CI/CD release gates, no SBOM/vuln/license reporting, no versioned update path. Nothing can ship to a customer-controlled environment as a product today.
+2. **Phase D (atomic document lifecycle)** — data-correctness risk for live pilots with changing corpora; reindex is not atomic from the user's point of view.
+3. **Phase C (pilot operations in the app)** — operator efficiency: audit kind counts/filtering, document inspector, real stats time series, session sidebar, follow-up suggestions. None of these endpoints exist yet (verified 2026-06-10).
+4. **C0 hardening items above** — small, do them first inside Phase C.
 
 This document consolidates these older planning sources:
 
@@ -372,6 +397,12 @@ Exit criteria:
 
 Goal: remove the most obvious admin/operator gaps that would slow repeated pilots.
 
+Tasks (C0 — hardening first, see 2026-06-10 status update for detail):
+
+- [x] C0: finish `provider_base_url` ownership invariant — done 2026-06-10 (`effective_provider_base_url()` helper; `pre_updates` mechanism deleted).
+- [x] C0: output filter Rule 3 — done 2026-06-10 (shared `INFERENCE_DISCLAIMER` constant + contract test, language-limitation note, docstring renumber).
+- [x] C0: chat-provider health check re-verified 2026-06-10 — health and chat now share the same URL source by construction.
+
 Tasks:
 
 - [ ] Add audit kind-count endpoint and server-backed kind filter.
@@ -517,7 +548,10 @@ Exit criteria:
 | Evaluation tooling | Implemented | Run during pilots and attach to report |
 | Final pilot report | Template done (2026-06-03) | Fill per pilot from `docs/pilot/final-readiness-report-template.md` |
 | Paid pilot package | Templates done (2026-06-03) | Use `docs/pilot/` to sell/run/close pilots |
-| Real-service smoke | Done (2026-06-03) | PASS 5/5; see `docs/pilot/smoke-run-log.md` |
+| Real-service smoke | Done (2026-06-03) | PASS 5/5; see `docs/pilot/smoke-run-log.md`; scanned-PDF OCR still unverified |
+| Grounded inference contract | Done (2026-06-03, commit 9b21a02) | Rule 3 language robustness is a C0 task |
+| Regression (tests + build) | Re-verified 2026-06-10 | 416 passed / 4 skipped; clean frontend build |
+| Provider base URL invariant | Done (2026-06-10) | `effective_provider_base_url()` is the single source; commit pending |
 | Closed-runtime deployment | Not done | Define image/bundle, CI/CD, SBOM, escrow path |
 | Multi-tenant workspace | Not done | Enterprise candidate only |
 | vLLM | Partial via OpenAI-compatible provider | Need docs/preset before claiming |
@@ -525,11 +559,17 @@ Exit criteria:
 
 ## Immediate Next Step
 
-**Phase A and Phase B are complete (2026-06-03).** Backend tests and frontend build pass, stale docs are corrected, a real-service smoke run is documented (`docs/pilot/smoke-run-log.md`, PASS 5/5), and the repeatable pilot package exists under `docs/pilot/`.
+**Phase A and Phase B are complete (2026-06-03).** Backend tests and frontend build pass (re-verified 2026-06-10), stale docs are corrected, a real-service smoke run is documented (`docs/pilot/smoke-run-log.md`, PASS 5/5), and the repeatable pilot package exists under `docs/pilot/`. The grounded inference answer contract landed 2026-06-03 (commit 9b21a02).
 
-Next: **Phase C — Productize pilot operations in the app** (audit kind-count endpoint + server-side kind filter, document inspector, stats time-series/sparklines, session list + chat sidebar, deterministic follow-up suggestions). Two smoke-run findings are worth folding into that work:
+Next, in order:
 
-- Add a health check that pings the **chat** provider, not just embeddings — chat generation can fail (stale DB `provider_base_url`) while `/health` and embeddings stay green.
-- Note for sparse-corpus pilots: `route_after_grade` needs ≥2 relevant chunks for the direct generate path; single-fact docs detour through decompose and can hit the grounding fallback.
+1. ~~**C0 hardening**~~ — **done 2026-06-10** (`provider_base_url` invariant, output filter Rule 3 contract, health check verification; 420 tests pass). Details in the 2026-06-10 status update.
+2. **Phase C — Productize pilot operations** (audit kind-count endpoint + server-side kind filter, document inspector, stats time-series/sparklines, session list + chat sidebar, deterministic follow-up suggestions). None of these endpoints exist yet (verified 2026-06-10). **This is the current next step.**
+3. **Phase D and Phase E in parallel planning**: Phase E (closed-runtime packaging, CI/CD release gates, SBOM) is the largest remaining gap between "pilot-ready" and "sellable production product" — start its design decisions (delivery target, runtime boundary) while Phase C is being built.
+
+Earlier smoke-run findings, current status:
+
+- ~~Add a health check that pings the **chat** provider, not just embeddings~~ — root cause (stale DB `provider_base_url`) addressed by the in-progress runtime fix; verify as C0.
+- Note for sparse-corpus pilots: `route_after_grade` needs ≥2 relevant chunks for the direct generate path; single-fact docs detour through decompose and can hit the grounding fallback. (Still true.)
 
 Original reasoning (kept for context): the application is already strong enough for a pilot, but the product package was not yet repeatable. Building more enterprise features before the discovery/report/runbook artifacts would increase scope without making the offer easier to sell or deliver.
