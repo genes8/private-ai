@@ -438,7 +438,7 @@ The Release pipeline is a comprehensive enterprise-grade workflow triggered by v
 ### Trigger Configuration
 - **Trigger**: Version tags matching pattern `v*.*.*`
 - **Permissions**: Write access to contents and packages
-- **Environment Variables**:
+- **Environment Variables**: 
   - `BACKEND_IMAGE`: ghcr.io/${{ github.repository }}/safe4ai-backend
   - `FRONTEND_IMAGE`: ghcr.io/${{ github.repository }}/safe4ai-frontend
 

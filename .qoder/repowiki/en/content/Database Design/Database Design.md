@@ -15,14 +15,17 @@
 - [tests/test_integration_containers.py](file://safe4ai-pilot/tests/test_integration_containers.py)
 - [docker-compose.yml](file://safe4ai-pilot/docker-compose.yml)
 - [docker-compose.override.yml](file://safe4ai-pilot/docker-compose.override.yml)
+- [app/startup_migrations.py](file://safe4ai-pilot/app/startup_migrations.py)
+- [tests/test_document_versioning.py](file://safe4ai-pilot/tests/test_document_versioning.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Updated PostgreSQL connection configuration to use configurable host and port settings
-- Added documentation for default port values (5432 for delivery, 5433 for local development)
-- Updated container orchestration documentation to reflect port mapping changes
-- Enhanced troubleshooting guidance for port conflict resolution
+- Added comprehensive document versioning infrastructure with new document_versions table
+- Implemented active_version_id foreign key relationship linking documents to their active version
+- Enhanced startup migrations to support versioning infrastructure with data migration logic
+- Updated entity relationship model to include DocumentVersion entity and its relationships
+- Added versioning constraints and business rules for document lifecycle management
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -37,12 +40,12 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document describes the PostgreSQL database design for the project with pgvector integration. It covers the entity relationship model, schema design, data management strategies, and operational practices. The focus is on the User, Document, Session, AuditLog, and Feedback-related entities, along with supporting entities for ingestion, caching, and human review. It also documents the Alembic-based migration system, vector embedding storage, query patterns, constraints, and operational procedures for lifecycle management, backups, and disaster recovery.
+This document describes the PostgreSQL database design for the project with pgvector integration and comprehensive document versioning capabilities. It covers the entity relationship model, schema design, data management strategies, and operational practices. The focus is on the User, Document, DocumentVersion, Session, AuditLog, and Feedback-related entities, along with supporting entities for ingestion, caching, and human review. It also documents the Alembic-based migration system, vector embedding storage, query patterns, constraints, and operational procedures for lifecycle management, backups, and disaster recovery.
 
-**Updated** The database now supports configurable PostgreSQL host and port settings to prevent conflicts with native PostgreSQL installations, with sensible defaults for different deployment environments.
+**Updated** The database now supports a comprehensive document versioning system with a dedicated document_versions table and active_version_id foreign key relationship, enabling versioned document management and improved data governance.
 
 ## Project Structure
-The database layer is implemented with SQLAlchemy declarative models and Alembic migrations. The application initializes the database at startup, ensuring the pgvector extension is available before creating tables. Migrations are configured via Alembic and executed programmatically by a dedicated script.
+The database layer is implemented with SQLAlchemy declarative models and Alembic migrations. The application initializes the database at startup, ensuring the pgvector extension is available before creating tables. Migrations are configured via Alembic and executed programmatically by a dedicated script. Startup migrations now handle the complex transformation from legacy document structure to versioned document architecture.
 
 ```mermaid
 graph TB
@@ -51,6 +54,7 @@ DBInit --> Models["app/db/models.py<br/>SQLAlchemy Declarative Base and ORM mode
 Models --> MigrationsEnv["app/db/migrations/env.py<br/>Alembic env.py loads models and sets URL"]
 MigrationsEnv --> AlembicIni["safe4ai-pilot/alembic.ini<br/>script_location, logging"]
 Startup["app/main.py<br/>CREATE EXTENSION vector<br/>Base.metadata.create_all"] --> DBInit
+Startup --> StartupMigrations["app/startup_migrations.py<br/>Versioning infrastructure setup"]
 ScriptsMigrate["scripts/migrate.py<br/>alembic upgrade head"] --> MigrationsEnv
 ScriptsBackup["scripts/backup.py<br/>pg_dump, Qdrant snapshot, raw copy"] --> Config
 DockerCompose["docker-compose.yml<br/>Port mapping 5432:5432"] --> Config
@@ -64,6 +68,7 @@ DockerOverride["docker-compose.override.yml<br/>Port mapping 5432:5433"] --> Con
 - [app/db/migrations/env.py:1-51](file://safe4ai-pilot/app/db/migrations/env.py#L1-L51)
 - [safe4ai-pilot/alembic.ini:1-150](file://safe4ai-pilot/alembic.ini#L1-L150)
 - [app/main.py:35-40](file://safe4ai-pilot/app/main.py#L35-L40)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
 - [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
@@ -75,6 +80,7 @@ DockerOverride["docker-compose.override.yml<br/>Port mapping 5432:5433"] --> Con
 - [app/db/migrations/env.py:1-51](file://safe4ai-pilot/app/db/migrations/env.py#L1-L51)
 - [safe4ai-pilot/alembic.ini:1-150](file://safe4ai-pilot/alembic.ini#L1-L150)
 - [app/main.py:35-40](file://safe4ai-pilot/app/main.py#L35-L40)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
 - [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
@@ -98,14 +104,23 @@ This section outlines the core entities and their relationships, highlighting co
 
 - Document
   - Primary key: id (string)
+  - Foreign key: active_version_id → document_versions.id (nullable, index)
   - Attributes: filename, storage_filename, file_type, ingestion_status (enum), uploaded_by → users.id, uploaded_at, doc_metadata (JSON), ingestion_started_at, version, active_version
-  - Constraints: ingestion_status default, timestamps, version defaults
+  - Constraints: ingestion_status default, timestamps, version defaults, active_version_id foreign key with ON DELETE SET NULL
+
+- DocumentVersion
+  - Primary key: id (string)
+  - Unique constraint: (document_id, version_number)
+  - Foreign key: document_id → documents.id (index)
+  - Attributes: version_number, filename, storage_filename, file_type, file_size_bytes, status (enum), created_by, created_at, ingested_at, activated_at
+  - Constraints: version_number unique per document, status enum, timestamps
 
 - DocumentChunk
   - Primary key: id (string)
   - Foreign key: document_id → documents.id (index)
+  - Foreign key: document_version_id → document_versions.id (nullable, index)
   - Attributes: chunk_index, chunk_version, content_preview (limited length), qdrant_point_id
-  - Constraints: chunk_version default
+  - Constraints: chunk_version default, document_version_id foreign key with ON DELETE SET NULL
 
 - SemanticCache
   - Primary key: id (string)
@@ -134,8 +149,9 @@ This section outlines the core entities and their relationships, highlighting co
 - IngestionJob
   - Primary key: id (string)
   - Foreign key: document_id → documents.id (index)
+  - Foreign key: document_version_id → document_versions.id (nullable, index)
   - Attributes: status, created_at, completed_at, error
-  - Constraints: status default, timestamps
+  - Constraints: status default, timestamps, document_version_id foreign key with ON DELETE SET NULL
 
 - HumanReviewQueue
   - Primary key: id (string)
@@ -149,25 +165,29 @@ Entity relationships and referential integrity:
 - users → audit_logs (one-to-many)
 - users → query_feedback (one-to-many)
 - users → human_review_queue (one-to-many)
+- documents → document_versions (one-to-many)
 - documents → document_chunks (one-to-many)
 - documents → ingestion_jobs (one-to-many)
+- document_versions → document_chunks (one-to-many)
+- document_versions → ingestion_jobs (one-to-many)
 - sessions → agent_runs (one-to-many)
 - documents ↔ semantic_cache (via source_document_ids JSON array)
 
 Indexes and constraints:
-- Unique constraints: users.email
-- Indexes: users.email, sessions.user_id, document_chunks.document_id, audit_logs.user_id, audit_logs.timestamp, query_feedback.trace_id
-- Enums: UserRole, IngestionStatus, FeedbackRating, ReviewStatus
+- Unique constraints: users.email, (document_versions.document_id, document_versions.version_number)
+- Indexes: users.email, sessions.user_id, document_chunks.document_id, document_chunks.document_version_id, audit_logs.user_id, audit_logs.timestamp, query_feedback.trace_id, documents.active_version_id
+- Enums: UserRole, IngestionStatus, FeedbackRating, ReviewStatus, DocumentVersionStatus
 - JSON fields for flexible metadata and citations
 - Vector dimension 768 for SemanticCache.query_embedding
 
 **Section sources**
 - [app/db/models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
+- [app/db/models.py:131-175](file://safe4ai-pilot/app/db/models.py#L131-L175)
 
 ## Architecture Overview
-The database architecture integrates SQLAlchemy ORM models with Alembic migrations and pgvector. At startup, the application ensures the vector extension exists and creates all tables. Migrations are managed centrally and can be applied via a script. Backups capture PostgreSQL, Qdrant snapshots, and raw data.
+The database architecture integrates SQLAlchemy ORM models with Alembic migrations and pgvector. At startup, the application ensures the vector extension exists and creates all tables. Migrations are managed centrally and can be applied via a script. The new versioning infrastructure provides comprehensive document version management with automatic data migration from legacy document structure.
 
-**Updated** The database connection now supports configurable host and port settings, with different defaults for delivery and development environments to avoid conflicts with existing PostgreSQL installations.
+**Updated** The database connection now supports configurable host and port settings, with different defaults for delivery and development environments to avoid conflicts with existing PostgreSQL installations. Startup migrations now handle the complex transformation from legacy document structure to versioned document architecture.
 
 ```mermaid
 graph TB
@@ -178,6 +198,7 @@ DBInit["app/db/__init__.py<br/>engine, SessionLocal, Base"]
 Models["app/db/models.py<br/>ORM models"]
 MigrateScript["scripts/migrate.py<br/>alembic upgrade head"]
 BackupScript["scripts/backup.py<br/>pg_dump, Qdrant snapshot, raw copy"]
+StartupMigrations["app/startup_migrations.py<br/>Versioning infrastructure setup"]
 end
 subgraph "Database Layer"
 PG["PostgreSQL"]
@@ -194,6 +215,7 @@ VectorExt --> Schema
 MigrateScript --> PG
 BackupScript --> PG
 BackupScript --> VectorExt
+StartupMigrations --> Schema
 DockerPorts --> PG
 ```
 
@@ -204,13 +226,14 @@ DockerPorts --> PG
 - [app/db/models.py:18-175](file://safe4ai-pilot/app/db/models.py#L18-L175)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 - [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
 - [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
 
 ## Detailed Component Analysis
 
 ### Entity Relationship Model
-The ER model centers around Users, Documents, Sessions, and AuditLogs, with auxiliary entities for ingestion, caching, and feedback/review.
+The ER model centers around Users, Documents, DocumentVersions, Sessions, and AuditLogs, with auxiliary entities for ingestion, caching, and feedback/review. The new DocumentVersion entity provides comprehensive versioning capabilities.
 
 ```mermaid
 erDiagram
@@ -224,15 +247,9 @@ boolean is_active
 integer failed_login_count
 timestamp locked_until
 }
-SESSIONS {
-string id PK
-string user_id FK
-timestamp created_at
-timestamp updated_at
-json state_json
-}
 DOCUMENTS {
 string id PK
+string active_version_id FK
 string filename
 string storage_filename
 string file_type
@@ -244,9 +261,24 @@ timestamp ingestion_started_at
 integer version
 integer active_version
 }
+DOCUMENT_VERSIONS {
+string id PK
+string document_id FK
+integer version_number
+string filename
+string storage_filename
+string file_type
+integer file_size_bytes
+enum status
+string created_by
+timestamp created_at
+timestamp ingested_at
+timestamp activated_at
+}
 DOCUMENT_CHUNKS {
 string id PK
 string document_id FK
+string document_version_id FK
 integer chunk_index
 integer chunk_version
 string content_preview
@@ -297,6 +329,7 @@ timestamp created_at
 INGESTION_JOBS {
 string id PK
 string document_id FK
+string document_version_id FK
 string status
 timestamp created_at
 timestamp completed_at
@@ -319,25 +352,31 @@ USERS ||--o{ DOCUMENTS : "uploads"
 USERS ||--o{ AUDIT_LOGS : "generates"
 USERS ||--o{ QUERY_FEEDBACK : "gives"
 USERS ||--o{ HUMAN_REVIEW_QUEUE : "reviews"
+DOCUMENTS ||--o{ DOCUMENT_VERSIONS : "versions"
 DOCUMENTS ||--o{ DOCUMENT_CHUNKS : "chunks"
 DOCUMENTS ||--o{ INGESTION_JOBS : "jobs"
+DOCUMENT_VERSIONS ||--o{ DOCUMENT_CHUNKS : "chunks"
+DOCUMENT_VERSIONS ||--o{ INGESTION_JOBS : "jobs"
 SESSIONS ||--o{ AGENT_RUNS : "runs"
 DOCUMENTS ||--o{ SEMANTIC_CACHE : "referenced by"
 ```
 
 **Diagram sources**
 - [app/db/models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
+- [app/db/models.py:131-175](file://safe4ai-pilot/app/db/models.py#L131-L175)
 
 **Section sources**
 - [app/db/models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
+- [app/db/models.py:131-175](file://safe4ai-pilot/app/db/models.py#L131-L175)
 
 ### Migration System with Alembic
-The migration system is configured via Alembic and driven by the application's configuration. The environment script imports the models to enable autogenerate detection and sets the database URL from settings. A dedicated script runs migrations to the latest version.
+The migration system is configured via Alembic and driven by the application's configuration. The environment script imports the models to enable autogenerate detection and sets the database URL from settings. A dedicated script runs migrations to the latest version. Startup migrations now handle the complex transformation from legacy document structure to versioned document architecture.
 
 Key configuration and behavior:
 - Alembic configuration file sets script_location and logging.
 - env.py imports models and sets sqlalchemy.url from settings.postgres_url.
 - The migration script executes alembic upgrade head.
+- Startup migrations handle versioning infrastructure setup and data migration.
 
 Operational flow:
 ```mermaid
@@ -348,12 +387,15 @@ participant EnvPy as "migrations/env.py"
 participant Models as "app/db/models.py"
 participant Settings as "app/config.py"
 participant Engine as "app/db/__init__.py"
+participant StartupMigrations as "app/startup_migrations.py"
 participant DB as "PostgreSQL"
 Dev->>EnvPy : Run alembic commands
 EnvPy->>Models : Import models for autogenerate
 EnvPy->>Settings : Read postgres_url
 EnvPy->>Engine : Set sqlalchemy.url
 EnvPy->>DB : Apply migrations (upgrade/downgrade)
+StartupMigrations->>DB : Execute versioning transformations
+StartupMigrations->>DB : Migrate legacy data to new structure
 ```
 
 **Diagram sources**
@@ -362,11 +404,13 @@ EnvPy->>DB : Apply migrations (upgrade/downgrade)
 - [app/db/models.py:18-175](file://safe4ai-pilot/app/db/models.py#L18-L175)
 - [app/config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
 - [app/db/__init__.py:3-22](file://safe4ai-pilot/app/db/__init__.py#L3-L22)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 
 **Section sources**
 - [safe4ai-pilot/alembic.ini:1-150](file://safe4ai-pilot/alembic.ini#L1-L150)
 - [app/db/migrations/env.py:1-51](file://safe4ai-pilot/app/db/migrations/env.py#L1-L51)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 
 ### Vector Embedding Storage with pgvector
 Vector embeddings are stored in the SemanticCache entity using the Vector type with dimension 768. The application ensures the vector extension is enabled at startup and uses explicit casting in queries to compare vectors.
@@ -398,23 +442,27 @@ Update --> Return["Return cached response and citations"]
 - [tests/test_integration_containers.py:9-18](file://safe4ai-pilot/tests/test_integration_containers.py#L9-L18)
 
 ### Data Validation Rules and Business Constraints
-- Enumerations enforce discrete values for roles, ingestion states, feedback ratings, and review statuses.
-- Unique constraints prevent duplicate emails.
-- Indexes optimize frequent lookups (user email, foreign keys, audit timestamps).
+- Enumerations enforce discrete values for roles, ingestion states, feedback ratings, review statuses, and document version statuses.
+- Unique constraints prevent duplicate emails and ensure version uniqueness per document.
+- Indexes optimize frequent lookups (user email, foreign keys, audit timestamps, document version IDs).
 - JSON fields store flexible metadata and citations; ensure application-side validation for shape and content.
 - Timestamps use timezone-aware types with server defaults and updates.
 - Numeric fields (latency_ms, cost_usd) constrain numeric ranges.
 - Content preview fields limit string lengths.
+- **Updated** Document versioning constraints ensure referential integrity between documents and their versions, with proper cascading behavior for deletions.
 
 **Section sources**
 - [app/db/models.py:21-43](file://safe4ai-pilot/app/db/models.py#L21-L43)
 - [app/db/models.py:45-175](file://safe4ai-pilot/app/db/models.py#L45-L175)
+- [app/db/models.py:131-175](file://safe4ai-pilot/app/db/models.py#L131-L175)
 
 ### Practical Querying Examples
 - Vector similarity lookup with threshold and ordering.
 - Retrieval of related chunks by document ID with indexing.
 - Aggregation of audit logs by time window and user.
 - Upsert-like behavior for semantic cache entries using hit count increments.
+- **Updated** Version-aware document queries using active_version_id foreign key relationships.
+- **Updated** Complex joins between documents, document_versions, and document_chunks for versioned data retrieval.
 
 Note: Example SQL is not included. Refer to the service layer for exact query patterns and parameters.
 
@@ -422,6 +470,7 @@ Note: Example SQL is not included. Refer to the service layer for exact query pa
 - [app/services/semantic_cache.py:45-69](file://safe4ai-pilot/app/services/semantic_cache.py#L45-L69)
 - [app/db/models.py:86-95](file://safe4ai-pilot/app/db/models.py#L86-L95)
 - [app/db/models.py:111-124](file://safe4ai-pilot/app/db/models.py#L111-L124)
+- [app/db/models.py:131-175](file://safe4ai-pilot/app/db/models.py#L131-L175)
 
 ### Data Lifecycle Management and Disaster Recovery
 - Backups include:
@@ -430,6 +479,7 @@ Note: Example SQL is not included. Refer to the service layer for exact query pa
   - Raw data directory copy.
 - Retention policies are configurable via settings (e.g., audit log retention).
 - Migration automation supports controlled schema evolution.
+- **Updated** Startup migrations handle versioning infrastructure setup and data migration during initial deployment.
 
 Operational flow:
 ```mermaid
@@ -452,6 +502,7 @@ Backup-->>Operator : Report success/failure per step
 **Section sources**
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
 - [app/config.py:14-18](file://safe4ai-pilot/app/config.py#L14-L18)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 
 ### PostgreSQL Connection Configuration
 **Updated** The database connection now supports configurable host and port settings to prevent conflicts with native PostgreSQL installations.
@@ -480,10 +531,32 @@ Environment variable support:
 - [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
 - [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
 
-## Dependency Analysis
-The database layer depends on configuration for the connection URL, Alembic for schema evolution, and pgvector for vector operations. Startup order guarantees extension availability before table creation.
+### Document Versioning Infrastructure
+**Updated** The database now includes comprehensive document versioning capabilities with a dedicated document_versions table and active_version_id foreign key relationship.
 
-**Updated** Connection configuration now supports environment-specific port settings to avoid conflicts with existing PostgreSQL installations.
+Key features:
+- DocumentVersion entity stores complete version history with metadata
+- active_version_id foreign key links documents to their currently active version
+- Startup migrations automatically transform legacy document structure to versioned architecture
+- Versioning supports concurrent document editing and rollback capabilities
+- Proper referential integrity with ON DELETE SET NULL constraints
+
+Data migration process:
+- Creates document_versions records from existing documents
+- Establishes active_version_id relationships
+- Migrates document_chunks and ingestion_jobs to versioned structure
+- Maintains referential integrity across all related entities
+
+**Section sources**
+- [app/db/models.py:131-175](file://safe4ai-pilot/app/db/models.py#L131-L175)
+- [app/db/models.py:112-118](file://safe4ai-pilot/app/db/models.py#L112-L118)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
+- [tests/test_document_versioning.py:1-50](file://safe4ai-pilot/tests/test_document_versioning.py#L1-L50)
+
+## Dependency Analysis
+The database layer depends on configuration for the connection URL, Alembic for schema evolution, and pgvector for vector operations. Startup order guarantees extension availability before table creation. **Updated** Startup migrations now handle the complex transformation from legacy document structure to versioned document architecture.
+
+**Updated** Connection configuration now supports environment-specific port settings to avoid conflicts with existing PostgreSQL installations. Startup migrations coordinate with the main application lifecycle to ensure proper versioning infrastructure setup.
 
 ```mermaid
 graph LR
@@ -493,6 +566,7 @@ Models --> MigrationsEnv["app/db/migrations/env.py"]
 MigrationsEnv --> AlembicIni["safe4ai-pilot/alembic.ini"]
 Startup["app/main.py"] --> DBInit
 Startup --> PGVector["pgvector Extension"]
+StartupMigrations["app/startup_migrations.py<br/>Versioning infrastructure"] --> DBInit
 ScriptsMigrate["scripts/migrate.py"] --> MigrationsEnv
 ScriptsBackup["scripts/backup.py"] --> Settings
 DockerPorts["Port Configuration<br/>5432 vs 5433"] --> Settings
@@ -505,6 +579,7 @@ DockerPorts["Port Configuration<br/>5432 vs 5433"] --> Settings
 - [app/db/migrations/env.py:1-51](file://safe4ai-pilot/app/db/migrations/env.py#L1-L51)
 - [safe4ai-pilot/alembic.ini:1-150](file://safe4ai-pilot/alembic.ini#L1-L150)
 - [app/main.py:35-37](file://safe4ai-pilot/app/main.py#L35-L37)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
 - [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
@@ -516,6 +591,7 @@ DockerPorts["Port Configuration<br/>5432 vs 5433"] --> Settings
 - [app/db/migrations/env.py:1-51](file://safe4ai-pilot/app/db/migrations/env.py#L1-L51)
 - [safe4ai-pilot/alembic.ini:1-150](file://safe4ai-pilot/alembic.ini#L1-L150)
 - [app/main.py:35-37](file://safe4ai-pilot/app/main.py#L35-L37)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 - [scripts/migrate.py:7-12](file://safe4ai-pilot/scripts/migrate.py#L7-L12)
 - [scripts/backup.py:29-87](file://safe4ai-pilot/scripts/backup.py#L29-L87)
 - [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
@@ -523,11 +599,12 @@ DockerPorts["Port Configuration<br/>5432 vs 5433"] --> Settings
 
 ## Performance Considerations
 - Vector similarity queries rely on GIN/HNSW indexes implicitly supported by pgvector; ensure appropriate indexing and consider partitioning for large datasets.
-- Use indexes on frequently filtered/joined columns (e.g., user_id, document_id, audit timestamps).
+- Use indexes on frequently filtered/joined columns (e.g., user_id, document_id, document_version_id, audit timestamps).
 - Prefer batch operations for ingestion jobs and chunk inserts.
 - Monitor query plans for vector comparisons and adjust thresholds to balance recall and performance.
 - Pool configuration and pre-ping settings help maintain connection reliability.
 - **Updated** Connection pooling with configurable host/port reduces connection overhead and improves reliability across different deployment environments.
+- **Updated** Document versioning introduces additional join complexity but provides better data governance and rollback capabilities.
 
 ## Troubleshooting Guide
 Common issues and remedies:
@@ -535,17 +612,25 @@ Common issues and remedies:
 - Migration failures: Confirm the database URL in settings and that env.py imports models for autogenerate.
 - Backup failures: Validate pg_dump availability, Qdrant endpoint reachability, and filesystem permissions.
 - **Updated** Port conflicts: If PostgreSQL is already running on the default port 5432, use the development override configuration that maps to port 5433.
+- **Updated** Versioning migration failures: Startup migrations handle complex data transformations; check logs for specific failure points and ensure proper sequence of operations.
 
 **Updated** Port conflict resolution:
 - Check if PostgreSQL is running on port 5432: `netstat -an | grep 5432`
 - Use development configuration: `docker-compose -f docker-compose.yml -f docker-compose.override.yml up`
 - Verify connection: `psql "postgresql://safe4ai:safe4ai@localhost:5433/safe4ai"`
 
+**Updated** Versioning infrastructure troubleshooting:
+- Verify startup migrations executed successfully
+- Check document_versions table creation and data migration
+- Validate active_version_id foreign key relationships
+- Ensure proper indexing on versioned tables
+
 Verification references:
 - Startup order ensures extension precedes table creation.
 - Container tests confirm pgvector presence.
 - Health checks validate PostgreSQL connectivity.
 - Port mapping verified in docker-compose configurations.
+- **Updated** Document versioning tests validate migration and relationship integrity.
 
 **Section sources**
 - [tests/test_startup_schema.py:7-13](file://safe4ai-pilot/tests/test_startup_schema.py#L7-L13)
@@ -553,21 +638,25 @@ Verification references:
 - [app/main.py:35-40](file://safe4ai-pilot/app/main.py#L35-L40)
 - [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
 - [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
+- [tests/test_document_versioning.py:1-50](file://safe4ai-pilot/tests/test_document_versioning.py#L1-L50)
 
 ## Conclusion
 The database design leverages SQLAlchemy ORM and Alembic for robust schema evolution, with pgvector enabling efficient vector similarity search. Entities and constraints ensure referential integrity and operational correctness. The migration and backup scripts provide reliable lifecycle management, while startup-time extension provisioning guarantees runtime compatibility.
 
-**Updated** The configurable host and port settings ensure seamless integration with existing PostgreSQL installations by using different default ports for delivery (5432) and local development (5433) environments, preventing common port conflicts.
+**Updated** The configurable host and port settings ensure seamless integration with existing PostgreSQL installations by using different default ports for delivery (5432) and local development (5433) environments, preventing common port conflicts. The new document versioning infrastructure provides comprehensive version management capabilities with automatic data migration and proper referential integrity enforcement.
 
 ## Appendices
 
 ### Appendix A: Startup and Schema Initialization
 - The application creates the vector extension and then creates all tables.
 - Jobs recovery occurs after schema initialization.
+- **Updated** Startup migrations handle versioning infrastructure setup and data transformation.
 
 **Section sources**
 - [app/main.py:35-40](file://safe4ai-pilot/app/main.py#L35-L40)
 - [tests/test_startup_schema.py:16-22](file://safe4ai-pilot/tests/test_startup_schema.py#L16-L22)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
 
 ### Appendix B: Migration Execution Script
 - A simple script invokes Alembic to upgrade to the latest revision.
@@ -601,7 +690,18 @@ postgresql+psycopg2://safe4ai:safe4ai@localhost:5433/safe4ai
 - SSL Mode: Can be configured via connection parameters
 - Connection Pooling: Pre-ping enabled for reliability
 
+### Appendix E: Document Versioning Infrastructure Details
+**Updated** Comprehensive details for document versioning system:
+
+- DocumentVersion table stores complete version history with metadata
+- active_version_id foreign key links documents to their currently active version
+- Unique constraint ensures only one active version per document
+- ON DELETE SET NULL maintains referential integrity during deletions
+- Startup migrations automatically transform legacy document structure
+- Supports concurrent document editing and rollback capabilities
+
 **Section sources**
-- [app/config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
-- [docker-compose.yml:1-100](file://safe4ai-pilot/docker-compose.yml#L1-L100)
-- [docker-compose.override.yml:1-100](file://safe4ai-pilot/docker-compose.override.yml#L1-L100)
+- [app/db/models.py:131-175](file://safe4ai-pilot/app/db/models.py#L131-L175)
+- [app/db/models.py:112-118](file://safe4ai-pilot/app/db/models.py#L112-L118)
+- [app/startup_migrations.py:92-218](file://safe4ai-pilot/app/startup_migrations.py#L92-L218)
+- [tests/test_document_versioning.py:1-50](file://safe4ai-pilot/tests/test_document_versioning.py#L1-L50)

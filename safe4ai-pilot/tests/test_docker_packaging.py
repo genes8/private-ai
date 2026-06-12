@@ -21,6 +21,12 @@ def test_compose_override_mounts_runtime_packages_for_reload() -> None:
     assert "./scripts:/app/scripts" in override
 
 
+def test_vite_dev_proxy_covers_chat_namespace() -> None:
+    vite_config = (ROOT / "frontend" / "vite.config.ts").read_text()
+
+    assert '"/chat":' in vite_config
+
+
 def test_default_compose_does_not_require_ollama() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     services = compose["services"]

@@ -12,17 +12,24 @@
 - [config.py](file://safe4ai-pilot/app/config.py)
 - [upload_validator.py](file://safe4ai-pilot/app/security/upload_validator.py)
 - [admin_routes.py](file://safe4ai-pilot/app/api/admin_routes.py)
+- [document_routes.py](file://safe4ai-pilot/app/api/document_routes.py)
 - [semantic_cache.py](file://safe4ai-pilot/app/services/semantic_cache.py)
 - [graph.py](file://safe4ai-pilot/app/agents/graph.py)
+- [document_service.py](file://safe4ai-pilot/app/services/document_service.py)
+- [startup_migrations.py](file://safe4ai-pilot/app/startup_migrations.py)
+- [test_document_versioning.py](file://safe4ai-pilot/tests/test_document_versioning.py)
 - [architecture.md](file://safe4ai-pilot/docs/architecture.md)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Extracted parsing logic into dedicated `document_parser.py` service (182 lines) that consolidates all document parsing functionality
-- Refactored `rag_pipeline.py` to remove over 99 lines of parsing code and delegate all document processing to the new service
-- Improved testability since parsing logic can now be tested independently without instantiating the full pipeline
-- Enhanced modularity with dedicated OCR capabilities, PDF processing with automatic fallback, DOCX and XLSX handling
+- Added comprehensive DocumentVersion integration for version-aware ingestion pipeline
+- Implemented atomic document replacement with staged versions and rollback window
+- Enhanced status tracking for versioned documents with DocumentVersionStatus enumeration
+- Added improved error handling and transaction management for versioned ingestion
+- Updated ingestion service to support document_version_id parameter for targeted processing
+- Integrated version activation mechanism with Qdrant payload updates
+- Added cleanup procedures for superseded document versions and vectors
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -30,29 +37,28 @@
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
-10. [Appendices](#appendices)
+6. [Version Management System](#version-management-system)
+7. [Dependency Analysis](#dependency-analysis)
+8. [Performance Considerations](#performance-considerations)
+9. [Troubleshooting Guide](#troubleshooting-guide)
+10. [Conclusion](#conclusion)
+11. [Appendices](#appendices)
 
 ## Introduction
-This document describes the end-to-end document processing system that transforms uploaded files into searchable, vector-represented knowledge. It covers:
-- Upload validation and ingestion orchestration with enhanced error handling
-- File format support and OCR for images/scanned documents with quality detection
-- Metadata extraction and persistence with improved status tracking
-- Hybrid retrieval combining dense vectors and sparse BM25
-- Reranking with cross-encoders to improve result relevance
-- Embedding generation using Nomic Embed Text and vector storage with Qdrant
-- Practical configuration, customization, and optimization guidance
-- Indexing strategy, batch processing, scalability, and monitoring
+This document describes the end-to-end document processing system that transforms uploaded files into searchable, vector-represented knowledge with advanced version management capabilities. The system now supports atomic document replacement without retrieval gaps, comprehensive version tracking, and improved error handling. Key enhancements include:
+- Version-aware ingestion pipeline with DocumentVersion integration
+- Atomic document replacement with staged versions and rollback window
+- Enhanced status tracking through DocumentVersionStatus enumeration
+- Improved error handling and transaction management for versioned documents
+- Seamless migration from legacy document processing to versioned architecture
+- Comprehensive cleanup procedures for superseded content
 
 ## Project Structure
-The system is organized around a FastAPI backend with modular services:
-- API layer: uploads, admin operations, and status polling
-- Services: ingestion orchestration, RAG pipeline, document parsing, semantic caching
+The system is organized around a FastAPI backend with modular services supporting version management:
+- API layer: uploads, admin operations, status polling, and version management
+- Services: ingestion orchestration, RAG pipeline, document parsing, semantic caching, document service
 - Components: hybrid retriever and reranker
-- Models: shared Pydantic models and DB ORM models
+- Models: shared Pydantic models, DB ORM models with DocumentVersion support
 - Security: upload validation and guards
 - Agents: LangGraph pipeline orchestrating retrieval, grading, decomposition, generation, and quality gating
 
@@ -60,12 +66,14 @@ The system is organized around a FastAPI backend with modular services:
 graph TB
 subgraph "API Layer"
 AR["admin_routes.py"]
+DR["document_routes.py"]
 end
 subgraph "Services"
 IS["ingestion_service.py"]
 RP["rag_pipeline.py"]
 DP["document_parser.py"]
 SC["semantic_cache.py"]
+DS["document_service.py"]
 end
 subgraph "Components"
 HR["hybrid_retriever.py"]
@@ -74,6 +82,7 @@ end
 subgraph "Models & DB"
 M["models.py"]
 MDB["models.py (DB)"]
+SM["startup_migrations.py"]
 end
 subgraph "Security"
 UV["upload_validator.py"]
@@ -85,53 +94,59 @@ subgraph "Config"
 C["config.py"]
 end
 AR --> IS
+DR --> IS
 IS --> RP
 RP --> DP
 RP --> HR
 RP --> RR
 RP --> SC
-AR --> UV
-G --> HR
-G --> RR
+DR --> DS
 IS --> MDB
 RP --> MDB
 AR --> MDB
+DR --> MDB
 C --> IS
 C --> RP
 C --> DP
 C --> HR
 C --> RR
 C --> SC
+C --> DS
 ```
 
 **Diagram sources**
 - [admin_routes.py:63-114](file://safe4ai-pilot/app/api/admin_routes.py#L63-L114)
+- [document_routes.py:640-774](file://safe4ai-pilot/app/api/document_routes.py#L640-L774)
 - [ingestion_service.py:21-87](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L87)
 - [rag_pipeline.py:34-182](file://safe4ai-pilot/app/services/rag_pipeline.py#L34-L182)
 - [document_parser.py:1-183](file://safe4ai-pilot/app/services/document_parser.py#L1-183)
 - [hybrid_retriever.py:13-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L13-L143)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
 - [semantic_cache.py:14-104](file://safe4ai-pilot/app/services/semantic_cache.py#L14-L104)
+- [document_service.py:85-240](file://safe4ai-pilot/app/services/document_service.py#L85-L240)
 - [models.py:13-95](file://safe4ai-pilot/app/models.py#L13-L95)
 - [models.py (DB):68-175](file://safe4ai-pilot/app/db/models.py#L68-L175)
+- [startup_migrations.py:64-95](file://safe4ai-pilot/app/startup_migrations.py#L64-L95)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [graph.py:39-342](file://safe4ai-pilot/app/agents/graph.py#L39-L342)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
 
 **Section sources**
 - [admin_routes.py:63-114](file://safe4ai-pilot/app/api/admin_routes.py#L63-L114)
+- [document_routes.py:640-774](file://safe4ai-pilot/app/api/document_routes.py#L640-L774)
 - [architecture.md:1-45](file://safe4ai-pilot/docs/architecture.md#L1-L45)
 
 ## Core Components
-- Ingestion Service: Orchestrates background ingestion with enhanced error handling, transaction management, and improved status tracking through queued, embedding, and indexing states.
-- RAG Pipeline: Loads supported formats via dedicated document parser, chunks text with OCR quality detection, generates embeddings, stores vectors and payloads, updates BM25 index, and supports OCR for low-text PDF pages with confidence scoring.
-- Document Parser: Dedicated service (182 lines) consolidating all document parsing functionality including OCR capabilities, PDF processing with automatic fallback, DOCX and XLSX handling.
-- Hybrid Retriever: Combines dense vector similarity (Qdrant) and sparse BM25 ranking, then merges results via Reciprocal Rank Fusion.
-- Reranker: Uses a cross-encoder to re-rank candidate chunks for improved relevance.
-- Semantic Cache: Stores query embeddings and cached answers for reuse.
-- Upload Validator: Enforces allowed extensions, MIME types, magic bytes, and size limits.
-- Config: Centralized settings for URLs, models, and thresholds.
-- DB Models: Document lifecycle with enhanced status tracking, chunk metadata, audit logs, and semantic cache.
+- **Enhanced Ingestion Service**: Orchestrates background ingestion with version-aware processing, transaction management, and comprehensive status tracking through queued, embedding, and indexing states with DocumentVersion support.
+- **RAG Pipeline**: Loads supported formats via dedicated document parser, chunks text with OCR quality detection, generates embeddings, stores vectors and payloads with version metadata, updates BM25 index, and supports OCR for low-text PDF pages with confidence scoring.
+- **Document Parser**: Dedicated service (182 lines) consolidating all document parsing functionality including OCR capabilities, PDF processing with automatic fallback, DOCX and XLSX handling.
+- **Hybrid Retriever**: Combines dense vector similarity (Qdrant) and sparse BM25 ranking, then merges results via Reciprocal Rank Fusion.
+- **Reranker**: Uses a cross-encoder to re-rank candidate chunks for improved relevance.
+- **Semantic Cache**: Stores query embeddings and cached answers for reuse.
+- **Document Service**: Manages DocumentVersion lifecycle, activation, cleanup, and deletion verification with atomic switching semantics.
+- **Upload Validator**: Enforces allowed extensions, MIME types, magic bytes, and size limits.
+- **Config**: Centralized settings for URLs, models, and thresholds.
+- **DB Models**: Document lifecycle with enhanced status tracking, chunk metadata, audit logs, semantic cache, and comprehensive DocumentVersion support.
 
 **Section sources**
 - [ingestion_service.py:21-167](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L167)
@@ -140,22 +155,25 @@ C --> SC
 - [hybrid_retriever.py:13-143](file://safe4ai-pilot/app/components/hybrid_retriever.py#L13-L143)
 - [reranker.py:11-36](file://safe4ai-pilot/app/components/reranker.py#L11-L36)
 - [semantic_cache.py:14-104](file://safe4ai-pilot/app/services/semantic_cache.py#L14-L104)
+- [document_service.py:85-240](file://safe4ai-pilot/app/services/document_service.py#L85-L240)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
 - [models.py (DB):68-175](file://safe4ai-pilot/app/db/models.py#L68-L175)
 
 ## Architecture Overview
-High-level ingestion and retrieval flow with enhanced status tracking:
-- Upload validated and stored; ingestion job created with pending status and scheduled.
-- Background ingestion loads file content via dedicated document parser, performs OCR with quality detection, chunks, embeds, upserts vectors, persists chunk metadata, and updates BM25 index.
-- Enhanced status tracking moves documents through queued → embedding → indexed → failed states with proper transaction management.
-- Retrieval combines dense vectors and BM25, then reranks with a cross-encoder.
-- Optional semantic cache accelerates repeated queries.
+High-level ingestion and retrieval flow with enhanced status tracking and version management:
+- Upload validated and stored; ingestion job created with pending status and scheduled for specific DocumentVersion.
+- Background ingestion loads file content via dedicated document parser, performs OCR with quality detection, chunks, embeds, upserts vectors with version metadata, persists chunk metadata, and updates BM25 index.
+- Enhanced status tracking moves documents through queued → embedding → indexed → failed states with proper transaction management and DocumentVersion lifecycle.
+- Retrieval combines dense vectors and BM25, then reranks with a cross-encoder using active DocumentVersion.
+- Optional semantic cache accelerates repeated queries with version-aware caching.
+- Atomic document replacement allows seamless updates without retrieval gaps.
 
 ```mermaid
 sequenceDiagram
 participant Client as "Client"
 participant API as "Admin Routes"
+participant DocAPI as "Document Routes"
 participant Ingest as "Ingestion Service"
 participant Pipe as "RAG Pipeline"
 participant Parser as "Document Parser"
@@ -168,23 +186,35 @@ API->>API : "Validate + persist raw file"
 API->>API : "Create Document (queued) + Job (pending)"
 API->>Ingest : "Schedule run_ingestion()"
 Ingest->>Pipe : "ingest(file_path, doc_id, filename, uploaded_by)"
+Note over Pipe : "With document_version_id parameter"
 Pipe->>Parser : "load_pdf/load_docx/load_xlsx"
 Parser-->>Pipe : "Parsed pages with OCR quality"
 Pipe->>Pipe : "Chunk + OCR quality detection"
 Pipe->>ENC : "Generate embeddings (batch)"
 ENC-->>Pipe : "Embeddings"
-Pipe->>QD : "Upsert vectors + payload (including ocr_quality)"
+Pipe->>QD : "Upsert vectors + payload (including ocr_quality + version)"
 Pipe->>BM : "Update BM25 index"
 Pipe-->>Ingest : "Indexing complete"
 Ingest->>Ingest : "Update status : embedding → indexed"
+Note over Ingest : "If replacement version : staged → active"
 Ingest-->>API : "Status updated"
 Client->>API : "GET /admin/documents/{doc_id}/status"
 API-->>Client : "ingestion_status, job_status, error"
+Client->>DocAPI : "POST /admin/documents/{doc_id}/upload-new-version"
+DocAPI->>DocAPI : "Create DocumentVersion (pending)"
+DocAPI->>Ingest : "Schedule replacement ingestion"
+Ingest->>Pipe : "Process replacement version"
+Pipe->>QD : "Upsert with staged version metadata"
+Pipe->>BM : "Update BM25 index"
+Ingest->>Ingest : "Activate version atomically"
+Ingest->>QD : "Flip Qdrant payload is_active=True"
+Ingest->>Ingest : "Mark old version superseded"
 ```
 
 **Diagram sources**
 - [admin_routes.py:63-114](file://safe4ai-pilot/app/api/admin_routes.py#L63-L114)
-- [ingestion_service.py:21-87](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L87)
+- [document_routes.py:640-774](file://safe4ai-pilot/app/api/document_routes.py#L640-L774)
+- [ingestion_service.py:21-113](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L113)
 - [rag_pipeline.py:62-150](file://safe4ai-pilot/app/services/rag_pipeline.py#L62-L150)
 - [document_parser.py:102-159](file://safe4ai-pilot/app/services/document_parser.py#L102-L159)
 - [hybrid_retriever.py:29-41](file://safe4ai-pilot/app/components/hybrid_retriever.py#L29-L41)
@@ -194,62 +224,83 @@ API-->>Client : "ingestion_status, job_status, error"
 
 ## Detailed Component Analysis
 
-### Ingestion Service
-Enhanced responsibilities:
-- Create and manage ingestion jobs with improved status tracking (pending → embedding → completed).
-- Orchestrate the RAG pipeline for a document with robust error handling and transaction management.
-- Recover stuck jobs automatically with enhanced timeout handling.
-- Manage database sessions independently to prevent request session conflicts.
+### Enhanced Ingestion Service with Version Support
+**Updated** Enhanced to support DocumentVersion integration and atomic replacement semantics.
 
-Key behaviors:
-- Updates job/document status to "embedding" before processing and sets ingestion_started_at timestamp.
-- Initializes HybridRetriever and Reranker with configured endpoints and models.
-- Commits success or failure states with timestamps and error details.
-- Enhanced error handling with rollback protection and detailed logging.
-- Job recovery mechanism resets stuck jobs (>10 minutes) back to queued or failed states.
+Key responsibilities with version awareness:
+- Create and manage ingestion jobs with improved status tracking for DocumentVersion objects
+- Process specific DocumentVersion targets using document_version_id parameter
+- Support atomic document replacement with staged versions and rollback capability
+- Coordinate between DocumentVersion lifecycle and Qdrant payload updates
+- Manage cleanup of replaced version raw files only after successful activation
+- Enhanced error handling with version-specific failure states
+
+Version-aware processing logic:
+- Detects target DocumentVersion from document_version_id or job association
+- Sets DocumentVersion status to ingesting during processing
+- Coordinates activation only for replacement versions (different from active_version_id)
+- Handles cleanup of old raw files after successful version switch
+- Preserves active version serving during failed replacement attempts
 
 ```mermaid
 flowchart TD
 Start(["run_ingestion"]) --> OpenDB["Open independent DB session"]
-OpenDB --> LoadRec["Load Job + Doc"]
-LoadRec --> Valid{"Records exist?"}
-Valid --> |No| Close["Close DB & exit"]
-Valid --> |Yes| SetEmbed["Set status to embedding<br/>Set ingestion_started_at"]
-SetEmbed --> Init["Init HybridRetriever + Reranker + RagPipeline"]
-Init --> Ingest["pipeline.ingest(...)"]
+OpenDB --> LoadRec["Load Job + Doc + Version"]
+LoadRec --> HasVersion{"Has document_version_id?"}
+HasVersion --> |Yes| SetVersion["Set version.status = ingesting"]
+HasVersion --> |No| SetLegacy["Use legacy doc.version"]
+SetVersion --> TargetVersion["Target version_number = version.version_number"]
+SetLegacy --> TargetNumber["Target version_number = doc.version or 1"]
+TargetVersion --> Replacement{"Replacement ingest?<br/>(active_version_id != version.id)"}
+SetLegacy --> Replacement
+Replacement --> |Yes| StageProcess["Process as staged version<br/>activate=False"]
+Replacement --> |No| DirectProcess["Process as active version<br/>activate=True"]
+StageProcess --> Ingest["pipeline.ingest(...)"]
+DirectProcess --> Ingest
 Ingest --> Success{"Success?"}
-Success --> |Yes| MarkDone["Set job to completed<br/>Doc to indexed"]
-Success --> |No| MarkFail["Set job to failed<br/>Doc to failed<br/>Capture error details"]
-MarkDone --> Commit["Commit + close DB"]
-MarkFail --> Commit
-Commit --> Close
+Success --> |Yes| StageSuccess["If replacement: version.status = staged"]
+StageSuccess --> Activate{"Replacement version?"}
+Activate --> |Yes| AutoActivate["Auto-activate with commit retry"]
+Activate --> |No| MarkActive["version.status = active"]
+AutoActivate --> Cleanup["Cleanup old raw file"]
+Cleanup --> SuccessFlow["Update job to completed"]
+MarkActive --> SuccessFlow
+Success --> |No| MarkFailed["Set job to failed<br/>version.status = failed<br/>Preserve active version"]
+MarkFailed --> ErrorFlow["Update job to failed"]
+ErrorFlow --> Commit["Commit + close DB"]
+SuccessFlow --> Commit
+Commit --> Close["Close DB session"]
 Close --> End(["Exit"])
 ```
 
 **Diagram sources**
-- [ingestion_service.py:21-113](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L113)
+- [ingestion_service.py:100-299](file://safe4ai-pilot/app/services/ingestion_service.py#L100-L299)
 
 **Section sources**
 - [ingestion_service.py:21-167](file://safe4ai-pilot/app/services/ingestion_service.py#L21-L167)
+- [ingestion_service.py:100-299](file://safe4ai-pilot/app/services/ingestion_service.py#L100-L299)
 
-### Enhanced Status Tracking
-The system now implements a comprehensive document lifecycle with four distinct states:
-- queued: Initial state when documents are uploaded and waiting for processing
-- embedding: Active processing state when ingestion is in progress
-- indexed: Successful completion state when documents are fully processed
-- failed: Error state with detailed error information
-- skipped: State for documents that contain only filtered content
+### Enhanced Status Tracking with DocumentVersion Integration
+**Updated** Expanded to support comprehensive DocumentVersion lifecycle management.
 
-Job status tracking includes:
-- pending: Initial job state awaiting execution
-- embedding: Active job execution
-- completed: Successful job completion
-- failed: Failed job with error details
+The system now implements a comprehensive document lifecycle with five distinct states for DocumentVersion objects:
+- **pending**: Initial state when DocumentVersions are created for new versions
+- **ingesting**: Active processing state when DocumentVersion ingestion is in progress
+- **staged**: Intermediate state after successful processing but before activation
+- **active**: Final state when DocumentVersion becomes the serving version
+- **failed**: Error state with detailed error information for failed versions
+- **superseded**: State for previously active versions after successful replacement
+
+Document lifecycle coordination:
+- Document maintains active_version_id, version, and pending_version fields
+- DocumentVersion objects track individual version states and metadata
+- Atomic switching ensures no retrieval gaps during document replacement
+- Rollback window preserves superseded versions for configurable period
 
 **Section sources**
-- [models.py (DB):26-38](file://safe4ai-pilot/app/db/models.py#L26-L38)
-- [ingestion_service.py:44-46](file://safe4ai-pilot/app/services/ingestion_service.py#L44-L46)
-- [admin_routes.py:440](file://safe4ai-pilot/app/api/admin_routes.py#L440)
+- [models.py (DB):46-54](file://safe4ai-pilot/app/db/models.py#L46-L54)
+- [models.py (DB):132-167](file://safe4ai-pilot/app/db/models.py#L132-L167)
+- [ingestion_service.py:44-52](file://safe4ai-pilot/app/services/ingestion_service.py#L44-L52)
 
 ### Document Parser Service
 **Updated** Extracted parsing logic into dedicated service for improved modularity and testability.
@@ -489,9 +540,13 @@ Size --> |OK| Allow["Return allowed"]
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 
 ### API: Upload and Status
+**Updated** Enhanced with version management capabilities.
+
 Endpoints:
 - Upload document with validation and background ingestion scheduling with proper status initialization.
 - List documents and poll ingestion status with enhanced state information.
+- **New**: Upload new version of existing document with atomic replacement semantics.
+- **New**: Verify document deletion with comprehensive cleanup verification.
 - Re-index existing documents with proper state management.
 - Delete documents (filesystem, Qdrant, DB, and semantic cache cleanup) with active job prevention.
 
@@ -499,6 +554,7 @@ Endpoints:
 sequenceDiagram
 participant Client as "Client"
 participant API as "Admin Routes"
+participant DocAPI as "Document Routes"
 participant DB as "DB"
 participant IS as "Ingestion Service"
 Client->>API : "POST /admin/documents/upload"
@@ -506,6 +562,11 @@ API->>API : "Validate + write raw file"
 API->>DB : "Insert Document (queued) + Job (pending)"
 API->>IS : "schedule run_ingestion(...)"
 API-->>Client : "{doc_id, job_id}"
+Client->>DocAPI : "POST /admin/documents/{doc_id}/upload-new-version"
+DocAPI->>DocAPI : "Validate + write raw file"
+DocAPI->>DB : "Insert DocumentVersion (pending) + Job (pending)"
+DocAPI->>IS : "schedule replacement run_ingestion(...)"
+DocAPI-->>Client : "{doc_id, job_id, document_version_id, version}"
 Client->>API : "GET /admin/documents/{doc_id}/status"
 API->>DB : "Fetch Document + latest Job"
 API-->>Client : "{ingestion_status, job_status, error, ingestion_started_at}"
@@ -513,9 +574,11 @@ API-->>Client : "{ingestion_status, job_status, error, ingestion_started_at}"
 
 **Diagram sources**
 - [admin_routes.py:63-175](file://safe4ai-pilot/app/api/admin_routes.py#L63-L175)
+- [document_routes.py:640-774](file://safe4ai-pilot/app/api/document_routes.py#L640-L774)
 
 **Section sources**
 - [admin_routes.py:63-243](file://safe4ai-pilot/app/api/admin_routes.py#L63-L243)
+- [document_routes.py:640-774](file://safe4ai-pilot/app/api/document_routes.py#L640-L774)
 
 ### LangGraph Pipeline (Agent Orchestrator)
 The agent orchestrates retrieval, grading, decomposition, generation, and quality gating with safety checks and self-correction loops.
@@ -544,12 +607,49 @@ Route --> |No| Fallback["Fallback"]
 **Section sources**
 - [graph.py:39-342](file://safe4ai-pilot/app/agents/graph.py#L39-L342)
 
+## Version Management System
+**New Section** Comprehensive version management system for atomic document replacement.
+
+### DocumentVersion Lifecycle
+The system implements a complete DocumentVersion lifecycle with atomic switching semantics:
+- **Creation**: New versions created as DocumentVersion objects with pending status
+- **Processing**: Staged ingestion with document_version_id targeting specific version
+- **Activation**: Atomic switch from old to new version with Qdrant payload updates
+- **Supersession**: Previous version marked as superseded with rollback window
+- **Cleanup**: Old raw files and superseded content removed after successful activation
+
+### Atomic Switching Semantics
+The activation process ensures no retrieval gaps:
+1. Set new version status to activating
+2. Update Qdrant payload to mark new version as active
+3. Update old version status to superseded
+4. Commit database changes
+5. Update document metadata to point to new active version
+
+### Rollback Window
+Superseded versions remain accessible for configurable period:
+- Qdrant points tagged with is_active=False and superseded_at timestamp
+- Database chunk rows cleaned up after rollback window expires
+- Cleanup job removes superseded content older than configured threshold
+
+### Version Activation Retry Logic
+Enhanced error handling for activation failures:
+- Commit failures retried once with idempotent activation
+- Automatic rollback to previous version if activation fails
+- Detailed error tracking for failed version attempts
+
+**Section sources**
+- [document_service.py:85-240](file://safe4ai-pilot/app/services/document_service.py#L85-L240)
+- [test_document_versioning.py:76-274](file://safe4ai-pilot/tests/test_document_versioning.py#L76-L274)
+
 ## Dependency Analysis
 - Configuration-driven components: all major services depend on settings for model names, endpoints, and thresholds.
 - Qdrant and Ollama are external dependencies for vector storage and embeddings/LLM.
 - DB models define document lifecycle and chunk metadata used across ingestion and retrieval.
 - Upload validator ensures only allowed files enter the pipeline.
 - Document Parser service provides centralized parsing functionality for all document types.
+- **New**: DocumentService manages DocumentVersion lifecycle and atomic switching.
+- **New**: Startup migrations handle DocumentVersion table creation and schema evolution.
 
 ```mermaid
 graph LR
@@ -559,8 +659,11 @@ CFG --> DP["document_parser.py"]
 CFG --> HR["hybrid_retriever.py"]
 CFG --> RR["reranker.py"]
 CFG --> SC["semantic_cache.py"]
+CFG --> DS["document_service.py"]
 UV["upload_validator.py"] --> AR["admin_routes.py"]
+UV --> DR["document_routes.py"]
 AR --> IS
+DR --> IS
 IS --> RP
 RP --> DP
 RP --> HR
@@ -568,9 +671,11 @@ RP --> RR
 RP --> SC
 RP --> DB["db/models.py"]
 DP --> DB
+DS --> DB
 HR --> QD["Qdrant"]
 RR --> CE["CrossEncoder"]
 RP --> OLL["Ollama"]
+SM["startup_migrations.py"] --> DB
 ```
 
 **Diagram sources**
@@ -583,7 +688,10 @@ RP --> OLL["Ollama"]
 - [semantic_cache.py:15-25](file://safe4ai-pilot/app/services/semantic_cache.py#L15-L25)
 - [upload_validator.py:24-73](file://safe4ai-pilot/app/security/upload_validator.py#L24-L73)
 - [admin_routes.py:63-114](file://safe4ai-pilot/app/api/admin_routes.py#L63-L114)
+- [document_routes.py:640-774](file://safe4ai-pilot/app/api/document_routes.py#L640-L774)
+- [document_service.py:85-131](file://safe4ai-pilot/app/services/document_service.py#L85-L131)
 - [models.py (DB):68-175](file://safe4ai-pilot/app/db/models.py#L68-L175)
+- [startup_migrations.py:64-95](file://safe4ai-pilot/app/startup_migrations.py#L64-L95)
 
 **Section sources**
 - [config.py:5-28](file://safe4ai-pilot/app/config.py#L5-L28)
@@ -598,6 +706,9 @@ RP --> OLL["Ollama"]
 - Concurrency: background ingestion tasks prevent blocking the API.
 - Transaction isolation: independent database sessions prevent request conflicts.
 - Modular design: dedicated parsing service improves testability and allows for independent optimization.
+- **New**: Version activation batching: multiple versions can be processed concurrently with proper locking.
+- **New**: Atomic switching minimizes downtime during document replacement.
+- **New**: Rollback window optimization: configurable cleanup intervals balance storage vs. rollback requirements.
 
 ## Troubleshooting Guide
 Common issues and remedies:
@@ -608,6 +719,9 @@ Common issues and remedies:
 - Upload validation failures: ensure file extension, MIME type, and size meet allowed criteria.
 - Status tracking issues: monitor queued → embedding → indexed state transitions for proper processing flow.
 - Parsing service issues: dedicated document parser service can be tested independently for parsing failures.
+- **New**: Version activation failures: retry logic handles transient commit failures during atomic switching.
+- **New**: Superseded version cleanup: verify cleanup jobs running and rollback window configured appropriately.
+- **New**: Document replacement conflicts: ensure no concurrent ingestion jobs during replacement process.
 
 Operational checks:
 - Poll ingestion status via the status endpoint to monitor state transitions.
@@ -616,14 +730,18 @@ Operational checks:
 - Track OCR quality metrics and low-confidence page counts.
 - Monitor job recovery statistics for system health.
 - Test document parser service independently for parsing functionality.
+- **New**: Verify DocumentVersion status transitions during replacement.
+- **New**: Monitor rollback window for superseded content cleanup.
+- **New**: Test atomic switching behavior with version activation retries.
 
 **Section sources**
 - [ingestion_service.py:90-113](file://safe4ai-pilot/app/services/ingestion_service.py#L90-L113)
 - [rag_pipeline.py:291-294](file://safe4ai-pilot/app/services/rag_pipeline.py#L291-L294)
 - [admin_routes.py:261-277](file://safe4ai-pilot/app/api/admin_routes.py#L261-L277)
+- [document_service.py:54-131](file://safe4ai-pilot/app/services/document_service.py#L54-L131)
 
 ## Conclusion
-The system integrates robust ingestion, hybrid retrieval, and reranking to deliver accurate, contextual answers from uploaded documents. Enhanced error handling, transaction management, and status tracking provide reliable operation with clear visibility into document processing states. The extraction of parsing logic into a dedicated Document Parser service significantly improves modularity, testability, and maintainability. The addition of OCR quality detection improves processing reliability by identifying and tracking low-quality OCR results. With semantic caching, careful error handling, comprehensive monitoring, and modular design, it provides reliable performance and observability for production deployments.
+The system integrates robust ingestion, hybrid retrieval, and reranking to deliver accurate, contextual answers from uploaded documents with comprehensive version management capabilities. Enhanced error handling, transaction management, and status tracking provide reliable operation with clear visibility into document processing states. The extraction of parsing logic into a dedicated Document Parser service significantly improves modularity, testability, and maintainability. The addition of OCR quality detection improves processing reliability by identifying and tracking low-quality OCR results. The new DocumentVersion integration enables atomic document replacement without retrieval gaps, providing seamless updates and comprehensive rollback capabilities. With semantic caching, careful error handling, comprehensive monitoring, and modular design, it provides reliable performance and observability for production deployments with advanced version management features.
 
 ## Appendices
 
@@ -639,6 +757,7 @@ The system integrates robust ingestion, hybrid retrieval, and reranking to deliv
 - Upsert: Qdrant upsert with payload metadata including OCR quality indicators for retrieval and citations.
 - BM25: rebuilt from chunk IDs and payloads for sparse retrieval.
 - OCR quality tracking: low-confidence pages are monitored and can be identified via ocr_quality payload field.
+- **New**: Version-aware upsert: DocumentVersion metadata included in Qdrant payloads for version tracking.
 
 **Section sources**
 - [rag_pipeline.py:25-27](file://safe4ai-pilot/app/services/rag_pipeline.py#L25-L27)
@@ -664,11 +783,17 @@ The system integrates robust ingestion, hybrid retrieval, and reranking to deliv
   - Monitor OCR quality distribution and low-confidence page rates.
   - Observe status transition patterns for processing reliability.
   - Test parsing service independently for performance optimization.
+- **New**: Configure version management:
+  - Set rollback window for superseded content cleanup.
+  - Monitor DocumentVersion status transitions during replacement.
+  - Test atomic switching behavior under various failure scenarios.
+  - Verify cleanup procedures for old raw files and superseded content.
 
 **Section sources**
 - [rag_pipeline.py:25-31](file://safe4ai-pilot/app/services/rag_pipeline.py#L25-L31)
 - [rag_pipeline.py:151-181](file://safe4ai-pilot/app/services/rag_pipeline.py#L151-L181)
 - [semantic_cache.py:20-25](file://safe4ai-pilot/app/services/semantic_cache.py#L20-L25)
+- [document_service.py:133-176](file://safe4ai-pilot/app/services/document_service.py#L133-L176)
 
 ### Monitoring and Observability
 - Track ingestion job status and errors with enhanced state tracking.
@@ -677,8 +802,26 @@ The system integrates robust ingestion, hybrid retrieval, and reranking to deliv
 - Track OCR quality metrics and low-confidence page distributions.
 - Monitor job recovery statistics and system health indicators.
 - Monitor document parser service performance and error rates.
+- **New**: Track DocumentVersion lifecycle events and activation success rates.
+- **New**: Monitor rollback window effectiveness and cleanup job performance.
+- **New**: Verify atomic switching behavior and error recovery mechanisms.
 
 **Section sources**
 - [admin_routes.py:151-175](file://safe4ai-pilot/app/api/admin_routes.py#L151-L175)
 - [admin_routes.py:382-418](file://safe4ai-pilot/app/api/admin_routes.py#L382-L418)
 - [models.py (DB):111-124](file://safe4ai-pilot/app/db/models.py#L111-L124)
+- [document_service.py:178-240](file://safe4ai-pilot/app/services/document_service.py#L178-L240)
+
+### Database Schema Evolution
+**New Section** DocumentVersion table schema and migration support.
+
+The system includes comprehensive database schema support for version management:
+- DocumentVersion table with unique constraints on (document_id, version_number)
+- Foreign key relationships linking versions to documents and ingestion jobs
+- Timestamp fields for tracking version lifecycle events
+- Status tracking with comprehensive state enumeration
+- Migration support for backward compatibility
+
+**Section sources**
+- [models.py (DB):132-167](file://safe4ai-pilot/app/db/models.py#L132-L167)
+- [startup_migrations.py:64-95](file://safe4ai-pilot/app/startup_migrations.py#L64-L95)

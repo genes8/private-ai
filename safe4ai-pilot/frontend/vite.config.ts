@@ -21,7 +21,7 @@ export default defineConfig({
       "/me":      { target: API_URL, changeOrigin: true },
       "/account": { target: API_URL, changeOrigin: true },
       "/feedback": { target: API_URL, changeOrigin: true },
-      "/chat/stream": { target: API_URL, changeOrigin: true },
+      "/chat": { target: API_URL, changeOrigin: true, bypass: spaBypass },
       "/admin/documents": { target: API_URL, changeOrigin: true, bypass: spaBypass },
       "/admin/users":     { target: API_URL, changeOrigin: true, bypass: spaBypass },
       "/admin/feedback":  { target: API_URL, changeOrigin: true, bypass: spaBypass },

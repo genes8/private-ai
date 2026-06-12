@@ -62,7 +62,10 @@ def _ensure_documents_columns() -> None:
 
 
 def _ensure_document_version_schema() -> None:
-    statements = [
+    # Phase 1: DDL — CREATE TABLE, ALTER TABLE, CREATE INDEX
+    # Run these first and in their own transaction so schema changes survive
+    # even if the data migration below hits an issue.
+    ddl_statements = [
         """
         CREATE TABLE IF NOT EXISTS document_versions (
             id TEXT PRIMARY KEY,
@@ -100,6 +103,19 @@ def _ensure_document_version_schema() -> None:
             "CREATE INDEX IF NOT EXISTS ix_ingestion_jobs_document_version_id "
             "ON ingestion_jobs(document_version_id)"
         ),
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in ddl_statements:
+                conn.execute(text(statement))
+    except Exception as exc:
+        logger.warning("document_version_ddl_failed", error=str(exc))
+        return
+
+    # Phase 2: Data migration — INSERT/UPDATE
+    # Note: Using exec_driver_sql to avoid SQLAlchemy text() parsing `':v'`
+    # inside string literals as a bind parameter.
+    dml_statements = [
         """
         INSERT INTO document_versions (
             id,
@@ -116,7 +132,7 @@ def _ensure_document_version_schema() -> None:
             activated_at
         )
         SELECT
-            documents.id || ':v' || COALESCE(documents.active_version, documents.version, 1)::text,
+            documents.id || '-v' || COALESCE(documents.active_version, documents.version, 1)::text,
             documents.id,
             COALESCE(documents.active_version, documents.version, 1),
             documents.filename,
@@ -186,6 +202,16 @@ def _ensure_document_version_schema() -> None:
               WHERE document_versions.id = ingestion_jobs.document_version_id
           )
         """,
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in dml_statements:
+                conn.exec_driver_sql(statement)
+    except Exception as exc:
+        logger.warning("document_version_dml_failed", error=str(exc))
+
+    # Phase 3: Foreign-key constraints (DDL, but safe to skip on first run)
+    fk_statements = [
         "ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_active_version_id_fkey",
         (
             "ALTER TABLE documents ADD CONSTRAINT documents_active_version_id_fkey "
@@ -212,10 +238,10 @@ def _ensure_document_version_schema() -> None:
     ]
     try:
         with engine.begin() as conn:
-            for statement in statements:
+            for statement in fk_statements:
                 conn.execute(text(statement))
     except Exception as exc:
-        logger.warning("document_version_schema_ensure_failed", error=str(exc))
+        logger.warning("document_version_fk_failed", error=str(exc))
 
 
 def _ensure_user_columns() -> None:
