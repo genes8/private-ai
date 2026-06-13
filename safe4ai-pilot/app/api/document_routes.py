@@ -543,7 +543,16 @@ async def reindex_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
 ) -> dict[str, str]:
-    """Re-trigger ingestion for an existing document."""
+    """Re-trigger ingestion for an existing document.
+
+    Recovery-only. This path deletes the document's vectors before re-ingesting,
+    so it is NOT atomic — there is a window where the document is unsearchable, and
+    a mid-reindex failure leaves no rollback. For routine document updates use the
+    staged ``/admin/documents/{doc_id}/upload-new-version`` endpoint, which ingests
+    the new version before flipping ``active_version`` and keeps a rollback window.
+    Reach for ``reindex`` only when a document's index is stuck/corrupt and must be
+    rebuilt from the stored raw file.
+    """
     from datetime import UTC, datetime
 
     doc = db.get(Document, doc_id)

@@ -94,8 +94,8 @@ export default function DocumentRow({ doc, selected, onSelect, onReindex, onDele
             onReindex?.();
           }}
           className="p-1 rounded hover:bg-surface-2 text-text-mute opacity-0 group-hover:opacity-100 transition-opacity"
-          title="Reindex document"
-          aria-label="Reindex document"
+          title="Reindex (recovery) — rebuilds the index from the stored file; use 'New version' for routine updates"
+          aria-label="Reindex document (recovery)"
         >
           <RefreshCw size={12} />
         </button>
