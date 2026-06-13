@@ -78,6 +78,12 @@ def test_release_workflow_signs_published_images() -> None:
     assert 'cosign sign --yes "$FRONTEND_IMAGE:$VERSION"' not in sign_step["run"]
 
 
+def test_release_workflow_sets_required_test_secret_key() -> None:
+    workflow = yaml.safe_load((ROOT.parent / ".github" / "workflows" / "release.yml").read_text())
+
+    assert len(workflow["env"]["SECRET_KEY"]) >= 16
+
+
 def test_airgap_package_verifier_passes() -> None:
     from scripts.verify_airgap_package import verify_airgap_package
 
