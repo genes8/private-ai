@@ -107,3 +107,58 @@ def require_role(role: str) -> Callable[..., User]:
         return current_user
 
     return _check
+
+
+_WORKSPACE_HEADER = "X-Workspace-Id"
+
+
+def get_active_workspace_id(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> str:
+    """Resolve the request's active workspace from the X-Workspace-Id header.
+
+    If the header is present, the user must be a member (org-admins always pass);
+    a non-member gets 404 so workspaces they don't belong to are indistinguishable
+    from non-existent ones. If absent and the user has exactly one workspace, that
+    one is used; otherwise the caller must specify one (400).
+    """
+    from app.services import workspace_service
+
+    requested = request.headers.get(_WORKSPACE_HEADER)
+    if requested:
+        try:
+            workspace_service.assert_member(db, current_user, requested)
+        except workspace_service.WorkspaceAccessDenied:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        return requested
+
+    workspace_ids = workspace_service.list_workspace_ids_for_user(db, current_user)
+    if len(workspace_ids) == 1:
+        return workspace_ids[0]
+    raise HTTPException(
+        status_code=400,
+        detail="Workspace required: set the X-Workspace-Id header",
+    )
+
+
+def require_workspace_member(
+    current_user: User = Depends(get_current_user),
+    workspace_id: str = Depends(get_active_workspace_id),
+) -> tuple[User, str]:
+    """Dependency returning (user, active_workspace_id); membership already enforced."""
+    return current_user, workspace_id
+
+
+def require_workspace_admin(
+    current_user: User = Depends(get_current_user),
+    workspace_id: str = Depends(get_active_workspace_id),
+    db: Session = Depends(get_db),
+) -> tuple[User, str]:
+    """Require workspace-admin (or org-admin) authority over the active workspace."""
+    from app.services import workspace_service
+
+    if not workspace_service.is_workspace_admin(db, current_user, workspace_id):
+        raise HTTPException(status_code=403, detail="Workspace admin required")
+    return current_user, workspace_id
