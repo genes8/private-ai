@@ -68,7 +68,9 @@ def test_release_workflow_signs_published_images() -> None:
     assert workflow["permissions"]["id-token"] == "write"
 
     image_steps = workflow["jobs"]["images"]["steps"]
-    assert any(step.get("uses", "").startswith("sigstore/cosign-installer@") for step in image_steps)
+    assert any(
+        step.get("uses", "").startswith("sigstore/cosign-installer@") for step in image_steps
+    )
     sign_step = next(step for step in image_steps if step.get("name") == "Sign published images")
 
     # Images must be signed by immutable digest, not the mutable tag.
@@ -112,7 +114,9 @@ def test_release_workflow_audits_dependencies_with_only_documented_exception() -
     workflow = yaml.safe_load((ROOT.parent / ".github" / "workflows" / "release.yml").read_text())
     gate_steps = workflow["jobs"]["gates"]["steps"]
 
-    install_step = next(step for step in gate_steps if step.get("name") == "Install Python dependencies")
+    install_step = next(
+        step for step in gate_steps if step.get("name") == "Install Python dependencies"
+    )
     assert "python -m pip install --upgrade pip==26.1.2" in install_step["run"]
 
     audit_step = next(step for step in gate_steps if step.get("name") == "Audit dependencies")

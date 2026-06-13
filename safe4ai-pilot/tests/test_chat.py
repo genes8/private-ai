@@ -87,7 +87,7 @@ def authed_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db] = _db_override(db)
     token = encode_token("u1", "pilot_user")
     client = TestClient(app)
-    csrf_token = "test-csrf-token"
+    csrf_token = "test-csrf-token"  # noqa: S105 - test value, not a real secret
     client.cookies.set("access_token", token)
     client.cookies.set("csrf_token", csrf_token)
     client.headers["X-CSRF-Token"] = csrf_token
@@ -252,7 +252,9 @@ def test_chat_stream_done_event_reports_chat_model_name(authed_client: TestClien
             }
 
     session_id = "sess-model"
-    with patch("app.services.conversation.ConversationManager.new_session", return_value=session_id), patch(
+    with patch(
+        "app.services.conversation.ConversationManager.new_session", return_value=session_id
+    ), patch(
         "app.services.conversation.ConversationManager.load_session",
         return_value=PrivateAIState(session_id=session_id, user_id="u1"),
     ), patch("app.api.chat_routes.finalize_chat_run"), patch(
@@ -333,7 +335,9 @@ def test_chat_stream_async_finalization_uses_thread(authed_client: TestClient) -
         coro.close()
         return MagicMock()
 
-    with patch("app.services.conversation.ConversationManager.new_session", return_value=session_id), patch(
+    with patch(
+        "app.services.conversation.ConversationManager.new_session", return_value=session_id
+    ), patch(
         "app.services.conversation.ConversationManager.load_session",
         return_value=PrivateAIState(session_id=session_id, user_id="u1"),
     ), patch("app.api.chat_routes.finalize_chat_run"), patch(
@@ -390,7 +394,10 @@ def test_chat_recovers_from_corrupted_session_state(authed_client: TestClient) -
     old_session_id = "11111111-2222-3333-4444-555555555555"
     with patch(
         "app.services.conversation.ConversationManager.load_session",
-        side_effect=[ValueError("Invalid session state"), PrivateAIState(session_id="sess-new", user_id="u1")],
+        side_effect=[
+            ValueError("Invalid session state"),
+            PrivateAIState(session_id="sess-new", user_id="u1"),
+        ],
     ), patch(
         "app.services.conversation.ConversationManager.new_session",
         return_value="sess-new",
