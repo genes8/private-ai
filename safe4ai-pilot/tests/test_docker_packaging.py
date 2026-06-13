@@ -90,6 +90,24 @@ def test_backend_dockerfile_pins_cpu_torch() -> None:
     assert "pip install --no-cache-dir --timeout 300 torch==2.11.0" in dockerfile
 
 
+def test_backend_dockerfile_uses_patched_release_base_and_build_tools() -> None:
+    dockerfile = (ROOT / "app" / "Dockerfile").read_text()
+
+    assert "FROM python:3.11-slim-bookworm" in dockerfile
+    assert "apt-get update && apt-get upgrade -y" in dockerfile
+    assert "pip==26.1.2" in dockerfile
+    assert "setuptools==81.0.0" in dockerfile
+    assert "wheel==0.46.2" in dockerfile
+    assert "jaraco.context==6.1.0" in dockerfile
+
+
+def test_frontend_dockerfile_upgrades_runtime_base_packages() -> None:
+    dockerfile = (ROOT / "frontend" / "Dockerfile").read_text()
+
+    assert "FROM nginx:alpine" in dockerfile
+    assert "RUN apk upgrade --no-cache" in dockerfile
+
+
 def test_release_workflow_audits_dependencies_with_only_documented_exception() -> None:
     workflow = yaml.safe_load((ROOT.parent / ".github" / "workflows" / "release.yml").read_text())
     gate_steps = workflow["jobs"]["gates"]["steps"]
@@ -125,6 +143,7 @@ def test_release_workflow_attaches_license_reports_and_blocks_high_vulnerabiliti
     assert trivy_steps
     assert all(step["with"]["severity"] == "CRITICAL,HIGH" for step in trivy_steps)
     assert all(step["with"]["exit-code"] == "1" for step in trivy_steps)
+    assert all(step["with"]["ignore-unfixed"] is True for step in trivy_steps)
     assert all(step["with"]["trivyignores"] == ".trivyignore" for step in trivy_steps)
 
     release_step = next(
