@@ -32,7 +32,7 @@ Use this template before a pilot goes live to confirm the security posture and t
 | Signed / tamper-evident **CSV** | Not available (CSV export is unsigned) | JSONL audit archive is the tamper-evident artifact |
 | App-owned WORM / immutable storage | Not an app guarantee | Provided by the storage layer at deployment |
 | Multi-tenant workspaces | Not available | One workspace / evaluation boundary |
-| Hard vLLM support | Reachable only as OpenAI-compatible provider | No preset/runbook yet |
+| Bundled vLLM runtime | OpenAI-compatible preset only | Customer operates vLLM and approves data flow |
 
 ## 3. Data flow review
 

@@ -442,9 +442,21 @@ Exit criteria — met (2026-06-10):
 
 Goal: turn the commercial deployment model into a production-ready packaging and release path.
 
-**2026-06-10 progress** — the decision layer and the release pipeline are done; see `docs/release-process.md` (canonical Phase E decisions). Done: delivery-target decision (Compose default, air-gap supported, Helm = open roadmap), closed-runtime boundary, production image pipeline (`.github/workflows/release.yml`: test gates, trivy vulnerability scans, SPDX SBOMs, license reports, immutable GHCR version tags, evidence attached to GitHub releases), private-registry + offline update flows with rollback notes, licensing decision (contract entitlement, no runtime license server, air-gap never gated), source escrow decision (enterprise-only, contract-triggered), observability decisions (Langfuse/Prometheus/Dokploy out of current support; vLLM not claimed), and the first security-pack artifact (`docs/security-pack/audit-log-reference.md` — audit + agent trail field reference incl. deletion evidence).
+**2026-06-12 completion** — Phase E artifacts are now written. See
+`docs/release-process.md` (canonical Phase E decisions), `docs/helm-package-plan.md`,
+`.github/workflows/release.yml`, and `docs/security-pack/`. Done: delivery-target
+decision (Compose default, air-gap supported, Helm plan written), closed-runtime
+boundary, production image pipeline (test gates, trivy vulnerability scans, SPDX
+SBOMs, license reports, immutable GHCR version tags, cosign image signing,
+evidence attached to GitHub releases), private-registry + offline update flows
+with rollback notes, licensing decision (contract entitlement, no runtime
+license server, air-gap never gated), source escrow decision (enterprise-only,
+contract-triggered), Dokploy/Prometheus/vLLM deployment guidance, and the
+customer security-pack artifacts.
 
-Still open: Kubernetes/Helm package, data-flow diagram, threat model, controls mapping document, Enterprise WORM storage guide, image signing (deferred until a customer registry requires it).
+Customer-specific follow-up remains: validate the release workflow by pushing a
+version tag, and build/test the Helm chart when a named Enterprise customer
+requires Kubernetes delivery.
 
 Tasks:
 
@@ -479,7 +491,7 @@ Tasks:
   - load images,
   - run verifier,
   - apply migrations.
-- [ ] Write Kubernetes/Helm package plan:
+- [x] Write Kubernetes/Helm package plan (2026-06-12, `docs/helm-package-plan.md`):
   - app deployment,
   - frontend deployment,
   - Postgres external dependency or chart value,
@@ -492,7 +504,7 @@ Tasks:
   - prefer contract/support entitlement first,
   - add runtime license check only if necessary,
   - never make customer data access depend on a remote license server in air-gapped mode.
-- [ ] Write enterprise security pack:
+- [x] Write enterprise security pack (2026-06-12, `docs/security-pack/README.md`):
   - architecture diagram,
   - data-flow diagram,
   - threat model,
@@ -506,12 +518,12 @@ Tasks:
   - enterprise-only,
   - contract-triggered release conditions,
   - excludes routine source handoff from standard package.
-- [ ] Write Dokploy deployment guide if Dokploy is chosen as a supported deployment path.
+- [x] Write Dokploy deployment guide if Dokploy is chosen as a supported deployment path (2026-06-12, `docs/dokploy-deployment-guide.md`).
 - [x] Write Langfuse integration plan or explicitly keep Langfuse out of current support.
-- [ ] Add Prometheus/Grafana only if customer deployment needs metrics beyond current OTLP/Jaeger/admin stats.
-- [ ] Write vLLM/OpenAI-compatible deployment preset before mentioning vLLM in copy.
-- [ ] Write Enterprise WORM storage guide that explains storage-layer responsibility.
-- [ ] Write controls mapping document as an Enterprise service artifact.
+- [x] Add Prometheus/Grafana only if customer deployment needs metrics beyond current OTLP/Jaeger/admin stats (2026-06-12, plan documented in `docs/prometheus-grafana-plan.md`; not default product scope).
+- [x] Write vLLM/OpenAI-compatible deployment preset before mentioning vLLM in copy (2026-06-12, `docs/vllm-openai-compatible-preset.md`).
+- [x] Write Enterprise WORM storage guide that explains storage-layer responsibility (2026-06-12, `docs/security-pack/worm-storage-guide.md`).
+- [x] Write controls mapping document as an Enterprise service artifact (2026-06-12, `docs/security-pack/controls-mapping.md`).
 
 Exit criteria:
 
@@ -557,11 +569,11 @@ Exit criteria:
 | Grounded inference contract | Done (2026-06-03, commit 9b21a02) | Rule 3 language robustness is a C0 task |
 | Regression (tests + build) | Re-verified 2026-06-10 | 416 passed / 4 skipped; clean frontend build |
 | Provider base URL invariant | Done (2026-06-10) | `effective_provider_base_url()` is the single source; commit pending |
-| Closed-runtime deployment | Decisions + release pipeline done (2026-06-10) | `docs/release-process.md`; open: Helm, threat model, controls mapping |
+| Closed-runtime deployment | Phase E artifacts done (2026-06-12) | Validate tag-triggered release workflow end-to-end |
 | Document lifecycle (Phase D) | Done (2026-06-10) | upload-new-version, rollback window, verify-deletion shipped |
 | Multi-tenant workspace | Not done | Enterprise candidate only |
-| vLLM | Partial via OpenAI-compatible provider | Need docs/preset before claiming |
-| Dokploy/Langfuse | Not integrated | Optional production guides |
+| vLLM | OpenAI-compatible preset documented | Customer must approve provider data flow |
+| Dokploy/Langfuse | Dokploy guide documented; Langfuse not integrated | Dokploy is not default support; Langfuse remains customer-driven |
 
 ## Immediate Next Step
 
@@ -572,8 +584,8 @@ Next, in order:
 1. ~~**C0 hardening**~~ — **done 2026-06-10**.
 2. ~~**Phase C — Productize pilot operations**~~ — **done 2026-06-10** (all five features; two decisions recorded as deliberate pilot skips).
 3. ~~**Phase D — Harden document lifecycle**~~ — **done 2026-06-10** (atomic `upload-new-version`, 24h rollback window + cleanup job, version-filtered retrieval, verify-deletion endpoint; 474 tests pass).
-4. **Phase E — packaging/release** — decisions and the release pipeline are **done 2026-06-10** (`docs/release-process.md`, `.github/workflows/release.yml`, `docs/security-pack/audit-log-reference.md`). Remaining Phase E items are documentation/packaging work that should be driven by the first paying customer: Kubernetes/Helm package, data-flow diagram, threat model, controls mapping, WORM storage guide, image signing.
-5. **Validate the pipeline**: push a `v0.x.y` tag and confirm the release workflow goes green end-to-end (images in GHCR, SBOM/scan/license artifacts on the release).
+4. ~~**Phase E — packaging/release**~~ — **done 2026-06-12** (`docs/release-process.md`, `.github/workflows/release.yml`, `docs/helm-package-plan.md`, `docs/security-pack/`, `docs/dokploy-deployment-guide.md`, `docs/prometheus-grafana-plan.md`, `docs/vllm-openai-compatible-preset.md`).
+5. **Validate the pipeline**: push a `v0.x.y` tag and confirm the release workflow goes green end-to-end (images in GHCR, cosign signatures, SBOM/scan/license artifacts on the release).
 6. **Phase F** stays gated on named buyer requirements.
 
 Operational follow-ups worth doing in the next working session:

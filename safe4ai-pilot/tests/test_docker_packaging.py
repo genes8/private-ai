@@ -44,6 +44,40 @@ def test_ollama_override_contains_local_llm_services() -> None:
     assert "ollama-init" in services
 
 
+def test_phase_e_customer_security_pack_artifacts_exist() -> None:
+    required_docs = [
+        ROOT / "docs" / "helm-package-plan.md",
+        ROOT / "docs" / "dokploy-deployment-guide.md",
+        ROOT / "docs" / "prometheus-grafana-plan.md",
+        ROOT / "docs" / "vllm-openai-compatible-preset.md",
+        ROOT / "docs" / "security-pack" / "README.md",
+        ROOT / "docs" / "security-pack" / "data-flow-diagram.md",
+        ROOT / "docs" / "security-pack" / "threat-model.md",
+        ROOT / "docs" / "security-pack" / "backup-restore-deletion-verification.md",
+        ROOT / "docs" / "security-pack" / "controls-mapping.md",
+        ROOT / "docs" / "security-pack" / "worm-storage-guide.md",
+        ROOT / "docs" / "security-pack" / "image-signing-verification.md",
+    ]
+
+    for path in required_docs:
+        assert path.exists(), f"Missing Phase E artifact: {path.relative_to(ROOT)}"
+
+
+def test_release_workflow_signs_published_images() -> None:
+    workflow = yaml.safe_load((ROOT.parent / ".github" / "workflows" / "release.yml").read_text())
+    assert workflow["permissions"]["id-token"] == "write"
+
+    image_steps = workflow["jobs"]["images"]["steps"]
+    assert any(step.get("uses", "").startswith("sigstore/cosign-installer@") for step in image_steps)
+    sign_step = next(step for step in image_steps if step.get("name") == "Sign published images")
+
+    # Images must be signed by immutable digest, not the mutable tag.
+    assert "cosign sign --yes" in sign_step["run"]
+    assert "RepoDigests" in sign_step["run"]
+    assert 'cosign sign --yes "$BACKEND_IMAGE:$VERSION"' not in sign_step["run"]
+    assert 'cosign sign --yes "$FRONTEND_IMAGE:$VERSION"' not in sign_step["run"]
+
+
 def test_airgap_package_verifier_passes() -> None:
     from scripts.verify_airgap_package import verify_airgap_package
 

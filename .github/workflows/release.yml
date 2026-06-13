@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
   packages: write
 
 env:
@@ -91,6 +92,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
       - name: Resolve version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -157,6 +161,17 @@ jobs:
         run: |
           docker push "$BACKEND_IMAGE:$VERSION"
           docker push "$FRONTEND_IMAGE:$VERSION"
+
+      - name: Sign published images
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Sign by immutable digest, not the mutable tag: cosign warns against
+          # tag refs (TOCTOU), and GHCR tags are not immutable by default.
+          BACKEND_REF=$(docker inspect --format='{{index .RepoDigests 0}}' "$BACKEND_IMAGE:$VERSION")
+          FRONTEND_REF=$(docker inspect --format='{{index .RepoDigests 0}}' "$FRONTEND_IMAGE:$VERSION")
+          cosign sign --yes "$BACKEND_REF"
+          cosign sign --yes "$FRONTEND_REF"
 
       - name: Download license reports
         uses: actions/download-artifact@v4

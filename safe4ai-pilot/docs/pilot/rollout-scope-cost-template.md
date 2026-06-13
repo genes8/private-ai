@@ -59,4 +59,4 @@ Capture the drivers; fill amounts during commercial scoping. Do not quote a pric
 |---|---|---|
 | | | |
 
-> **Note:** Keep this scope aligned with the commercial deployment model in the canonical roadmap (closed Safe4AI runtime + customer-owned data layer). Do not commit to SAML, signed CSV, multi-tenant workspaces, vLLM presets, or app-owned WORM storage unless they are explicitly added as funded scope.
+> **Note:** Keep this scope aligned with the commercial deployment model in the canonical roadmap (closed Safe4AI runtime + customer-owned data layer). Do not commit to SAML, signed CSV, multi-tenant workspaces, bundled vLLM operations, or app-owned WORM storage unless they are explicitly added as funded scope.

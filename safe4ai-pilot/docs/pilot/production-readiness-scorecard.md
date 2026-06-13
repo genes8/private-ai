@@ -36,7 +36,7 @@ A structured go/no-go assessment after the pilot. Score each dimension, note gap
 
 ## Known non-features (do not score as gaps to "fix" in the pilot)
 
-These are deferred enterprise candidates, not pilot defects: SAML SSO, signed CSV, app-owned WORM storage, multi-tenant workspaces, vLLM preset. App-owned immutability is a deployment/storage-layer responsibility.
+These are deferred enterprise candidates, not pilot defects: SAML SSO, signed CSV, app-owned WORM storage, multi-tenant workspaces, and bundled vLLM runtime operations. App-owned immutability is a deployment/storage-layer responsibility.
 
 ## Overall recommendation
 

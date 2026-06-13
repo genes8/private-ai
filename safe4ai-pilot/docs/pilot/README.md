@@ -27,7 +27,8 @@ These are **not** available as product features today and must not be presented 
 - Signed / tamper-evident **CSV** export — audit CSV export exists, but is not signed. (A tamper-evident JSONL audit *archive* does exist for retention cleanup.)
 - App-owned **WORM / immutable storage** — immutability is a deployment/storage-layer responsibility, not an app guarantee.
 - **Multi-tenant** workspaces — the product is one workspace / evaluation boundary.
-- Hard **vLLM** support — vLLM is reachable only as a generic "OpenAI-compatible provider"; there is no preset/runbook yet.
+- Bundled **vLLM** runtime — vLLM is documented only as an OpenAI-compatible
+  provider preset; Safe4AI does not operate vLLM itself.
 
 "Data never leaves your network" is true only in **local / on-prem mode**. In cloud or hybrid provider modes, scope the claim accordingly.
 

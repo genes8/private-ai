@@ -52,7 +52,9 @@ Consequences:
    `org.opencontainers.image.version/revision/source` labels and pushed to
    GHCR under an **immutable version tag** (no `latest`).
 
-Image signing (cosign) is deferred until a customer registry requires it.
+Images are signed after push with cosign keyless signing through GitHub Actions
+OIDC. Customer verification steps are documented in
+`docs/security-pack/image-signing-verification.md`.
 
 ## Update flows
 
@@ -99,12 +101,12 @@ via a third-party escrow service. Routine delivery never includes source.
   claim.
 - **Langfuse**: not integrated; out of current support. Write an integration
   plan only when a customer requires it.
-- **Prometheus/Grafana**: not part of the product; add only if a customer
-  deployment needs metrics beyond OTLP + admin stats.
-- **Dokploy**: a deployment recommendation, not a supported path; a guide is
-  optional roadmap work.
-- **vLLM**: works through the OpenAI-compatible provider but is **not claimed**
-  until a tested preset/runbook exists.
+- **Prometheus/Grafana**: not part of the default product; the add-on plan is
+  documented in `docs/prometheus-grafana-plan.md`.
+- **Dokploy**: a deployment recommendation, not a default supported path; the
+  operator guide is documented in `docs/dokploy-deployment-guide.md`.
+- **vLLM**: supported only through the OpenAI-compatible provider path; the
+  deployment preset is documented in `docs/vllm-openai-compatible-preset.md`.
 
 ## Enterprise security pack (inventory)
 
@@ -116,19 +118,23 @@ What a regulated customer's security review receives, and where it comes from:
 | Vulnerability scan report | release workflow (trivy SARIF) | Automated per release |
 | Dependency/license report | release workflow | Automated per release |
 | Architecture diagram | `docs/architecture.md` | Exists; export per release |
-| Data-flow diagram | to write | Open |
-| Threat model | to write | Open |
+| Data-flow diagram | `docs/security-pack/data-flow-diagram.md` | Written 2026-06-12 |
+| Threat model | `docs/security-pack/threat-model.md` | Written 2026-06-12 |
 | Security headers / auth model | `docs/architecture.md` + `.qoder` security docs | Consolidate |
 | Audit-log field reference | `docs/security-pack/audit-log-reference.md` | Written 2026-06-10 |
 | Agent audit trail description | `docs/security-pack/audit-log-reference.md` | Written 2026-06-10 |
-| Backup/restore + deletion verification | `docs/deployment.md` + `GET /admin/documents/{id}/verify-deletion` | Endpoint shipped 2026-06-10; doc section open |
+| Backup/restore + deletion verification | `docs/security-pack/backup-restore-deletion-verification.md` | Written 2026-06-12 |
 | Air-gap installation runbook | `docs/air-gap-runbook.md` | Exists |
-| Pen-test/security review process | to define with first Enterprise customer | Open |
+| Controls mapping | `docs/security-pack/controls-mapping.md` | Written 2026-06-12 |
+| WORM storage guide | `docs/security-pack/worm-storage-guide.md` | Written 2026-06-12 |
+| Image signing verification | `docs/security-pack/image-signing-verification.md` | Written 2026-06-12 |
+| Pen-test/security review process | customer-specific addendum | Define with first Enterprise customer |
 
-## Still open (tracked in roadmap Phase E)
+## Customer-specific follow-ups
 
-- Kubernetes/Helm package.
-- Data-flow diagram + threat model documents.
-- Controls mapping document (Enterprise service artifact).
-- Enterprise WORM storage guide.
-- Image signing if/when a customer registry supports verification.
+- Build and validate the Helm chart when a named Enterprise customer requires
+  Kubernetes delivery; the package plan is in `docs/helm-package-plan.md`.
+- Fill customer-specific registry, WORM, SIEM, backup, and pen-test details in
+  the deployment addendum.
+- Push a version tag and confirm the release workflow publishes images,
+  signatures, SBOMs, vulnerability reports, license reports, and release notes.
