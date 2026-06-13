@@ -16,13 +16,14 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import SessionLocal, engine
-from app.db.models import DELETED_USER_ID
+from app.db.models import DEFAULT_WORKSPACE_ID, DELETED_USER_ID
 
 logger = structlog.get_logger(__name__)
 
 _QDRANT_COLLECTION = "documents"
 _QDRANT_VECTOR_SIZE = 768
 _DELETED_USER_ID = DELETED_USER_ID  # alias kept so call-sites below are unchanged
+_DEFAULT_WORKSPACE_ID = DEFAULT_WORKSPACE_ID
 _DELETED_USER_EMAIL = "deleted@redacted.local"
 
 
@@ -34,6 +35,9 @@ def run_startup_migrations() -> None:
     _ensure_document_foreign_keys()
     _ensure_agentrun_fk()
     _ensure_deleted_user()
+    # Must run AFTER _ensure_deleted_user(): the default workspace's created_by
+    # references the sentinel user, which must exist first.
+    _ensure_workspace_schema()
     _ensure_tier_config()
     _ensure_qdrant_collection()
     _ensure_semantic_cache_dimension()
@@ -296,6 +300,145 @@ def _ensure_deleted_user() -> None:
             )
     except Exception as exc:
         logger.warning("deleted_user_ensure_failed", error=str(exc))
+
+
+def _ensure_workspace_schema() -> None:
+    """Create workspace tables/columns and backfill a default "General" workspace.
+
+    Idempotent and safe to run on every boot. Existing single-workspace
+    deployments are migrated transparently: all prior documents/sessions/audit/
+    cache/analytics rows land in the default workspace, every active user becomes
+    a member, and global admins become workspace_admins of it. Phase-separated so
+    a data-migration hiccup cannot roll back the schema changes.
+    """
+    # Phase 1: DDL — tables, columns, indexes.
+    ddl_statements = [
+        """
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL UNIQUE,
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            created_by TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
+                REFERENCES users(id) ON DELETE SET DEFAULT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS workspace_memberships (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role TEXT NOT NULL DEFAULT 'member',
+            created_at TIMESTAMPTZ DEFAULT now(),
+            CONSTRAINT uq_workspace_memberships_workspace_id_user_id
+                UNIQUE (workspace_id, user_id)
+        )
+        """,
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS workspace_id TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS workspace_id TEXT",
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS workspace_id TEXT",
+        "ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS workspace_id TEXT",
+        "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workspace_id TEXT",
+        "ALTER TABLE query_feedback ADD COLUMN IF NOT EXISTS workspace_id TEXT",
+        "ALTER TABLE human_review_queue ADD COLUMN IF NOT EXISTS workspace_id TEXT",
+        "CREATE INDEX IF NOT EXISTS ix_workspace_memberships_workspace_id "
+        "ON workspace_memberships(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_workspace_memberships_user_id "
+        "ON workspace_memberships(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_documents_workspace_id ON documents(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sessions_workspace_id ON sessions(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_logs_workspace_id ON audit_logs(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_semantic_cache_workspace_id "
+        "ON semantic_cache(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_agent_runs_workspace_id ON agent_runs(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_query_feedback_workspace_id "
+        "ON query_feedback(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_human_review_queue_workspace_id "
+        "ON human_review_queue(workspace_id)",
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in ddl_statements:
+                conn.execute(text(statement))
+    except Exception as exc:
+        logger.warning("workspace_ddl_failed", error=str(exc))
+        return
+
+    # Phase 2: Data migration — default workspace, backfill, membership.
+    # Bound parameters (text()) keep the sentinel IDs out of the SQL string; none
+    # of these statements contain ':'-literals, so the text() bind parser is safe.
+    params = {"ws": _DEFAULT_WORKSPACE_ID, "deleted": _DELETED_USER_ID}
+    backfill_tables = (
+        "documents",
+        "sessions",
+        "audit_logs",
+        "semantic_cache",
+        "agent_runs",
+        "query_feedback",
+        "human_review_queue",
+    )
+    dml_statements = [
+        text(
+            """
+            INSERT INTO workspaces (id, name, slug, is_active, created_by)
+            SELECT :ws, 'General', 'general', true, :deleted
+            WHERE NOT EXISTS (SELECT 1 FROM workspaces WHERE id = :ws)
+            """
+        ),
+        *(
+            # noqa justified: `table` comes only from the hardcoded backfill_tables
+            # tuple above, never user input — the value (:ws) is still bound.
+            text(f"UPDATE {table} SET workspace_id = :ws WHERE workspace_id IS NULL")  # noqa: S608
+            for table in backfill_tables
+        ),
+        text(
+            """
+            INSERT INTO workspace_memberships (id, workspace_id, user_id, role)
+            SELECT 'wm-default-' || users.id, :ws, users.id,
+                   CASE WHEN users.role = 'admin' THEN 'workspace_admin' ELSE 'member' END
+            FROM users
+            WHERE users.is_active = true
+              AND users.id <> :deleted
+              AND NOT EXISTS (
+                  SELECT 1 FROM workspace_memberships m
+                  WHERE m.workspace_id = :ws AND m.user_id = users.id
+              )
+            """
+        ),
+    ]
+    try:
+        with engine.begin() as conn:
+            for dml in dml_statements:
+                conn.execute(dml, params)
+    except Exception as exc:
+        logger.warning("workspace_dml_failed", error=str(exc))
+
+    # Phase 3: tighten constraints now that every row has a workspace.
+    constraint_statements = [
+        f"ALTER TABLE documents ALTER COLUMN workspace_id SET DEFAULT '{_DEFAULT_WORKSPACE_ID}'",
+        "ALTER TABLE documents ALTER COLUMN workspace_id SET NOT NULL",
+        "ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_workspace_id_fkey",
+        "ALTER TABLE documents ADD CONSTRAINT documents_workspace_id_fkey "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT",
+        f"ALTER TABLE sessions ALTER COLUMN workspace_id SET DEFAULT '{_DEFAULT_WORKSPACE_ID}'",
+        "ALTER TABLE sessions ALTER COLUMN workspace_id SET NOT NULL",
+        "ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_workspace_id_fkey",
+        "ALTER TABLE sessions ADD CONSTRAINT sessions_workspace_id_fkey "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET DEFAULT",
+        f"ALTER TABLE semantic_cache ALTER COLUMN workspace_id "
+        f"SET DEFAULT '{_DEFAULT_WORKSPACE_ID}'",
+        "ALTER TABLE semantic_cache ALTER COLUMN workspace_id SET NOT NULL",
+        "ALTER TABLE semantic_cache DROP CONSTRAINT IF EXISTS semantic_cache_workspace_id_fkey",
+        "ALTER TABLE semantic_cache ADD CONSTRAINT semantic_cache_workspace_id_fkey "
+        "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE",
+    ]
+    try:
+        with engine.begin() as conn:
+            for statement in constraint_statements:
+                conn.execute(text(statement))
+    except Exception as exc:
+        logger.warning("workspace_constraints_failed", error=str(exc))
 
 
 def _ensure_agentrun_fk() -> None:
