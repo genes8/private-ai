@@ -106,7 +106,9 @@ def build_graph(
             query = state.effective_query
             effective_top_k = retrieval_top_k + state.retrieval_attempts * 4
             try:
-                raw_chunks = await retriever.retrieve(query, top_k=effective_top_k)
+                raw_chunks = await retriever.retrieve(
+                    query, top_k=effective_top_k, workspace_ids=state.workspace_ids
+                )
                 ranked: list[RankedChunk] = await reranker.arerank(
                     query, raw_chunks, top_n=effective_top_k
                 )
@@ -163,7 +165,9 @@ def build_graph(
             all_graded: list[GradedChunk] = []
             for sub_q in sub_queries:
                 try:
-                    raw = await retriever.retrieve(sub_q, top_k=retrieval_top_k)
+                    raw = await retriever.retrieve(
+                        sub_q, top_k=retrieval_top_k, workspace_ids=state.workspace_ids
+                    )
                     ranked: list[RankedChunk] = await reranker.arerank(
                         sub_q, raw, top_n=min(3, retrieval_top_k)
                     )

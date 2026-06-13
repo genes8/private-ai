@@ -59,6 +59,9 @@ _STEP_MAP: dict[str, str] = {
 class ChatRequest(BaseModel):
     question: str = Field(..., max_length=2048)
     session_id: str | None = Field(None, max_length=36)
+    # Deprecated and ignored server-side; retrieval scope is the active workspace
+    # (X-Workspace-Id header). Kept only for backward compatibility with old
+    # clients; will be removed once no caller sends it.
     collection: str = "default"
 
     @field_validator("session_id")
@@ -100,7 +103,7 @@ def _resolve_session(
 
 
 def _build_run_state(
-    state: PrivateAIState, question: str, trace_id: str
+    state: PrivateAIState, question: str, trace_id: str, workspace_ids: list[str]
 ) -> PrivateAIState:
     user_msg = Message(role="user", content=question, created_at=datetime.now(UTC))
     return state.model_copy(
@@ -109,6 +112,8 @@ def _build_run_state(
             "current_step": "intake",
             "status": "active",
             "trace_id": trace_id,
+            # Fail-closed retrieval scope: only the active workspace.
+            "workspace_ids": workspace_ids,
             "rewritten_query": "",
             "retrieved_chunks": [],
             "graded_chunks": [],
@@ -118,6 +123,30 @@ def _build_run_state(
             "retrieval_attempts": 0,
             "generation_context": [],
         }
+    )
+
+
+def _resolve_active_workspace(request: Request, user: User, db: Session) -> str:
+    """Resolve the single workspace a chat turn runs in.
+
+    From the X-Workspace-Id header (membership enforced, 404 otherwise), or the
+    user's sole workspace, else 400. Chat is scoped to exactly one workspace so a
+    session stays bound to it (least privilege, no cross-workspace bleed).
+    """
+    from app.services import workspace_service
+
+    requested = request.headers.get("X-Workspace-Id")
+    if requested:
+        try:
+            workspace_service.assert_member(db, user, requested)
+        except workspace_service.WorkspaceAccessDenied:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        return requested
+    workspace_ids = workspace_service.list_workspace_ids_for_user(db, user)
+    if len(workspace_ids) == 1:
+        return workspace_ids[0]
+    raise HTTPException(
+        status_code=400, detail="Workspace required: set the X-Workspace-Id header"
     )
 
 
@@ -162,10 +191,11 @@ def _prepare_chat_run(
     if graph is None:
         raise HTTPException(status_code=503, detail="AI pipeline not ready")
 
+    active_workspace_id = _resolve_active_workspace(request, current_user, db)
     convo = ConversationManager(db)
     session_id, state = _resolve_session(body, str(current_user.id), convo)
     trace_id = str(uuid.uuid4())
-    run_state = _build_run_state(state, body.question, trace_id)
+    run_state = _build_run_state(state, body.question, trace_id, [active_workspace_id])
     return session_id, run_state, graph
 
 

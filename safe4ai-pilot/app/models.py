@@ -61,6 +61,10 @@ class PrivateAIState(BaseModel):
 
     session_id: str
     user_id: str
+    # Workspaces the requesting user may retrieve from. Empty list ⇒ fail-closed
+    # (retrieve nothing). Always set from membership by the chat route; the empty
+    # default means a misconfigured caller fails closed rather than open.
+    workspace_ids: list[str] = Field(default_factory=list)
     messages: list[Message] = Field(default_factory=list)
     current_step: Literal[
         "intake",

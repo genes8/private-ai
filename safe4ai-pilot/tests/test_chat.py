@@ -58,6 +58,24 @@ def _make_final_state(session_id: str = "sess-1", user_id: str = "u1") -> Privat
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_workspace_resolution() -> Generator[None, None, None]:
+    """Give the mocked-DB chat tests a single workspace so chat scoping resolves.
+
+    Workspace resolution itself is covered by test_workspace_service /
+    test_workspace_isolation; here we only need it to succeed.
+    """
+    from app.services import workspace_service
+
+    with (
+        patch.object(
+            workspace_service, "list_workspace_ids_for_user", return_value=["ws-test"]
+        ),
+        patch.object(workspace_service, "assert_member", return_value=None),
+    ):
+        yield
+
+
 @pytest.fixture
 def authed_client() -> Generator[TestClient, None, None]:
     """TestClient with a valid JWT cookie and mocked DB."""

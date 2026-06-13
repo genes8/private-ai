@@ -1,3 +1,14 @@
+"""Semantic answer cache.
+
+NOTE: this component is currently latent — it is not wired into the chat runtime
+(there is no lookup/store call site on the live path). It is kept workspace-safe
+so it cannot be activated unsafely: every lookup and store is scoped by
+``workspace_id`` so an answer cached for workspace A can never be served to a
+workspace-B user. If a future change activates the cache on the chat path, that
+change MUST also (1) wire the ``cache_hit`` response metadata and (2) add a
+workspace-isolated-hit test (a hit cached under A is never served under B).
+"""
+
 from __future__ import annotations
 
 import json
@@ -24,7 +35,7 @@ class SemanticCache:
         self._client = embedding_client
         self._threshold = threshold
 
-    async def lookup(self, query: str) -> dict[str, Any] | None:
+    async def lookup(self, query: str, workspace_id: str) -> dict[str, Any] | None:
         embedding = await self._client.embed_query(query)
         distance = SemanticCacheModel.query_embedding.cosine_distance(embedding)
         stmt = (
@@ -33,6 +44,9 @@ class SemanticCache:
                 SemanticCacheModel.response_json,
                 SemanticCacheModel.citations_json,
             )
+            # Workspace scope is mandatory: a cached answer from another workspace
+            # must never be returned here.
+            .where(SemanticCacheModel.workspace_id == workspace_id)
             .where((1 - distance) >= self._threshold)
             .order_by(distance)
             .limit(1)
@@ -64,11 +78,13 @@ class SemanticCache:
         citations: list[Citation],
         doc_ids: list[str],
         chunk_ids: list[str],
+        workspace_id: str,
     ) -> None:
         embedding = await self._client.embed_query(query)
         citations_data = [c.model_dump() for c in citations]
         row = SemanticCacheModel(
             id=str(uuid.uuid4()),
+            workspace_id=workspace_id,
             query_embedding=embedding,
             query_text=query,
             response_json=response,
