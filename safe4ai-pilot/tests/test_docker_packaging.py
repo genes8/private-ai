@@ -84,6 +84,12 @@ def test_release_workflow_sets_required_test_secret_key() -> None:
     assert len(workflow["env"]["SECRET_KEY"]) >= 16
 
 
+def test_backend_dockerfile_pins_cpu_torch() -> None:
+    dockerfile = (ROOT / "app" / "Dockerfile").read_text()
+
+    assert "pip install --no-cache-dir --timeout 300 torch==2.11.0" in dockerfile
+
+
 def test_release_workflow_audits_dependencies_with_only_documented_exception() -> None:
     workflow = yaml.safe_load((ROOT.parent / ".github" / "workflows" / "release.yml").read_text())
     gate_steps = workflow["jobs"]["gates"]["steps"]
@@ -119,6 +125,7 @@ def test_release_workflow_attaches_license_reports_and_blocks_high_vulnerabiliti
     assert trivy_steps
     assert all(step["with"]["severity"] == "CRITICAL,HIGH" for step in trivy_steps)
     assert all(step["with"]["exit-code"] == "1" for step in trivy_steps)
+    assert all(step["with"]["trivyignores"] == ".trivyignore" for step in trivy_steps)
 
     release_step = next(
         step for step in image_steps if step.get("uses") == "softprops/action-gh-release@v2"

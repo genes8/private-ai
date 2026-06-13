@@ -13,7 +13,7 @@ COPY app/ ./app/
 COPY observability/ ./observability/
 COPY scripts/ ./scripts/
 
-RUN pip install --no-cache-dir --timeout 300 torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --timeout 300 torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -e .
 
 # Pre-bake cross-encoder to avoid runtime HuggingFace download in air-gapped deployments

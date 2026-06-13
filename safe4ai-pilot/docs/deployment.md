@@ -114,9 +114,10 @@ detect-secrets scan --baseline .secrets.baseline
 `pip-audit` is intentionally part of CI. If it fails, update vulnerable pins or
 record a time-limited vulnerability exception before accepting the risk.
 
-Current exception: `GHSA-rrmf-rvhw-rf47` is ignored in the release workflow
-because the advisory currently has no fixed PyTorch release in the audit feed.
-Remove the exception as soon as `pip-audit` reports a fixed version.
+Current exception: `GHSA-rrmf-rvhw-rf47` is ignored in the release workflow by
+`pip-audit` and Trivy because the advisory currently has no fixed PyTorch
+release in the audit feeds. Remove the exception from `.github/workflows/release.yml`
+and `.trivyignore` as soon as the scanners report a fixed version.
 
 ## Air-gapped deployments
 
