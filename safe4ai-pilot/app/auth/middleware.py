@@ -85,7 +85,7 @@ def get_current_user(
         if valid_after.tzinfo is None:
             valid_after = valid_after.replace(tzinfo=UTC)
         issued_at: datetime | None = None
-        if isinstance(token_iat, (int, float)):
+        if isinstance(token_iat, int | float):
             issued_at = datetime.fromtimestamp(token_iat, tz=UTC)
         elif isinstance(token_iat, datetime):
             issued_at = token_iat if token_iat.tzinfo is not None else token_iat.replace(tzinfo=UTC)

@@ -192,6 +192,23 @@ def export_audit_logs_csv(
     )
 
 
+@router.get("/admin/workspace-backfill-status")
+@limiter.limit("100/minute")
+def workspace_backfill_status(
+    request: Request,
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, bool]:
+    """Operator readiness signal for the Qdrant workspace_id backfill.
+
+    While ``complete`` is False, legacy documents are intentionally unsearchable
+    (fail-closed retrieval); the admin UI surfaces a banner. Authenticated and
+    admin-only so it never affects the public liveness probe.
+    """
+    from app.services.workspace_backfill import is_workspace_backfill_complete
+
+    return {"complete": is_workspace_backfill_complete()}
+
+
 @router.get("/admin/stats")
 @limiter.limit("100/minute")
 def get_stats(

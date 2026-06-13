@@ -150,7 +150,9 @@ def _resolve_active_workspace(request: Request, user: User, db: Session) -> str:
     )
 
 
-def _merge_stream_state(current: PrivateAIState, update: PrivateAIState | dict[str, Any]) -> PrivateAIState:
+def _merge_stream_state(
+    current: PrivateAIState, update: PrivateAIState | dict[str, Any]
+) -> PrivateAIState:
     if isinstance(update, PrivateAIState):
         return update
     merged = current.model_dump()
@@ -309,7 +311,10 @@ async def chat_stream(
         except Exception as exc:
             logger.error("graph_stream_failed", error=str(exc))
             # F-07: Do not leak internal error details to the client
-            yield _sse("done", {"error": "Pipeline error", "traceId": trace_id, "sessionId": session_id})
+            yield _sse(
+                "done",
+                {"error": "Pipeline error", "traceId": trace_id, "sessionId": session_id},
+            )
             return
 
         if final is None:

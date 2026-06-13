@@ -57,7 +57,9 @@ class HybridRetriever:
         )
         incoming_entries = [
             (chunk_id, content, payload)
-            for chunk_id, content, payload in zip(chunk_ids, contents, incoming_payloads, strict=False)
+            for chunk_id, content, payload in zip(
+                chunk_ids, contents, incoming_payloads, strict=False
+            )
         ]
 
         with self._bm25_lock:

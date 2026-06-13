@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.provider_clients import ProviderUsage
 
-
 # Canonical no-answer sentinel — used in graph nodes and RagPipeline.query()
 # to signal that the corpus has no answer. String identity (==) is used for
 # control-flow decisions; define once here to prevent silent drift.

@@ -275,16 +275,10 @@ async def health() -> dict[str, object]:
             logger.warning("health_provider_failed", error=str(exc))
             checks["provider"] = "error"
 
-    # Workspace payload backfill: until complete, legacy documents are
-    # intentionally unsearchable (fail-closed retrieval), so report degraded.
-    try:
-        from app.services.workspace_backfill import is_workspace_backfill_complete
-
-        backfill_done = await asyncio.to_thread(is_workspace_backfill_complete)
-        checks["workspace_backfill"] = "ok" if backfill_done else "pending"
-    except Exception as exc:
-        logger.warning("health_workspace_backfill_failed", error=str(exc))
-        checks["workspace_backfill"] = "error"
+    # NOTE: the Qdrant workspace_id backfill status is intentionally NOT part of
+    # this unauthenticated liveness probe — a pending backfill does not make the
+    # service unhealthy, and /health must not do extra DB work or leak detail.
+    # The operator-facing signal lives on GET /admin/workspace-backfill-status.
 
     overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return {"status": overall, "checks": checks}
