@@ -177,7 +177,20 @@ app.include_router(me_router)
 
 
 async def _rebuild_bm25(retriever: Any) -> None:
-    """Rebuild the in-memory BM25 sparse index from Qdrant after startup."""
+    """Backfill workspace payloads (if needed), then rebuild the BM25 index.
+
+    The workspace backfill rebuilds BM25 itself on success; if it is incomplete
+    (e.g. Qdrant briefly unavailable) we still rebuild BM25 so the sparse path
+    works for already-tagged points, and the scheduler retries the backfill.
+    """
+    from app.services.workspace_backfill import backfill_qdrant_workspace_payload
+
+    try:
+        done = await asyncio.to_thread(backfill_qdrant_workspace_payload, retriever)
+        if done:
+            return
+    except Exception as exc:
+        logger.warning("workspace_backfill_startup_failed", error=str(exc))
     try:
         count = await asyncio.to_thread(retriever.rebuild_from_qdrant)
         logger.info("bm25_index_rebuilt", chunk_count=count)
@@ -261,6 +274,17 @@ async def health() -> dict[str, object]:
         except Exception as exc:
             logger.warning("health_provider_failed", error=str(exc))
             checks["provider"] = "error"
+
+    # Workspace payload backfill: until complete, legacy documents are
+    # intentionally unsearchable (fail-closed retrieval), so report degraded.
+    try:
+        from app.services.workspace_backfill import is_workspace_backfill_complete
+
+        backfill_done = await asyncio.to_thread(is_workspace_backfill_complete)
+        checks["workspace_backfill"] = "ok" if backfill_done else "pending"
+    except Exception as exc:
+        logger.warning("health_workspace_backfill_failed", error=str(exc))
+        checks["workspace_backfill"] = "error"
 
     overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return {"status": overall, "checks": checks}

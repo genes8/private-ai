@@ -550,6 +550,27 @@ def _ensure_qdrant_collection() -> None:
         raise
     except Exception as exc:
         logger.warning("qdrant_collection_ensure_failed", error=str(exc))
+    finally:
+        _ensure_qdrant_workspace_payload_index()
+
+
+def _ensure_qdrant_workspace_payload_index() -> None:
+    """Index the ``workspace_id`` payload field so workspace filters are fast.
+
+    Idempotent: Qdrant returns an error if the index already exists, which we
+    swallow. Runs on both the create and existing-collection paths.
+    """
+    try:
+        client = QdrantClient(url=settings.qdrant_url)
+        if not client.collection_exists(_QDRANT_COLLECTION):
+            return
+        client.create_payload_index(
+            collection_name=_QDRANT_COLLECTION,
+            field_name="workspace_id",
+            field_schema=qmodels.PayloadSchemaType.KEYWORD,
+        )
+    except Exception as exc:
+        logger.debug("qdrant_workspace_payload_index_skipped", error=str(exc))
 
 
 def _ensure_semantic_cache_dimension() -> None:

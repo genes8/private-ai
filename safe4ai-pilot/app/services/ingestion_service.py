@@ -171,6 +171,9 @@ async def run_ingestion(
             doc_id,
             filename,
             uploaded_by,
+            # Canonical source: the Document row, never the caller — guarantees
+            # every version of a document is filed under the same workspace.
+            workspace_id=doc.workspace_id,
             document_version=target_version_number,
             document_version_id=version.id if version is not None else None,
             activate=not replacement_ingest,

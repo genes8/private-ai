@@ -62,7 +62,7 @@ async def test_ingest_empty_document_sets_failed_status_and_commits() -> None:
     pipeline._db = db
 
     with patch.object(pipeline, "_load_pdf", new=AsyncMock(return_value=([("", 1, "native")], 0))):
-        await pipeline.ingest("empty.pdf", "doc-1", "empty.pdf", "user-1")
+        await pipeline.ingest("empty.pdf", "doc-1", "empty.pdf", "user-1", workspace_id="ws-test")
 
     assert mock_doc.ingestion_status == "failed"
     db.commit.assert_called_once()
@@ -95,11 +95,13 @@ async def test_ingest_pdf_native_text() -> None:
             f.write(b"%PDF fake")
             tmp_path = f.name
 
-        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
+        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1", workspace_id="ws-test")
 
     pipeline._qdrant.upsert.assert_called_once()
     points = pipeline._qdrant.upsert.call_args.kwargs["points"]
     assert points[0].payload["page_number"] == 1
+    # Every indexed chunk carries its workspace for fail-closed retrieval scoping.
+    assert points[0].payload["workspace_id"] == "ws-test"
     db.add.assert_called()
     db.commit.assert_called()
 
@@ -140,7 +142,7 @@ async def test_ingest_triggers_needs_review() -> None:
             f.write(b"%PDF fake")
             tmp_path = f.name
 
-        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
+        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1", workspace_id="ws-test")
 
     # Low-confidence OCR pages still result in indexed status — chunks are in Qdrant.
     db.get.assert_called()
@@ -179,7 +181,7 @@ async def test_ingest_sets_ocr_quality_in_qdrant_payload() -> None:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"%PDF fake")
             tmp_path = f.name
-        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
+        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1", workspace_id="ws-test")
 
     points = pipeline._qdrant.upsert.call_args.kwargs["points"]
     assert len(points) > 0
@@ -211,7 +213,7 @@ async def test_ingest_native_pdf_page_gets_native_quality() -> None:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"%PDF fake")
             tmp_path = f.name
-        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
+        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1", workspace_id="ws-test")
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +358,7 @@ async def test_staged_ingest_marks_inactive_and_skips_bm25() -> None:
             "doc-1",
             "test.pdf",
             "user-1",
+            workspace_id="ws-test",
             document_version=2,
             document_version_id="version-2",
             activate=False,
@@ -396,7 +399,7 @@ async def test_default_ingest_is_active_version_one() -> None:
             f.write(b"%PDF fake")
             tmp_path = f.name
 
-        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1")
+        await pipeline.ingest(tmp_path, "doc-1", "test.pdf", "user-1", workspace_id="ws-test")
 
     points = pipeline._qdrant.upsert.call_args.kwargs["points"]
     assert points[0].payload["is_active"] is True
