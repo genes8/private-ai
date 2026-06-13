@@ -114,6 +114,10 @@ detect-secrets scan --baseline .secrets.baseline
 `pip-audit` is intentionally part of CI. If it fails, update vulnerable pins or
 record a time-limited vulnerability exception before accepting the risk.
 
+Current exception: `GHSA-rrmf-rvhw-rf47` is ignored in the release workflow
+because the advisory currently has no fixed PyTorch release in the audit feed.
+Remove the exception as soon as `pip-audit` reports a fixed version.
+
 ## Air-gapped deployments
 
 Use `docs/air-gap-runbook.md` for mirrored image/model export, offline import,

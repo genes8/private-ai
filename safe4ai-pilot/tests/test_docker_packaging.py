@@ -84,6 +84,19 @@ def test_release_workflow_sets_required_test_secret_key() -> None:
     assert len(workflow["env"]["SECRET_KEY"]) >= 16
 
 
+def test_release_workflow_audits_dependencies_with_only_documented_exception() -> None:
+    workflow = yaml.safe_load((ROOT.parent / ".github" / "workflows" / "release.yml").read_text())
+    gate_steps = workflow["jobs"]["gates"]["steps"]
+
+    install_step = next(step for step in gate_steps if step.get("name") == "Install Python dependencies")
+    assert "python -m pip install --upgrade pip==26.1.2" in install_step["run"]
+
+    audit_step = next(step for step in gate_steps if step.get("name") == "Audit dependencies")
+    assert audit_step["run"] == (
+        "pip-audit --skip-editable --desc --ignore-vuln GHSA-rrmf-rvhw-rf47"
+    )
+
+
 def test_airgap_package_verifier_passes() -> None:
     from scripts.verify_airgap_package import verify_airgap_package
 
