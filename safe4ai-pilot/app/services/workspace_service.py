@@ -66,6 +66,27 @@ def list_workspace_ids_for_user(db: Session, user: User) -> list[str]:
     return [r[0] for r in rows]
 
 
+def list_admin_workspace_ids_for_user(db: Session, user: User) -> list[str]:
+    """Workspaces the user may ADMINISTER (manage documents/members in).
+
+    Org-admins administer every active workspace; others administer only the
+    workspaces where their membership role is workspace_admin.
+    """
+    if is_org_admin(user):
+        return list_active_workspace_ids(db)
+    rows = (
+        db.query(WorkspaceMembership.workspace_id)
+        .join(Workspace, Workspace.id == WorkspaceMembership.workspace_id)
+        .filter(
+            WorkspaceMembership.user_id == user.id,
+            WorkspaceMembership.role == WorkspaceRole.workspace_admin,
+            Workspace.is_active.is_(True),
+        )
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
 def user_workspace_role(db: Session, user_id: str, workspace_id: str) -> WorkspaceRole | None:
     membership = (
         db.query(WorkspaceMembership)

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from tests.helpers.admin_routes import (
     make_admin_user as _make_admin_user,
@@ -16,6 +19,20 @@ from tests.helpers.admin_routes import (
 from tests.helpers.admin_routes import (
     mock_db_with_admin as _mock_db_with_admin,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_workspace_resolution() -> Generator[None, None, None]:
+    """Resolve the active workspace for mocked-DB stats tests (corpus-stats)."""
+    from app.services import workspace_service
+
+    with (
+        patch.object(workspace_service, "assert_member", return_value=None),
+        patch.object(
+            workspace_service, "list_workspace_ids_for_user", return_value=["ws-test"]
+        ),
+    ):
+        yield
 
 
 class TestStats:
