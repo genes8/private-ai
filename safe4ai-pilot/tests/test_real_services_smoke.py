@@ -44,10 +44,13 @@ def test_real_ollama_tags_endpoint() -> None:
     settings = Settings()
     response = httpx.get(f"{settings.ollama_url}/api/tags", timeout=10)
     model_names = {model["name"] for model in response.json().get("models", [])}
+    normalized_model_names = model_names | {
+        name.removesuffix(":latest") for name in model_names
+    }
 
     assert response.status_code == 200
     assert settings.ollama_model in model_names
-    assert settings.embedding_model in model_names
+    assert settings.embedding_model in normalized_model_names
 
 
 def test_real_postgres_pgvector_extension() -> None:

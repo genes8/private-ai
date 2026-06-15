@@ -19,6 +19,7 @@ from typing import Any, cast
 import httpx
 
 _BASE_URL = os.getenv("SMOKE_BASE_URL", "http://localhost:8000")
+_ORIGIN = os.getenv("SMOKE_ORIGIN", "http://localhost:3000")
 
 
 class SmokeAuthError(RuntimeError):
@@ -55,7 +56,7 @@ class SmokeClient:
         resp = self._http.post(
             "/auth/login",
             json={"email": email, "password": password},
-            headers={"X-CSRF-Token": token},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": token},
         )
         if resp.status_code != 200:
             raise SmokeAuthError(f"login failed ({resp.status_code}): {resp.text}")
