@@ -149,16 +149,15 @@ def test_chat_graph_not_initialized(authed_client: TestClient) -> None:
 def test_chat_rejects_session_owned_by_another_user(authed_client: TestClient) -> None:
     authed_client.app.state.graph = AsyncMock()  # type: ignore[union-attr]
     foreign_session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-    foreign_state = PrivateAIState(session_id=foreign_session_id, user_id="someone-else")
+    foreign_row = _make_session_row(session_id=foreign_session_id, user_id="someone-else")
+    db = app.dependency_overrides[get_db]().__next__()
+    user = db.get.return_value
+    db.get.side_effect = lambda model, pk: user if model is User else foreign_row
 
-    with patch(
-        "app.services.conversation.ConversationManager.load_session",
-        return_value=foreign_state,
-    ):
-        response = authed_client.post(
-            "/chat",
-            json={"question": "hello", "session_id": foreign_session_id},
-        )
+    response = authed_client.post(
+        "/chat",
+        json={"question": "hello", "session_id": foreign_session_id},
+    )
 
     assert response.status_code == 404
 
@@ -392,6 +391,12 @@ def test_chat_recovers_from_corrupted_session_state(authed_client: TestClient) -
     mock_graph.ainvoke = AsyncMock(return_value=final_state)
 
     old_session_id = "11111111-2222-3333-4444-555555555555"
+    # The session row exists and is owned by the caller in the active workspace,
+    # but its stored state is corrupt — load_session raises and we recover.
+    corrupt_row = _make_session_row(session_id=old_session_id, user_id="u1")
+    db = app.dependency_overrides[get_db]().__next__()
+    user = db.get.return_value
+    db.get.side_effect = lambda model, pk: user if model is User else corrupt_row
     with patch(
         "app.services.conversation.ConversationManager.load_session",
         side_effect=[
@@ -423,10 +428,12 @@ def _make_session_row(
     session_id: str = "11111111-2222-3333-4444-555555555555",
     user_id: str = "u1",
     messages: list[dict[str, str]] | None = None,
+    workspace_id: str = "ws-test",
 ) -> MagicMock:
     row = MagicMock()
     row.id = session_id
     row.user_id = user_id
+    row.workspace_id = workspace_id
     row.updated_at = None
     row.state_json = {"messages": messages if messages is not None else []}
     return row

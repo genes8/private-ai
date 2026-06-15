@@ -27,12 +27,17 @@ class ConversationManager:
     def __init__(self, db: Session) -> None:
         self._db = db
 
-    def new_session(self, user_id: str) -> str:
+    def new_session(self, user_id: str, workspace_id: str) -> str:
         session_id = str(uuid.uuid4())
-        state = PrivateAIState(session_id=session_id, user_id=user_id)
+        # The session is permanently bound to this workspace (see the 409 check in
+        # the chat route): its history must never mix contexts across workspaces.
+        state = PrivateAIState(
+            session_id=session_id, user_id=user_id, workspace_ids=[workspace_id]
+        )
         db_row = DbSession(
             id=session_id,
             user_id=user_id,
+            workspace_id=workspace_id,
             state_json=state.model_dump(mode="json"),
         )
         self._db.add(db_row)
