@@ -796,6 +796,12 @@ def verify_deletion(
     Counts remnants across Qdrant, DB chunk/job rows, semantic cache, and the
     in-memory BM25 index. ``clean`` is true only when every count is zero.
     Returns 409 while the document still exists (deletion not performed yet).
+
+    NOTE: this endpoint is intentionally **org-admin only** (not workspace-scoped).
+    It runs *after* the document row — and therefore its workspace_id — is gone,
+    so there is no workspace to authorize against; it returns only remnant counts
+    (no document content). Workspace-admins delete within their workspace; the
+    post-deletion verification is an org-admin audit function.
     """
     if db.get(Document, doc_id) is not None:
         raise HTTPException(status_code=409, detail="Document still exists; delete it first")

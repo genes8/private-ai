@@ -121,6 +121,8 @@ class ConversationManager:
             content=f"[Conversation summary] {summary}",
             created_at=datetime.now(UTC),
         )
-        recent_tail = state.messages[-(_SUMMARIZE_THRESHOLD - 1):] if _SUMMARIZE_THRESHOLD > 1 else []
+        recent_tail = (
+            state.messages[-(_SUMMARIZE_THRESHOLD - 1):] if _SUMMARIZE_THRESHOLD > 1 else []
+        )
         updated_state = state.model_copy(update={"messages": [summary_message, *recent_tail]})
         self.save_session(updated_state)
