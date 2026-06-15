@@ -77,7 +77,7 @@ def test_real_scanned_pdf_ocr_ingest(tmp_path: Path) -> None:
     """An image-only PDF ingests via the OCR path and yields readable chunks."""
     _require_real_smoke()
 
-    pdf = write_scanned_pdf(tmp_path / "scanned-sample.pdf")
+    pdf = write_scanned_pdf(tmp_path / "scanned-sample.pdf", pages=1)
     with SmokeClient() as client:
         doc_id = client.upload_document(pdf)
         try:
@@ -104,7 +104,7 @@ def test_real_upload_new_version_no_retrieval_gap(tmp_path: Path) -> None:
     """Staged new-version ingest keeps a servable version at every moment."""
     _require_real_smoke()
 
-    pdf = write_scanned_pdf(tmp_path / "doc-v1.pdf")
+    pdf = write_scanned_pdf(tmp_path / "doc-v1.pdf", pages=1)
     with SmokeClient() as client:
         doc_id = client.upload_document(pdf)
         try:
@@ -140,7 +140,7 @@ def test_real_delete_then_verify_deletion_clean(tmp_path: Path) -> None:
     """Deleting a document leaves no retrievable remnants in any store."""
     _require_real_smoke()
 
-    pdf = write_scanned_pdf(tmp_path / "to-delete.pdf")
+    pdf = write_scanned_pdf(tmp_path / "to-delete.pdf", pages=1)
     with SmokeClient() as client:
         doc_id = client.upload_document(pdf)
         client.wait_for_indexed(doc_id)

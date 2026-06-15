@@ -34,12 +34,9 @@ def _render_page(width: int = 1240, height: int = 1754) -> Image.Image:
     """Render the fixture text as a single white A4-ish page image."""
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
-    # A larger default font keeps glyphs legible enough for OCR without
-    # depending on a specific TrueType font being installed on the test host.
-    # ``size=`` on the default font requires Pillow >= 10 (we ship 12.x).
     try:
         font = ImageFont.load_default(size=44)
-    except TypeError:  # very old Pillow without sized default font
+    except TypeError:
         font = ImageFont.load_default()
     y = 120
     for line in _PAGE_LINES:
@@ -48,10 +45,10 @@ def _render_page(width: int = 1240, height: int = 1754) -> Image.Image:
     return image
 
 
-def write_scanned_pdf(path: Path) -> Path:
-    """Write a two-page image-only PDF to ``path`` and return it."""
+def write_scanned_pdf(path: Path, *, pages: int = 1, dpi: float = 150.0) -> Path:
+    """Write an image-only PDF to ``path`` and return it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     page = _render_page()
-    # Two identical pages so multi-page OCR handling is exercised.
-    page.save(path, "PDF", resolution=150.0, save_all=True, append_images=[page])
+    extras = [page for _ in range(max(0, pages - 1))]
+    page.save(path, "PDF", resolution=dpi, save_all=True, append_images=extras)
     return path

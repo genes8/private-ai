@@ -30,8 +30,12 @@ class SmokeClient:
     """Authenticated client bound to a live Safe4AI deployment."""
 
     def __init__(self, base_url: str = _BASE_URL) -> None:
-        self._http = httpx.Client(base_url=base_url, timeout=30)
+        # Ingestion shares the request event loop; while OCR/embedding is in
+        # flight, status polling can block behind it. Allow up to 120s per call
+        # so polling survives a cold model load on the first OCR.
+        self._http = httpx.Client(base_url=base_url, timeout=120)
         self._csrf: str | None = None
+        self._workspace_id: str | None = None
 
     def __enter__(self) -> SmokeClient:
         self.login()
@@ -62,9 +66,32 @@ class SmokeClient:
             raise SmokeAuthError(f"login failed ({resp.status_code}): {resp.text}")
         # The login response rotates the CSRF cookie; pick up the fresh value.
         self._csrf = self._http.cookies.get("csrf_token", token)
+        self._workspace_id = self._resolve_workspace_id()
+
+    def _resolve_workspace_id(self) -> str:
+        env_id = os.getenv("SMOKE_WORKSPACE_ID")
+        if env_id:
+            return env_id
+        listed = self._http.get("/workspaces", headers={"X-CSRF-Token": self._csrf or ""})
+        listed.raise_for_status()
+        rows = listed.json()
+        if rows:
+            return str(rows[0]["id"])
+        created = self._http.post(
+            "/admin/workspaces",
+            json={"name": "Smoke Tests", "slug": "smoke-tests"},
+            headers={"X-CSRF-Token": self._csrf or ""},
+        )
+        created.raise_for_status()
+        return str(created.json()["id"])
 
     def _headers(self) -> dict[str, str]:
-        return {"X-CSRF-Token": self._csrf} if self._csrf else {}
+        headers: dict[str, str] = {}
+        if self._csrf:
+            headers["X-CSRF-Token"] = self._csrf
+        if self._workspace_id:
+            headers["X-Workspace-Id"] = self._workspace_id
+        return headers
 
     def get(self, path: str, **kwargs: Any) -> httpx.Response:
         return self._http.get(path, **kwargs)
