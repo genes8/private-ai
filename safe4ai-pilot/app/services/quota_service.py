@@ -2,6 +2,12 @@
 
 All checks raise domain exceptions — callers are responsible for mapping
 them to HTTP responses. No FastAPI dependency in this module.
+
+WORKSPACE SCOPE (decision): quota enforcement is **instance-wide**, NOT
+per-workspace. Seats and the monthly query cap are a per-deployment commercial
+contract (one company = one deployment); workspaces are an internal org-chart
+concept, not a billing boundary. Per-workspace counters below exist only for
+admin dashboards and must never gate requests.
 """
 from __future__ import annotations
 
@@ -73,6 +79,28 @@ def count_monthly_queries(db: Session) -> int:
         db.query(AuditLog)
         .filter(
             AuditLog.action_type == "chat_query",
+            AuditLog.timestamp >= start_of_month,
+        )
+        .count()
+    )
+
+
+def count_workspace_queries(db: Session, workspace_id: str) -> int:
+    """Read-only chat_query count for one workspace this calendar month.
+
+    Display/dashboard only — this is NOT an enforcement gate (quotas are
+    instance-wide; see the module docstring).
+    """
+    from app.db.models import AuditLog
+
+    start_of_month = datetime.now(UTC).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    return (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.action_type == "chat_query",
+            AuditLog.workspace_id == workspace_id,
             AuditLog.timestamp >= start_of_month,
         )
         .count()
