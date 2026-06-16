@@ -396,7 +396,8 @@ def _ensure_workspace_schema() -> None:
             """
             INSERT INTO workspace_memberships (id, workspace_id, user_id, role)
             SELECT 'wm-default-' || users.id, :ws, users.id,
-                   CASE WHEN users.role = 'admin' THEN 'workspace_admin' ELSE 'member' END
+                   (CASE WHEN users.role = 'admin'
+                         THEN 'workspace_admin' ELSE 'member' END)::workspacerole
             FROM users
             WHERE users.is_active = true
               AND users.id <> :deleted

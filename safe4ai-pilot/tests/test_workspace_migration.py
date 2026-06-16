@@ -58,6 +58,25 @@ def test_workspace_migration_emits_schema_backfill_and_constraints() -> None:
     assert "ALTER TABLE documents ALTER COLUMN workspace_id SET NOT NULL" in sql
 
 
+def test_workspace_membership_backfill_casts_role_to_workspacerole_enum() -> None:
+    # Regression guard: Postgres rejects CASE ... END (text) for the workspacerole
+    # enum column in prod with DatatypeMismatch; the integration test does not
+    # reproduce it, so pin the ::workspacerole cast in the emitted SQL.
+    from app.startup_migrations import _ensure_workspace_schema
+
+    executed: list[str] = []
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = lambda *args, **kwargs: executed.append(str(args[0]))
+    mock_engine = MagicMock()
+    mock_engine.begin.return_value.__enter__.return_value = mock_conn
+
+    with patch("app.startup_migrations.engine", mock_engine):
+        _ensure_workspace_schema()
+
+    membership_sql = next(s for s in executed if "INSERT INTO workspace_memberships" in s)
+    assert "END)::workspacerole" in membership_sql.replace("\n", " ").replace("  ", " ")
+
+
 # ---------------------------------------------------------------------------
 # Real-Postgres backfill + idempotency
 # ---------------------------------------------------------------------------
