@@ -6,15 +6,39 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
-from app.auth.middleware import require_role
+from app.auth.middleware import get_current_user
 from app.auth.router import limiter
 from app.db import get_db
 from app.db.models import HumanReviewQueue, ReviewStatus, User
-from sqlalchemy.orm import Session
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["admin"])
+
+
+def _review_scope(db: Session, user: User) -> list[str] | None:
+    """Workspace scope for the review queue (org-admin ⇒ None ⇒ unrestricted)."""
+    from app.services import workspace_service
+
+    try:
+        return workspace_service.admin_workspace_scope(db, user)
+    except workspace_service.WorkspaceAccessDenied:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _authorize_review_item(db: Session, user: User, item_id: str) -> HumanReviewQueue:
+    """Load a review item the user may act on, else 404 (foreign-workspace safe)."""
+    from app.services import workspace_service
+
+    item = db.get(HumanReviewQueue, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Review item not found")
+    if not workspace_service.is_org_admin(user):
+        ws_id = item.workspace_id
+        if ws_id is None or not workspace_service.is_workspace_admin(db, user, str(ws_id)):
+            raise HTTPException(status_code=404, detail="Review item not found")
+    return item
 
 
 @router.get("/admin/review-queue")
@@ -23,14 +47,13 @@ def list_review_queue(
     request: Request,
     status: ReviewStatus = ReviewStatus.pending,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    rows = (
-        db.query(HumanReviewQueue)
-        .filter(HumanReviewQueue.status == status)
-        .order_by(HumanReviewQueue.id)
-        .all()
-    )
+    scope = _review_scope(db, current_user)
+    q = db.query(HumanReviewQueue).filter(HumanReviewQueue.status == status)
+    if scope is not None:
+        q = q.filter(HumanReviewQueue.workspace_id.in_(scope))
+    rows = q.order_by(HumanReviewQueue.id).all()
     return [
         {
             "id": r.id,
@@ -51,11 +74,9 @@ def list_review_queue(
 def approve_review_item(
     item_id: str,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(require_role("admin")),
+    current_admin: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    item = db.get(HumanReviewQueue, item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Review item not found")
+    item = _authorize_review_item(db, current_admin, item_id)
     if item.status != ReviewStatus.pending:
         raise HTTPException(status_code=409, detail="Item already reviewed")
     item.status = ReviewStatus.approved
@@ -69,11 +90,9 @@ def approve_review_item(
 def reject_review_item(
     item_id: str,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(require_role("admin")),
+    current_admin: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    item = db.get(HumanReviewQueue, item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Review item not found")
+    item = _authorize_review_item(db, current_admin, item_id)
     if item.status != ReviewStatus.pending:
         raise HTTPException(status_code=409, detail="Item already reviewed")
     item.status = ReviewStatus.rejected

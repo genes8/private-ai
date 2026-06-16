@@ -27,6 +27,7 @@ class FeedbackStore:
         trace_id: str,
         rating: FeedbackRating,
         comment: str | None = None,
+        workspace_id: str | None = None,
     ) -> str:
         """Insert a QueryFeedback row and return its UUID."""
         feedback_id = str(uuid.uuid4())
@@ -34,6 +35,7 @@ class FeedbackStore:
             id=feedback_id,
             trace_id=trace_id,
             session_id=session_id,
+            workspace_id=workspace_id,
             user_id=user_id,
             rating=rating,
             comment=comment,
@@ -49,15 +51,15 @@ class FeedbackStore:
         )
         return feedback_id
 
-    def list_for_admin(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Return the most recent feedback rows as plain dicts."""
+    def list_for_admin(
+        self, limit: int = 100, workspace_ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Return the most recent feedback rows as plain dicts (optionally scoped)."""
         effective_limit = max(1, min(limit, 1000))
-        rows = (
-            self._db.query(QueryFeedback)
-            .order_by(QueryFeedback.created_at.desc())
-            .limit(effective_limit)
-            .all()
-        )
+        q = self._db.query(QueryFeedback)
+        if workspace_ids is not None:
+            q = q.filter(QueryFeedback.workspace_id.in_(workspace_ids))
+        rows = q.order_by(QueryFeedback.created_at.desc()).limit(effective_limit).all()
         user_ids = {r.user_id for r in rows if r.user_id}
         user_rows = (
             self._db.query(User).filter(User.id.in_(user_ids)).all() if user_ids else []
@@ -77,22 +79,23 @@ class FeedbackStore:
             for r in rows
         ]
 
-    def count_negative(self) -> int:
-        """Return the total count of negative feedback entries."""
-        return int(
-            self._db.query(func.count(QueryFeedback.id))
-            .filter(QueryFeedback.rating == FeedbackRating.negative)
-            .scalar()
-            or 0
+    def count_negative(self, workspace_ids: list[str] | None = None) -> int:
+        """Return the total count of negative feedback entries (optionally scoped)."""
+        q = self._db.query(func.count(QueryFeedback.id)).filter(
+            QueryFeedback.rating == FeedbackRating.negative
         )
+        if workspace_ids is not None:
+            q = q.filter(QueryFeedback.workspace_id.in_(workspace_ids))
+        return int(q.scalar() or 0)
 
-    def get_trace(self, feedback_id: str) -> dict[str, Any] | None:
-        """Return audit trace data for a feedback item, or None if not found."""
-        feedback = (
-            self._db.query(QueryFeedback)
-            .filter(QueryFeedback.id == feedback_id)
-            .first()
-        )
+    def get_trace(
+        self, feedback_id: str, workspace_ids: list[str] | None = None
+    ) -> dict[str, Any] | None:
+        """Return audit trace data for a feedback item, or None if not found/foreign."""
+        q = self._db.query(QueryFeedback).filter(QueryFeedback.id == feedback_id)
+        if workspace_ids is not None:
+            q = q.filter(QueryFeedback.workspace_id.in_(workspace_ids))
+        feedback = q.first()
         if feedback is None:
             return None
         audit = (

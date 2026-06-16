@@ -87,6 +87,21 @@ def list_admin_workspace_ids_for_user(db: Session, user: User) -> list[str]:
     return [r[0] for r in rows]
 
 
+def admin_workspace_scope(db: Session, user: User) -> list[str] | None:
+    """Workspace scope for admin read views (audit/feedback/review/stats).
+
+    Returns ``None`` for org-admins (unrestricted), the administered workspace ids
+    for a workspace-admin, and raises ``WorkspaceAccessDenied`` for a user who
+    administers no workspace (callers map this to 403).
+    """
+    if is_org_admin(user):
+        return None
+    admin_ids = list_admin_workspace_ids_for_user(db, user)
+    if not admin_ids:
+        raise WorkspaceAccessDenied("no administered workspace")
+    return admin_ids
+
+
 def user_workspace_role(db: Session, user_id: str, workspace_id: str) -> WorkspaceRole | None:
     membership = (
         db.query(WorkspaceMembership)

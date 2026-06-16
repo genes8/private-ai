@@ -48,7 +48,17 @@ def obs_client_pilot() -> TestClient:
 
 
 class TestSubmitFeedback:
+    @staticmethod
+    def _stub_owned_session(client: TestClient, workspace_id: str = "ws-1") -> None:
+        """Make the mock DB return a caller-owned session + a matching trace."""
+        from app.db import get_db
+
+        db = client.app.dependency_overrides[get_db]()
+        db.get.return_value = MagicMock(user_id="user-1", workspace_id=workspace_id)
+        db.query.return_value.filter.return_value.first.return_value = MagicMock()
+
     def test_submit_feedback_positive(self, obs_client: TestClient) -> None:
+        self._stub_owned_session(obs_client)
         with (
             patch("app.api.observability_routes.FeedbackStore") as MockStore,
         ):
@@ -70,10 +80,11 @@ class TestSubmitFeedback:
         assert "id" in body
         assert body["id"] == "feedback-uuid-123"
         mock_instance.store.assert_called_once_with(
-            "sess-1", "user-1", "trace-1", "positive", None
+            "sess-1", "user-1", "trace-1", "positive", None, workspace_id="ws-1"
         )
 
     def test_submit_feedback_negative_with_comment(self, obs_client: TestClient) -> None:
+        self._stub_owned_session(obs_client)
         with patch("app.api.observability_routes.FeedbackStore") as MockStore:
             mock_instance = MagicMock()
             mock_instance.store.return_value = "feedback-uuid-456"
@@ -92,7 +103,7 @@ class TestSubmitFeedback:
         assert resp.status_code == 200
         assert resp.json()["id"] == "feedback-uuid-456"
         mock_instance.store.assert_called_once_with(
-            "sess-2", "user-1", "trace-2", "negative", "Not helpful"
+            "sess-2", "user-1", "trace-2", "negative", "Not helpful", workspace_id="ws-1"
         )
 
     def test_submit_feedback_invalid_rating(self, obs_client: TestClient) -> None:
@@ -181,17 +192,17 @@ class TestListFeedback:
 
 class TestFeedbackCount:
     def test_feedback_count_returns_negative_count(self, obs_client: TestClient) -> None:
-        from unittest.mock import call
 
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.scalar.return_value = 3
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient as TC
 
         import app.api.observability_routes as obs_mod
         from app.auth.middleware import get_current_user
         from app.db import get_db
         from app.db.models import User, UserRole
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient as TC
 
         def override_db() -> MagicMock:
             return mock_db
@@ -219,12 +230,13 @@ class TestFeedbackCount:
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.scalar.return_value = None
 
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient as TC
+
         import app.api.observability_routes as obs_mod
         from app.auth.middleware import get_current_user
         from app.db import get_db
         from app.db.models import User, UserRole
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient as TC
 
         def override_db() -> MagicMock:
             return mock_db
@@ -264,8 +276,8 @@ class TestAdminAuthGuard:
 
 class TestFeedbackTrace:
     def test_returns_audit_data_when_found(self, obs_client: TestClient) -> None:
+        from datetime import UTC, datetime
         from unittest.mock import MagicMock
-        from datetime import datetime, UTC
 
         mock_feedback = MagicMock()
         mock_feedback.id = "fb-1"
@@ -279,16 +291,18 @@ class TestFeedbackTrace:
         mock_audit.timestamp = datetime(2026, 5, 1, 10, 0, 0, tzinfo=UTC)
         mock_audit.response_metadata = {"cache_hit": True}
 
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
         from app.api.observability_routes import router as obs_router
         from app.auth.middleware import get_current_user
         from app.db import get_db
         from app.db.models import User, UserRole
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
 
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.first.return_value = mock_feedback
-        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = mock_audit
+        chain = mock_db.query.return_value.filter.return_value.order_by.return_value
+        chain.first.return_value = mock_audit
 
         def override_db() -> MagicMock:
             return mock_db
@@ -318,12 +332,14 @@ class TestFeedbackTrace:
 
     def test_returns_404_when_feedback_not_found(self) -> None:
         from unittest.mock import MagicMock
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
         from app.api.observability_routes import router as obs_router
         from app.auth.middleware import get_current_user
         from app.db import get_db
         from app.db.models import User, UserRole
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
 
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.first.return_value = None
@@ -349,19 +365,22 @@ class TestFeedbackTrace:
 
     def test_returns_found_false_when_no_audit_log(self, obs_client: TestClient) -> None:
         from unittest.mock import MagicMock
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
         from app.api.observability_routes import router as obs_router
         from app.auth.middleware import get_current_user
         from app.db import get_db
         from app.db.models import User, UserRole
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
 
         mock_feedback = MagicMock()
         mock_feedback.trace_id = "trace-xyz"
 
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.first.return_value = mock_feedback
-        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+        chain = mock_db.query.return_value.filter.return_value.order_by.return_value
+        chain.first.return_value = None
 
         def override_db() -> MagicMock:
             return mock_db

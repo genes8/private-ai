@@ -42,6 +42,7 @@ async def run_agent_query(
         entry = HumanReviewQueue(
             id=str(uuid.uuid4()),
             session_id=final_state.session_id,
+            workspace_id=final_state.workspace_ids[0] if final_state.workspace_ids else None,
             user_id=final_state.user_id,
             query=query[:500],
             draft_answer=final_state.draft_answer or None,
