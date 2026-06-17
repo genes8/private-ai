@@ -61,6 +61,30 @@ Release tampering:
 - Images are scanned, SBOMs are generated, and images are signed after push.
 - Customers verify signatures and release evidence before deployment.
 
+Cross-workspace data exposure (intra-deployment trust boundary):
+
+- A deployment may be sub-divided into workspaces (e.g. Legal, Finance). A
+  member of one workspace must never read another workspace's documents, cached
+  answers, sessions, audit, feedback, or review items.
+- Retrieval is fail-closed: every chat query is scoped to the user's single
+  active workspace on BOTH the dense (Qdrant `workspace_id` filter) and sparse
+  (BM25) paths; an empty scope retrieves nothing. The only `retriever.retrieve`
+  call sites (the graph retrieve/decompose nodes) always pass the membership-
+  derived scope.
+- The semantic cache is workspace-keyed (lookup and store) so a cached answer
+  cannot cross workspaces; it is currently latent (no runtime call site) and
+  gated against unsafe activation.
+- Chat sessions are immutable to their workspace (cross-workspace replay → 409).
+- Admin surfaces (documents, audit, stats, feedback, review) are scoped:
+  org-admin is unrestricted, a workspace-admin sees only their workspaces, and
+  foreign objects return 404 (no IDOR enumeration). Workspace authority is
+  resolved per request from the DB, never trusted from the JWT.
+- Migration window: vectors written before the workspace upgrade carry no
+  `workspace_id` and are intentionally unsearchable (fail-closed) until a
+  background backfill assigns them to the default workspace; `/health` does not
+  flip, but an admin status endpoint reports the pending state.
+- Quotas remain a per-deployment commercial boundary (not per-workspace).
+
 ## Residual risks
 
 - Customer-operated PostgreSQL, Qdrant, object/file storage, WORM retention,

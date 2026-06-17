@@ -35,3 +35,39 @@ Record of real-service smoke runs of the Safe4AI pilot platform. Each run exerci
 
 - **Scanned-PDF OCR** — not exercised because no scanned/image PDF was uploaded in this run. The vision/OCR model is `qwen3.5:9b` (the single multimodal model, present during the run), and the OCR ingestion path is implemented — but OCR output quality on a real scanned document is **unverified by this smoke**. A follow-up run should upload a scanned PDF and confirm extracted text + citations.
 - **Containerized Ollama path** (`docker-compose.ollama.yml`) — not used; the run reused the already-running host Ollama to avoid re-pulling ~13 GB of models on the space-constrained Docker VM.
+
+---
+
+## Follow-up: automated document-flow smoke (added 2026-06-13)
+
+Three real-service smoke tests now cover the previously unverified flows. They
+live in `tests/test_real_services_smoke.py` (marked `@pytest.mark.smoke`) and use
+a generated image-only PDF fixture (`tests/fixtures/scanned_pdf.py`) plus a small
+authenticated client (`tests/helpers/smoke_client.py`).
+
+- `test_real_scanned_pdf_ocr_ingest` — uploads an image-only PDF (no text layer,
+  forcing the vision/OCR path), waits for `indexed`, and asserts the inspector
+  reports OCR-produced chunks whose previews contain the fixture's text. **This
+  closes the long-standing "scanned-PDF OCR unverified" gap.**
+- `test_real_upload_new_version_no_retrieval_gap` — uploads a doc, then a new
+  version, and polls throughout the staged ingest asserting the document never
+  leaves a servable state and a previous version stays active until the atomic
+  flip.
+- `test_real_delete_then_verify_deletion_clean` — deletes a doc and asserts
+  `GET /admin/documents/{id}/verify-deletion` returns `clean: true` with every
+  remnant count at zero.
+
+### How to run
+
+```bash
+cd safe4ai-pilot
+docker compose up -d                       # or the host-Ollama override setup
+export RUN_REAL_SMOKE=1
+export SMOKE_ADMIN_PASSWORD=...             # or SEED_ADMIN_PASSWORD used at seed
+.venv/bin/pytest tests/test_real_services_smoke.py -v
+```
+
+Without `RUN_REAL_SMOKE=1` the suite skips. **Status: written and passing
+collection/skip locally; pending one execution against a live stack** (requires
+Docker + the `qwen3.5:9b` vision model pulled). Record the live PASS/FAIL here
+after that run.

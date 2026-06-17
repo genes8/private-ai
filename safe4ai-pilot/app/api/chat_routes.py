@@ -59,6 +59,9 @@ _STEP_MAP: dict[str, str] = {
 class ChatRequest(BaseModel):
     question: str = Field(..., max_length=2048)
     session_id: str | None = Field(None, max_length=36)
+    # Deprecated and ignored server-side; retrieval scope is the active workspace
+    # (X-Workspace-Id header). Kept only for backward compatibility with old
+    # clients; will be removed once no caller sends it.
     collection: str = "default"
 
     @field_validator("session_id")
@@ -81,26 +84,38 @@ class ChatResponse(BaseModel):
 
 
 def _resolve_session(
-    body: ChatRequest, user_id: str, convo: ConversationManager
+    body: ChatRequest,
+    user_id: str,
+    active_workspace_id: str,
+    convo: ConversationManager,
+    db: Session,
 ) -> tuple[str, PrivateAIState]:
-    """Load existing session or create a new one. Returns (session_id, state)."""
+    """Load an existing session or create a new one bound to the active workspace.
+
+    A session is immutable to one workspace: replaying its id under a different
+    active workspace is a 409 (never a silent re-scope). Foreign sessions stay a
+    404 (indistinguishable from missing).
+    """
     if body.session_id:
-        try:
-            state = convo.load_session(body.session_id)
-            if state.user_id != user_id:
-                # Keep foreign sessions indistinguishable from missing sessions.
+        row = db.get(DbSession, body.session_id)
+        if row is not None:
+            if str(row.user_id) != user_id:
                 raise HTTPException(status_code=404, detail="Session not found")
-            return body.session_id, state
-        except (KeyError, ValueError):
-            # KeyError: session not found — create a new one
-            # ValueError: session state corrupted — create a new one
-            pass
-    session_id = convo.new_session(user_id)
+            if row.workspace_id is not None and str(row.workspace_id) != active_workspace_id:
+                raise HTTPException(
+                    status_code=409, detail="Session is bound to another workspace"
+                )
+            try:
+                return body.session_id, convo.load_session(body.session_id)
+            except (KeyError, ValueError):
+                # State corrupted — fall through and create a fresh session.
+                pass
+    session_id = convo.new_session(user_id, active_workspace_id)
     return session_id, convo.load_session(session_id)
 
 
 def _build_run_state(
-    state: PrivateAIState, question: str, trace_id: str
+    state: PrivateAIState, question: str, trace_id: str, workspace_ids: list[str]
 ) -> PrivateAIState:
     user_msg = Message(role="user", content=question, created_at=datetime.now(UTC))
     return state.model_copy(
@@ -109,6 +124,8 @@ def _build_run_state(
             "current_step": "intake",
             "status": "active",
             "trace_id": trace_id,
+            # Fail-closed retrieval scope: only the active workspace.
+            "workspace_ids": workspace_ids,
             "rewritten_query": "",
             "retrieved_chunks": [],
             "graded_chunks": [],
@@ -121,7 +138,33 @@ def _build_run_state(
     )
 
 
-def _merge_stream_state(current: PrivateAIState, update: PrivateAIState | dict[str, Any]) -> PrivateAIState:
+def _resolve_active_workspace(request: Request, user: User, db: Session) -> str:
+    """Resolve the single workspace a chat turn runs in.
+
+    From the X-Workspace-Id header (membership enforced, 404 otherwise), or the
+    user's sole workspace, else 400. Chat is scoped to exactly one workspace so a
+    session stays bound to it (least privilege, no cross-workspace bleed).
+    """
+    from app.services import workspace_service
+
+    requested = request.headers.get("X-Workspace-Id")
+    if requested:
+        try:
+            workspace_service.assert_member(db, user, requested)
+        except workspace_service.WorkspaceAccessDenied:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        return requested
+    workspace_ids = workspace_service.list_workspace_ids_for_user(db, user)
+    if len(workspace_ids) == 1:
+        return workspace_ids[0]
+    raise HTTPException(
+        status_code=400, detail="Workspace required: set the X-Workspace-Id header"
+    )
+
+
+def _merge_stream_state(
+    current: PrivateAIState, update: PrivateAIState | dict[str, Any]
+) -> PrivateAIState:
     if isinstance(update, PrivateAIState):
         return update
     merged = current.model_dump()
@@ -162,10 +205,13 @@ def _prepare_chat_run(
     if graph is None:
         raise HTTPException(status_code=503, detail="AI pipeline not ready")
 
+    active_workspace_id = _resolve_active_workspace(request, current_user, db)
     convo = ConversationManager(db)
-    session_id, state = _resolve_session(body, str(current_user.id), convo)
+    session_id, state = _resolve_session(
+        body, str(current_user.id), active_workspace_id, convo, db
+    )
     trace_id = str(uuid.uuid4())
-    run_state = _build_run_state(state, body.question, trace_id)
+    run_state = _build_run_state(state, body.question, trace_id, [active_workspace_id])
     return session_id, run_state, graph
 
 
@@ -279,7 +325,10 @@ async def chat_stream(
         except Exception as exc:
             logger.error("graph_stream_failed", error=str(exc))
             # F-07: Do not leak internal error details to the client
-            yield _sse("done", {"error": "Pipeline error", "traceId": trace_id, "sessionId": session_id})
+            yield _sse(
+                "done",
+                {"error": "Pipeline error", "traceId": trace_id, "sessionId": session_id},
+            )
             return
 
         if final is None:
@@ -416,9 +465,13 @@ def list_chat_sessions(
     """The current user's non-empty sessions, most recently active first."""
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+    active_workspace_id = _resolve_active_workspace(request, current_user, db)
     rows = (
         db.query(DbSession)
-        .filter(DbSession.user_id == str(current_user.id))
+        .filter(
+            DbSession.user_id == str(current_user.id),
+            DbSession.workspace_id == active_workspace_id,
+        )
         .order_by(DbSession.updated_at.desc())
         .limit(limit)
         .all()
@@ -449,9 +502,14 @@ def get_chat_session_messages(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SessionMessagesResponse:
-    """Messages of one owned session. 404 for missing or foreign sessions alike."""
+    """Messages of one owned session in the active workspace. 404 otherwise."""
+    active_workspace_id = _resolve_active_workspace(request, current_user, db)
     row = db.get(DbSession, session_id)
-    if row is None or str(row.user_id) != str(current_user.id):
+    if (
+        row is None
+        or str(row.user_id) != str(current_user.id)
+        or (row.workspace_id is not None and str(row.workspace_id) != active_workspace_id)
+    ):
         raise HTTPException(status_code=404, detail="Session not found")
     messages = [
         SessionMessage(role=str(m.get("role", "")), content=str(m.get("content", "")))

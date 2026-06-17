@@ -20,7 +20,7 @@ def test_new_session_creates_db_row() -> None:
     db = MagicMock()
     manager = _make_manager(db=db)
 
-    session_id = manager.new_session("user-1")
+    session_id = manager.new_session("user-1", "ws-1")
 
     assert isinstance(session_id, str)
     assert len(session_id) > 0
@@ -29,6 +29,7 @@ def test_new_session_creates_db_row() -> None:
 
     added_row = db.add.call_args[0][0]
     assert added_row.user_id == "user-1"
+    assert added_row.workspace_id == "ws-1"
     assert added_row.id == session_id
 
 

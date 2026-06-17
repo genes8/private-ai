@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Generator
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from app.db.models import DocumentVersionStatus, IngestionStatus, User
 from tests.helpers.admin_routes import (
@@ -29,6 +32,27 @@ from tests.helpers.admin_routes import (
 from tests.helpers.admin_routes import (
     mock_db_with_admin as _mock_db_with_admin,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_workspace_resolution() -> Generator[None, None, None]:
+    """Resolve the active/admin workspace for the mocked-DB document tests.
+
+    Only workspace *resolution* is stubbed; is_workspace_admin keeps its real
+    logic so org-admin (201) and non-admin (403) upload paths still differ.
+    """
+    from app.services import workspace_service
+
+    with (
+        patch.object(workspace_service, "assert_member", return_value=None),
+        patch.object(
+            workspace_service, "list_workspace_ids_for_user", return_value=["ws-test"]
+        ),
+        patch.object(
+            workspace_service, "list_admin_workspace_ids_for_user", return_value=["ws-test"]
+        ),
+    ):
+        yield
 
 
 class TestDocumentUpload:
@@ -104,7 +128,7 @@ class TestDocumentList:
         db = _mock_db_with_admin(admin)
         (
             db.query.return_value.outerjoin.return_value.outerjoin.return_value
-            .order_by.return_value.all
+            .filter.return_value.order_by.return_value.all
         ).return_value = [(_make_document(), 3, "admin@test.com")]
 
         with patch("pathlib.Path.mkdir"):

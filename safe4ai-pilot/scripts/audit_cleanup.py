@@ -46,7 +46,9 @@ def _audit_log_record(row: AuditLog) -> dict[str, Any]:
         "id": row.id,
         "user_id": row.user_id,
         "session_id": row.session_id,
-        "timestamp": row.timestamp.isoformat() if isinstance(row.timestamp, datetime) else row.timestamp,
+        "timestamp": (
+            row.timestamp.isoformat() if isinstance(row.timestamp, datetime) else row.timestamp
+        ),
         "action_type": row.action_type,
         "query_text": row.query_text,
         "response_metadata": row.response_metadata,
@@ -213,7 +215,7 @@ def run_cleanup(
     }
 
 
-def schedule_cleanup(app: FastAPI) -> None:  # noqa: ARG001
+def schedule_cleanup(app: FastAPI) -> None:
     """Register a daily cleanup job with APScheduler at 02:00 UTC.
 
     Call this from the lifespan context manager in main.py after Phase 2B/2C merge.
@@ -221,6 +223,19 @@ def schedule_cleanup(app: FastAPI) -> None:  # noqa: ARG001
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     scheduler = AsyncIOScheduler()
+
+    def _run_workspace_backfill_retry(**kwargs: Any) -> None:
+        # Retry the Qdrant workspace_id backfill until it completes (e.g. after a
+        # transient Qdrant outage at boot). No-op once the flag is set.
+        from app.services.workspace_backfill import (
+            backfill_qdrant_workspace_payload,
+        )
+
+        retriever = getattr(app.state, "retriever", None)
+        try:
+            backfill_qdrant_workspace_payload(retriever)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("workspace_backfill_retry_failed", error=str(exc))
 
     def _run_cleanup_wrapper(**kwargs: Any) -> None:
         db = SessionLocal()
@@ -267,6 +282,13 @@ def schedule_cleanup(app: FastAPI) -> None:  # noqa: ARG001
         hour=2,
         minute=30,
         id="superseded_version_cleanup",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_workspace_backfill_retry,
+        trigger="interval",
+        minutes=5,
+        id="workspace_backfill_retry",
         replace_existing=True,
     )
     scheduler.start()

@@ -24,6 +24,7 @@ from app.api.observability_routes import router as observability_router
 from app.api.review_routes import router as review_router
 from app.api.settings_routes import router as settings_router
 from app.api.user_routes import router as user_router
+from app.api.workspace_routes import router as workspace_router
 from app.auth.router import limiter as auth_limiter
 from app.auth.router import router as auth_router
 from app.config import settings
@@ -72,7 +73,7 @@ app.add_middleware(
     allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-CSRF-Token"],
+    allow_headers=["Content-Type", "X-CSRF-Token", "X-Workspace-Id"],
 )
 
 
@@ -174,10 +175,24 @@ app.include_router(review_router)
 app.include_router(settings_router)
 app.include_router(account_router)
 app.include_router(me_router)
+app.include_router(workspace_router)
 
 
 async def _rebuild_bm25(retriever: Any) -> None:
-    """Rebuild the in-memory BM25 sparse index from Qdrant after startup."""
+    """Backfill workspace payloads (if needed), then rebuild the BM25 index.
+
+    The workspace backfill rebuilds BM25 itself on success; if it is incomplete
+    (e.g. Qdrant briefly unavailable) we still rebuild BM25 so the sparse path
+    works for already-tagged points, and the scheduler retries the backfill.
+    """
+    from app.services.workspace_backfill import backfill_qdrant_workspace_payload
+
+    try:
+        done = await asyncio.to_thread(backfill_qdrant_workspace_payload, retriever)
+        if done:
+            return
+    except Exception as exc:
+        logger.warning("workspace_backfill_startup_failed", error=str(exc))
     try:
         count = await asyncio.to_thread(retriever.rebuild_from_qdrant)
         logger.info("bm25_index_rebuilt", chunk_count=count)
@@ -261,6 +276,11 @@ async def health() -> dict[str, object]:
         except Exception as exc:
             logger.warning("health_provider_failed", error=str(exc))
             checks["provider"] = "error"
+
+    # NOTE: the Qdrant workspace_id backfill status is intentionally NOT part of
+    # this unauthenticated liveness probe — a pending backfill does not make the
+    # service unhealthy, and /health must not do extra DB work or leak detail.
+    # The operator-facing signal lives on GET /admin/workspace-backfill-status.
 
     overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return {"status": overall, "checks": checks}

@@ -57,7 +57,9 @@ class HybridRetriever:
         )
         incoming_entries = [
             (chunk_id, content, payload)
-            for chunk_id, content, payload in zip(chunk_ids, contents, incoming_payloads, strict=False)
+            for chunk_id, content, payload in zip(
+                chunk_ids, contents, incoming_payloads, strict=False
+            )
         ]
 
         with self._bm25_lock:
@@ -137,9 +139,18 @@ class HybridRetriever:
         doc_ids: list[str] | None = None,
         collection: str | None = None,
         top_k: int = 20,
+        workspace_ids: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         if self._embedding_client is None:
             raise RuntimeError("No embedding client configured for HybridRetriever")
+
+        # Fail-closed workspace scoping: an empty list means "no accessible
+        # workspaces" and must retrieve nothing. ``None`` means unscoped and is
+        # reachable only from trusted internal callers (e.g. ingestion self-test);
+        # chat paths always pass a membership-derived list.
+        if workspace_ids is not None and not workspace_ids:
+            return []
+
         embedding = await self._embedding_client.embed_query(query)
 
         # Exclude superseded document versions (is_active=False). must_not keeps
@@ -151,6 +162,12 @@ class HybridRetriever:
         if doc_ids:
             must.append(
                 qmodels.FieldCondition(key="doc_id", match=qmodels.MatchAny(any=doc_ids))
+            )
+        if workspace_ids is not None:
+            must.append(
+                qmodels.FieldCondition(
+                    key="workspace_id", match=qmodels.MatchAny(any=workspace_ids)
+                )
             )
         qdrant_filter = qmodels.Filter(must=must or None, must_not=must_not)
 
@@ -187,6 +204,11 @@ class HybridRetriever:
                 cid = bm25_chunk_ids[idx]
                 payload = dense_data.get(cid) or bm25_payloads.get(cid, {})
                 if doc_ids and payload.get("doc_id") not in doc_ids:
+                    continue
+                # Mirror the dense workspace filter on the sparse path — without
+                # this, BM25 would surface cross-workspace chunks. Fail-closed:
+                # a chunk whose payload lacks workspace_id is excluded.
+                if workspace_ids is not None and payload.get("workspace_id") not in workspace_ids:
                     continue
                 if payload.get("is_active") is False:
                     continue

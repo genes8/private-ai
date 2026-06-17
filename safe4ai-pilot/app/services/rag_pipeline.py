@@ -85,6 +85,7 @@ class RagPipeline:
         filename: str,
         uploaded_by: str,
         *,
+        workspace_id: str,
         document_version: int = 1,
         document_version_id: str | None = None,
         activate: bool = True,
@@ -144,6 +145,7 @@ class RagPipeline:
                 vector=embeddings[i],
                 payload={
                     "doc_id": doc_id,
+                    "workspace_id": workspace_id,
                     "filename": filename,
                     "page_number": all_chunks[i]["page_number"],
                     "chunk_index": all_chunks[i]["chunk_index"],

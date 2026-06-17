@@ -27,10 +27,10 @@ def classify_action_type(action_type: str) -> str:
         return "upload"
     if t.startswith("feedback"):
         return "feedback"
-    if t.startswith(("login", "logout", "auth")):
+    if t.startswith(("login", "logout", "auth", "saml")):
         return "login"
     if t.startswith("fallback"):
         return "fallback"
-    if t.startswith(("settings", "user", "admin", "provider", "review")):
+    if t.startswith(("settings", "user", "admin", "provider", "review", "workspace")):
         return "admin"
     return "other"

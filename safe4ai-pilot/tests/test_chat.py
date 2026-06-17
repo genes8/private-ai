@@ -58,6 +58,24 @@ def _make_final_state(session_id: str = "sess-1", user_id: str = "u1") -> Privat
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_workspace_resolution() -> Generator[None, None, None]:
+    """Give the mocked-DB chat tests a single workspace so chat scoping resolves.
+
+    Workspace resolution itself is covered by test_workspace_service /
+    test_workspace_isolation; here we only need it to succeed.
+    """
+    from app.services import workspace_service
+
+    with (
+        patch.object(
+            workspace_service, "list_workspace_ids_for_user", return_value=["ws-test"]
+        ),
+        patch.object(workspace_service, "assert_member", return_value=None),
+    ):
+        yield
+
+
 @pytest.fixture
 def authed_client() -> Generator[TestClient, None, None]:
     """TestClient with a valid JWT cookie and mocked DB."""
@@ -69,7 +87,7 @@ def authed_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db] = _db_override(db)
     token = encode_token("u1", "pilot_user")
     client = TestClient(app)
-    csrf_token = "test-csrf-token"
+    csrf_token = "test-csrf-token"  # noqa: S105 - test value, not a real secret
     client.cookies.set("access_token", token)
     client.cookies.set("csrf_token", csrf_token)
     client.headers["X-CSRF-Token"] = csrf_token
@@ -131,16 +149,15 @@ def test_chat_graph_not_initialized(authed_client: TestClient) -> None:
 def test_chat_rejects_session_owned_by_another_user(authed_client: TestClient) -> None:
     authed_client.app.state.graph = AsyncMock()  # type: ignore[union-attr]
     foreign_session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-    foreign_state = PrivateAIState(session_id=foreign_session_id, user_id="someone-else")
+    foreign_row = _make_session_row(session_id=foreign_session_id, user_id="someone-else")
+    db = app.dependency_overrides[get_db]().__next__()
+    user = db.get.return_value
+    db.get.side_effect = lambda model, pk: user if model is User else foreign_row
 
-    with patch(
-        "app.services.conversation.ConversationManager.load_session",
-        return_value=foreign_state,
-    ):
-        response = authed_client.post(
-            "/chat",
-            json={"question": "hello", "session_id": foreign_session_id},
-        )
+    response = authed_client.post(
+        "/chat",
+        json={"question": "hello", "session_id": foreign_session_id},
+    )
 
     assert response.status_code == 404
 
@@ -234,7 +251,9 @@ def test_chat_stream_done_event_reports_chat_model_name(authed_client: TestClien
             }
 
     session_id = "sess-model"
-    with patch("app.services.conversation.ConversationManager.new_session", return_value=session_id), patch(
+    with patch(
+        "app.services.conversation.ConversationManager.new_session", return_value=session_id
+    ), patch(
         "app.services.conversation.ConversationManager.load_session",
         return_value=PrivateAIState(session_id=session_id, user_id="u1"),
     ), patch("app.api.chat_routes.finalize_chat_run"), patch(
@@ -315,7 +334,9 @@ def test_chat_stream_async_finalization_uses_thread(authed_client: TestClient) -
         coro.close()
         return MagicMock()
 
-    with patch("app.services.conversation.ConversationManager.new_session", return_value=session_id), patch(
+    with patch(
+        "app.services.conversation.ConversationManager.new_session", return_value=session_id
+    ), patch(
         "app.services.conversation.ConversationManager.load_session",
         return_value=PrivateAIState(session_id=session_id, user_id="u1"),
     ), patch("app.api.chat_routes.finalize_chat_run"), patch(
@@ -370,9 +391,18 @@ def test_chat_recovers_from_corrupted_session_state(authed_client: TestClient) -
     mock_graph.ainvoke = AsyncMock(return_value=final_state)
 
     old_session_id = "11111111-2222-3333-4444-555555555555"
+    # The session row exists and is owned by the caller in the active workspace,
+    # but its stored state is corrupt — load_session raises and we recover.
+    corrupt_row = _make_session_row(session_id=old_session_id, user_id="u1")
+    db = app.dependency_overrides[get_db]().__next__()
+    user = db.get.return_value
+    db.get.side_effect = lambda model, pk: user if model is User else corrupt_row
     with patch(
         "app.services.conversation.ConversationManager.load_session",
-        side_effect=[ValueError("Invalid session state"), PrivateAIState(session_id="sess-new", user_id="u1")],
+        side_effect=[
+            ValueError("Invalid session state"),
+            PrivateAIState(session_id="sess-new", user_id="u1"),
+        ],
     ), patch(
         "app.services.conversation.ConversationManager.new_session",
         return_value="sess-new",
@@ -398,10 +428,12 @@ def _make_session_row(
     session_id: str = "11111111-2222-3333-4444-555555555555",
     user_id: str = "u1",
     messages: list[dict[str, str]] | None = None,
+    workspace_id: str = "ws-test",
 ) -> MagicMock:
     row = MagicMock()
     row.id = session_id
     row.user_id = user_id
+    row.workspace_id = workspace_id
     row.updated_at = None
     row.state_json = {"messages": messages if messages is not None else []}
     return row

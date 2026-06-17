@@ -37,7 +37,7 @@ async def test_lookup_hit() -> None:
     db.execute.return_value.fetchone.return_value = fake_row
 
     cache = _make_cache(db=db)
-    result = await cache.lookup("what is X?")
+    result = await cache.lookup("what is X?", "ws-test")
 
     assert result is not None
     assert result["response"] == "This is the answer."
@@ -53,7 +53,7 @@ async def test_lookup_hit_records_cache_hit_event() -> None:
     db.execute.return_value.fetchone.return_value = fake_row
 
     cache = _make_cache(db=db)
-    await cache.lookup("what is X?")
+    await cache.lookup("what is X?", "ws-test")
 
     assert db.add.call_count == 1
     added_row = db.add.call_args[0][0]
@@ -67,7 +67,7 @@ async def test_lookup_miss() -> None:
     db.execute.return_value.fetchone.return_value = None
 
     cache = _make_cache(db=db)
-    result = await cache.lookup("unknown query")
+    result = await cache.lookup("unknown query", "ws-test")
 
     assert result is None
 
@@ -83,6 +83,7 @@ async def test_store() -> None:
         citations=[_make_citation()],
         doc_ids=["doc-1"],
         chunk_ids=["chunk-1"],
+        workspace_id="ws-test",
     )
 
     db.add.assert_called_once()
@@ -93,6 +94,22 @@ async def test_store() -> None:
     assert added_row.response_json == "test answer"
     assert added_row.source_document_ids == ["doc-1"]
     assert added_row.source_chunk_ids == ["chunk-1"]
+    # Cached answers are workspace-scoped so they cannot be served cross-workspace.
+    assert added_row.workspace_id == "ws-test"
+
+
+@pytest.mark.asyncio
+async def test_lookup_filters_by_workspace() -> None:
+    """The lookup query must constrain on workspace_id (no cross-workspace hits)."""
+    db = MagicMock()
+    db.execute.return_value.fetchone.return_value = None
+    cache = _make_cache(db=db)
+
+    await cache.lookup("what is X?", "ws-a")
+
+    stmt = db.execute.call_args[0][0]
+    sql = str(stmt)
+    assert "semantic_cache.workspace_id" in sql
 
 
 @pytest.mark.asyncio
@@ -116,7 +133,7 @@ async def test_lookup_uses_vector_distance_expression() -> None:
     db.execute.return_value.fetchone.return_value = None
     cache = _make_cache(db=db)
 
-    await cache.lookup("what is X?")
+    await cache.lookup("what is X?", "ws-test")
 
     stmt = db.execute.call_args[0][0]
     sql = str(stmt)

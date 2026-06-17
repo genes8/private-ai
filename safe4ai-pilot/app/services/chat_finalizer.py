@@ -24,7 +24,9 @@ def finalize_chat_run(
     model_name: str = "local",
 ) -> None:
     """Persist assistant reply, audit log, and cost record in a single transaction."""
-    assistant_msg = Message(role="assistant", content=final.draft_answer, created_at=datetime.now(UTC))
+    assistant_msg = Message(
+        role="assistant", content=final.draft_answer, created_at=datetime.now(UTC)
+    )
     updated = final.model_copy(update={"messages": list(final.messages) + [assistant_msg]})
     cost_usd = usage.total_tokens / 1000.0 * cost_per_1k_tokens
     now = datetime.now(UTC)
@@ -34,10 +36,15 @@ def finalize_chat_run(
         row.state_json = updated.model_dump(mode="json")
         row.updated_at = now
 
+    # The run is scoped to exactly one active workspace; stamp it so audit/cost
+    # views can be filtered per workspace.
+    workspace_id = final.workspace_ids[0] if final.workspace_ids else None
+
     db.add(
         AuditLog(
             id=str(uuid.uuid4()),
             user_id=user_id,
+            workspace_id=workspace_id,
             session_id=final.session_id,
             action_type="chat_query",
             query_text=query[:500],
@@ -59,6 +66,7 @@ def finalize_chat_run(
         AgentRun(
             id=str(uuid.uuid4()),
             session_id=final.session_id,
+            workspace_id=workspace_id,
             started_at=now,
             finished_at=now,
             status="completed",

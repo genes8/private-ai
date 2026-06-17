@@ -38,6 +38,8 @@ _KEY_TYPES: dict[str, type] = {
     "tier_expires_at": str,       # ISO-8601 UTC string; absent/empty = no expiry
     "blocked_terms": list,
     "provider_resolved_ip": str,
+    # One-time migration flag: Qdrant workspace_id payload backfill finished.
+    "qdrant_workspace_backfill_complete": bool,
 }
 
 # Keys in this set are encrypted at rest using Fernet derived from SECRET_KEY.

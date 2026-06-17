@@ -68,7 +68,9 @@ def test_release_workflow_signs_published_images() -> None:
     assert workflow["permissions"]["id-token"] == "write"
 
     image_steps = workflow["jobs"]["images"]["steps"]
-    assert any(step.get("uses", "").startswith("sigstore/cosign-installer@") for step in image_steps)
+    assert any(
+        step.get("uses", "").startswith("sigstore/cosign-installer@") for step in image_steps
+    )
     sign_step = next(step for step in image_steps if step.get("name") == "Sign published images")
 
     # Images must be signed by immutable digest, not the mutable tag.
@@ -90,11 +92,31 @@ def test_backend_dockerfile_pins_cpu_torch() -> None:
     assert "pip install --no-cache-dir --timeout 300 torch==2.11.0" in dockerfile
 
 
+def test_backend_dockerfile_uses_patched_release_base_and_build_tools() -> None:
+    dockerfile = (ROOT / "app" / "Dockerfile").read_text()
+
+    assert "FROM python:3.11-slim-bookworm" in dockerfile
+    assert "apt-get update && apt-get upgrade -y" in dockerfile
+    assert "pip==26.1.2" in dockerfile
+    assert "setuptools==81.0.0" in dockerfile
+    assert "wheel==0.46.2" in dockerfile
+    assert "jaraco.context==6.1.0" in dockerfile
+
+
+def test_frontend_dockerfile_upgrades_runtime_base_packages() -> None:
+    dockerfile = (ROOT / "frontend" / "Dockerfile").read_text()
+
+    assert "FROM nginx:alpine" in dockerfile
+    assert "RUN apk upgrade --no-cache" in dockerfile
+
+
 def test_release_workflow_audits_dependencies_with_only_documented_exception() -> None:
     workflow = yaml.safe_load((ROOT.parent / ".github" / "workflows" / "release.yml").read_text())
     gate_steps = workflow["jobs"]["gates"]["steps"]
 
-    install_step = next(step for step in gate_steps if step.get("name") == "Install Python dependencies")
+    install_step = next(
+        step for step in gate_steps if step.get("name") == "Install Python dependencies"
+    )
     assert "python -m pip install --upgrade pip==26.1.2" in install_step["run"]
 
     audit_step = next(step for step in gate_steps if step.get("name") == "Audit dependencies")
@@ -125,6 +147,7 @@ def test_release_workflow_attaches_license_reports_and_blocks_high_vulnerabiliti
     assert trivy_steps
     assert all(step["with"]["severity"] == "CRITICAL,HIGH" for step in trivy_steps)
     assert all(step["with"]["exit-code"] == "1" for step in trivy_steps)
+    assert all(step["with"]["ignore-unfixed"] is True for step in trivy_steps)
     assert all(step["with"]["trivyignores"] == ".trivyignore" for step in trivy_steps)
 
     release_step = next(

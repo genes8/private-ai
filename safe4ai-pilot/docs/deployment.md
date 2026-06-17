@@ -119,6 +119,12 @@ Current exception: `GHSA-rrmf-rvhw-rf47` is ignored in the release workflow by
 release in the audit feeds. Remove the exception from `.github/workflows/release.yml`
 and `.trivyignore` as soon as the scanners report a fixed version.
 
+Release image scans run Trivy with `ignore-unfixed: true`. This keeps the gate
+focused on high/critical vulnerabilities with an available package fix; unfixed,
+fix-deferred, or distribution-marked `will_not_fix` OS findings remain visible in
+the generated SARIF evidence but do not block a release until a fixed version is
+available.
+
 ## Air-gapped deployments
 
 Use `docs/air-gap-runbook.md` for mirrored image/model export, offline import,

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-12 — Fix SQLAlchemy text() bind-parameter parsing in startup migrations
+
+- Split `_ensure_document_version_schema()` into three phases (DDL → DML → FK)
+  so schema changes survive even if data migration fails
+- Use `exec_driver_sql()` for INSERT/UPDATE to avoid `text()` parsing `':v'`
+  inside string literals as bind parameter
+- Changed `':v'` separator to `'-v'` in `document_versions.id` construction
+- Frontend: widen vite proxy `/chat/stream` → `/chat` with `spaBypass`
+
 ## 2025-05-19 — Security Audit Fixes
 
 Full middleware security audit performed. 10 findings identified and fixed across 7 files.

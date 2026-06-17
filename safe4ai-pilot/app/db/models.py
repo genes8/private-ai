@@ -22,10 +22,22 @@ from app.db import Base
 # or creates this user must import this constant instead of copying the string.
 DELETED_USER_ID = "00000000-0000-0000-0000-000000000001"
 
+# Canonical ID for the default "General" workspace.  Single-workspace deployments
+# and pre-workspace data live here; backfill assigns legacy rows to it.  Every
+# file that references the default workspace must import this constant.
+DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000002"
+
 
 class UserRole(str, enum.Enum):
+    # Global org-admin: manages settings/users/tier and sees every workspace.
     admin = "admin"
     pilot_user = "pilot_user"
+
+
+class WorkspaceRole(str, enum.Enum):
+    # Authority WITHIN a single workspace (distinct from the global UserRole).
+    workspace_admin = "workspace_admin"
+    member = "member"
 
 
 class IngestionStatus(str, enum.Enum):
@@ -78,11 +90,62 @@ class User(Base):
     token_valid_after = Column(DateTime(timezone=True), nullable=True)
 
 
+class Workspace(Base):
+    """An intra-deployment boundary that segments documents and members.
+
+    The deployment is still single-tenant (one company per stack); workspaces
+    sub-divide that one company (e.g. Legal, Finance).  Retrieval, documents,
+    sessions and audit are scoped to a workspace.
+    """
+
+    __tablename__ = "workspaces"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    slug = Column(String, nullable=False, unique=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_by = Column(
+        String,
+        ForeignKey("users.id", ondelete="SET DEFAULT"),
+        nullable=False,
+        server_default=DELETED_USER_ID,
+    )
+
+
+class WorkspaceMembership(Base):
+    """Per-workspace authority for a user (distinct from the global UserRole)."""
+
+    __tablename__ = "workspace_memberships"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "user_id", name="uq_workspace_memberships_workspace_id_user_id"
+        ),
+    )
+
+    id = Column(String, primary_key=True)
+    workspace_id = Column(
+        String, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id = Column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role = Column(Enum(WorkspaceRole), nullable=False, default=WorkspaceRole.member)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(String, primary_key=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(
+        String,
+        ForeignKey("workspaces.id", ondelete="SET DEFAULT"),
+        nullable=False,
+        server_default=DEFAULT_WORKSPACE_ID,
+        index=True,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     state_json = Column(JSON, nullable=True)
@@ -105,6 +168,13 @@ class Document(Base):
         server_default=DELETED_USER_ID,
     )
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+    workspace_id = Column(
+        String,
+        ForeignKey("workspaces.id", ondelete="RESTRICT"),
+        nullable=False,
+        server_default=DEFAULT_WORKSPACE_ID,
+        index=True,
+    )
     doc_metadata = Column(JSON, nullable=True)
     ingestion_started_at = Column(DateTime(timezone=True), nullable=True)
     file_size_bytes = Column(Integer, nullable=True)
@@ -186,6 +256,13 @@ class SemanticCache(Base):
     __tablename__ = "semantic_cache"
 
     id = Column(String, primary_key=True)
+    workspace_id = Column(
+        String,
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        server_default=DEFAULT_WORKSPACE_ID,
+        index=True,
+    )
     query_embedding = Column(Vector(768), nullable=False)
     query_text = Column(Text, nullable=False)
     response_json = Column(JSON, nullable=False)
@@ -214,6 +291,7 @@ class AuditLog(Base):
 
     id = Column(String, primary_key=True)
     user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    workspace_id = Column(String, nullable=True, index=True)
     session_id = Column(String, nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     action_type = Column(String, nullable=False)
@@ -229,6 +307,7 @@ class AgentRun(Base):
 
     id = Column(String, primary_key=True)
     session_id = Column(String, nullable=False, index=True)
+    workspace_id = Column(String, nullable=True, index=True)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     finished_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(String, nullable=False)
@@ -243,6 +322,7 @@ class QueryFeedback(Base):
     id = Column(String, primary_key=True)
     trace_id = Column(String, nullable=False, index=True)
     session_id = Column(String, nullable=False)
+    workspace_id = Column(String, nullable=True, index=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     rating = Column(Enum(FeedbackRating), nullable=False)
     comment = Column(Text, nullable=True)
@@ -270,6 +350,7 @@ class HumanReviewQueue(Base):
 
     id = Column(String, primary_key=True)
     session_id = Column(String, nullable=False)
+    workspace_id = Column(String, nullable=True, index=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     query = Column(Text, nullable=False)
     draft_answer = Column(Text, nullable=True)

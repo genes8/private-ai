@@ -96,6 +96,9 @@ def mock_db_with_admin(admin: User) -> Any:
     paged.all.return_value = []
     db.query.return_value.scalar.return_value = None
     db.query.return_value.filter.return_value.scalar.return_value = None
+    # Workspace-scoped count queries (corpus-stats): double-filter and join+filter.
+    db.query.return_value.filter.return_value.filter.return_value.scalar.return_value = None
+    db.query.return_value.join.return_value.filter.return_value.scalar.return_value = None
     return db
 
 

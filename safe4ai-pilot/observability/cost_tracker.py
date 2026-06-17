@@ -59,10 +59,18 @@ class CostTracker:
         )
         return run_id
 
-    def get_stats(self, db: Session, user_id: str | None = None, days: int = 30) -> dict[str, Any]:
+    def get_stats(
+        self,
+        db: Session,
+        user_id: str | None = None,
+        days: int = 30,
+        workspace_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Return aggregate cost stats over the last `days` days.
 
         If user_id is provided, only runs for sessions owned by that user are included.
+        If workspace_ids is provided, only runs in those workspaces are included
+        (cost is filtered by AgentRun.workspace_id — the row's own column).
         Returns:
             {
                 "total_cost_usd": float,
@@ -79,11 +87,18 @@ class CostTracker:
             from app.db.models import Session as DBSession
             join_clause = (AgentRun.session_id == DBSession.id, DBSession.user_id == user_id)
 
+        def _scope(stmt: Any) -> Any:
+            if workspace_ids is not None:
+                stmt = stmt.where(AgentRun.workspace_id.in_(workspace_ids))
+            return stmt
+
         # Total cost & count via SQL aggregation (no Python-side loading)
-        agg_stmt = select(
-            func.coalesce(func.sum(AgentRun.cost_usd), 0.0),
-            func.count(AgentRun.id),
-        ).where(base_filter)
+        agg_stmt = _scope(
+            select(
+                func.coalesce(func.sum(AgentRun.cost_usd), 0.0),
+                func.count(AgentRun.id),
+            ).where(base_filter)
+        )
         if join_clause:
             agg_stmt = agg_stmt.join(join_clause[0].clause).where(join_clause[1])
         total_cost, runs_count = db.execute(agg_stmt).one()
@@ -91,11 +106,13 @@ class CostTracker:
         runs_count = int(runs_count) if runs_count else 0
 
         # Per-day breakdown via SQL aggregation
-        day_stmt = select(
-            func.date(AgentRun.started_at).label("day"),
-            func.coalesce(func.sum(AgentRun.cost_usd), 0.0).label("day_cost"),
-            func.count(AgentRun.id).label("day_runs"),
-        ).where(base_filter).group_by(func.date(AgentRun.started_at)).order_by("day")
+        day_stmt = _scope(
+            select(
+                func.date(AgentRun.started_at).label("day"),
+                func.coalesce(func.sum(AgentRun.cost_usd), 0.0).label("day_cost"),
+                func.count(AgentRun.id).label("day_runs"),
+            ).where(base_filter)
+        ).group_by(func.date(AgentRun.started_at)).order_by("day")
         if join_clause:
             day_stmt = day_stmt.join(join_clause[0].clause).where(join_clause[1])
 

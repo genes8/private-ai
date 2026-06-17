@@ -23,3 +23,9 @@ data/processed/
 evaluation/eval_results/
 HF_HOME/
 node_modules/
+
+# Local agent guidance files (root only; safe4ai-pilot/CLAUDE.md is tracked)
+/CLAUDE.md
+
+# Auto-generated repo wikis (.qoder, etc.)
+.qoder/

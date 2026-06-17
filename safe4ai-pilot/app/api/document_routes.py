@@ -13,7 +13,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Query, Session
 
-from app.auth.middleware import get_current_user, require_role
+from app.auth.middleware import (
+    get_active_workspace_id,
+    get_current_user,
+    require_role,
+    require_workspace_admin,
+)
 from app.auth.router import limiter
 from app.config import settings
 from app.db import get_db
@@ -50,6 +55,23 @@ _INGESTION_TASK_SEMAPHORE = asyncio.Semaphore(_MAX_BACKGROUND_INGESTION_TASKS)
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _authorize_doc(db: Session, user: User, doc_id: str) -> Document:
+    """Load a document the user may administer, else 404.
+
+    A document is administrable by an org-admin or by a workspace_admin of the
+    document's workspace. Foreign documents return 404 (not 403) so they are
+    indistinguishable from non-existent ones (avoids IDOR enumeration).
+    """
+    from app.services import workspace_service
+
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not workspace_service.is_workspace_admin(db, user, str(doc.workspace_id)):
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
 
 
 async def _run_ingestion_task(
@@ -213,9 +235,10 @@ async def upload_document(
     request: Request,
     file: UploadFile,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    auth: tuple[User, str] = Depends(require_workspace_admin),
 ) -> dict[str, str]:
-    """Upload a document and trigger background ingestion."""
+    """Upload a document into the active workspace and trigger ingestion."""
+    current_user, workspace_id = auth
     file_bytes = await _read_upload_with_limit(file)
     validator = UploadValidator()
     result = validator.validate(
@@ -246,6 +269,7 @@ async def upload_document(
         file_type=suffix.lstrip("."),
         ingestion_status=IngestionStatus.queued,
         uploaded_by=current_user.id,
+        workspace_id=workspace_id,
         file_size_bytes=len(file_bytes),
         title=file.filename or storage_name,
     )
@@ -298,10 +322,14 @@ async def upload_document(
 def get_corpus_stats_route(
     request: Request,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    workspace_id: str = Depends(get_active_workspace_id),
 ) -> dict[str, int]:
-    """Lightweight document and chunk counts for the chat page empty state."""
-    return get_corpus_stats(db)
+    """Document/chunk counts for the chat empty state, scoped to the active workspace.
+
+    Member-facing (not admin-only): any member of the active workspace sees the
+    counts for that workspace.
+    """
+    return get_corpus_stats(db, workspace_ids=[workspace_id])
 
 
 @router.get("/admin/documents")
@@ -309,9 +337,14 @@ def get_corpus_stats_route(
 def list_documents(
     request: Request,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """List all documents with their ingestion status."""
+    """List documents in the workspaces the caller administers (org-admin: all)."""
+    from app.services import workspace_service
+
+    admin_workspace_ids = workspace_service.list_admin_workspace_ids_for_user(db, current_user)
+    if not admin_workspace_ids:
+        return []
     chunk_count_sq = (
         db.query(DocumentChunk.document_id, func.count(DocumentChunk.id).label("cnt"))
         .group_by(DocumentChunk.document_id)
@@ -321,6 +354,7 @@ def list_documents(
         db.query(Document, func.coalesce(chunk_count_sq.c.cnt, 0).label("chunk_count"), User.email)
         .outerjoin(chunk_count_sq, Document.id == chunk_count_sq.c.document_id)
         .outerjoin(User, Document.uploaded_by == User.id)
+        .filter(Document.workspace_id.in_(admin_workspace_ids))
         .order_by(Document.uploaded_at.desc())
         .all()
     )
@@ -352,12 +386,10 @@ def get_document_status(
     request: Request,
     doc_id: str,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Poll ingestion progress for a specific document."""
-    doc = db.get(Document, doc_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = _authorize_doc(db, current_user, doc_id)
     job = (
         db.query(IngestionJob)
         .filter(IngestionJob.document_id == doc_id)
@@ -381,7 +413,7 @@ def inspect_document(
     doc_id: str,
     chunk_limit: int = 10,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """One-call document inspector: metadata, chunk sample, and job history.
 
@@ -389,9 +421,7 @@ def inspect_document(
     """
     if chunk_limit < 1 or chunk_limit > 50:
         raise HTTPException(status_code=422, detail="chunk_limit must be between 1 and 50")
-    doc = db.get(Document, doc_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = _authorize_doc(db, current_user, doc_id)
 
     active_version = _document_active_version(db, doc)
     uploader = db.get(User, doc.uploaded_by) if doc.uploaded_by else None
@@ -459,12 +489,10 @@ def list_document_versions(
     request: Request,
     doc_id: str,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Read-only version history for a logical document."""
-    doc = db.get(Document, doc_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = _authorize_doc(db, current_user, doc_id)
 
     versions = (
         db.query(DocumentVersion)
@@ -484,12 +512,10 @@ def delete_document(
     request: Request,
     doc_id: str,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> None:
     """Delete a document from filesystem, vector store, DB, and semantic cache."""
-    doc = db.get(Document, doc_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = _authorize_doc(db, current_user, doc_id)
     try:
         # Check for an active ingestion job BEFORE cancelling anything, so a
         # rejected delete (409) never leaves the ingestion half-cancelled.
@@ -541,14 +567,21 @@ async def reindex_document(
     doc_id: str,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    """Re-trigger ingestion for an existing document."""
+    """Re-trigger ingestion for an existing document.
+
+    Recovery-only. This path deletes the document's vectors before re-ingesting,
+    so it is NOT atomic — there is a window where the document is unsearchable, and
+    a mid-reindex failure leaves no rollback. For routine document updates use the
+    staged ``/admin/documents/{doc_id}/upload-new-version`` endpoint, which ingests
+    the new version before flipping ``active_version`` and keeps a rollback window.
+    Reach for ``reindex`` only when a document's index is stuck/corrupt and must be
+    rebuilt from the stored raw file.
+    """
     from datetime import UTC, datetime
 
-    doc = db.get(Document, doc_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = _authorize_doc(db, current_user, doc_id)
     active_version = _document_active_version(db, doc)
 
     raw_path = _RAW_DIR / (
@@ -639,7 +672,7 @@ async def upload_new_version(
     doc_id: str,
     file: UploadFile,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Replace a document's content without a retrieval gap.
 
@@ -648,9 +681,7 @@ async def upload_new_version(
     switch to the new version (see run_ingestion). Old vectors stay in Qdrant
     as superseded for a rollback window until the cleanup job prunes them.
     """
-    doc = db.get(Document, doc_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = _authorize_doc(db, current_user, doc_id)
 
     file_bytes = await _read_upload_with_limit(file)
     validator = UploadValidator()
@@ -765,6 +796,12 @@ def verify_deletion(
     Counts remnants across Qdrant, DB chunk/job rows, semantic cache, and the
     in-memory BM25 index. ``clean`` is true only when every count is zero.
     Returns 409 while the document still exists (deletion not performed yet).
+
+    NOTE: this endpoint is intentionally **org-admin only** (not workspace-scoped).
+    It runs *after* the document row — and therefore its workspace_id — is gone,
+    so there is no workspace to authorize against; it returns only remnant counts
+    (no document content). Workspace-admins delete within their workspace; the
+    post-deletion verification is an org-admin audit function.
     """
     if db.get(Document, doc_id) is not None:
         raise HTTPException(status_code=409, detail="Document still exists; delete it first")

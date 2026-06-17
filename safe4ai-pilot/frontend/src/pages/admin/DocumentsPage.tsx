@@ -285,10 +285,11 @@ export default function DocumentsPage() {
                 type="button"
                 onClick={() => reindex(selectedDoc.id)}
                 disabled={isReindexing}
+                title="Recovery only — rebuilds the index from the stored file. Use 'New version' for routine updates."
                 className="flex-1 h-[26px] px-[9px] text-[12px] font-medium text-text-2 border border-line bg-surface rounded-[5px] hover:bg-surface-2 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isReindexing && <Loader2 size={11} className="animate-spin shrink-0" />}
-                {isReindexing ? "Working…" : "Reindex"}
+                {isReindexing ? "Working…" : "Reindex (recovery)"}
               </button>
               <button
                 type="button"

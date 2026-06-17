@@ -13,13 +13,23 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.audit.kinds import AUDIT_KINDS, classify_action_type
-from app.auth.middleware import require_role
+from app.auth.middleware import get_current_user, require_role
 from app.auth.router import limiter
 from app.db import get_db
-from app.db.models import AgentRun, AuditLog, SemanticCacheHit, User
+from app.db.models import AgentRun, AuditLog, SemanticCache, SemanticCacheHit, User
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["admin"])
+
+
+def _resolve_audit_scope(db: Session, user: User) -> list[str] | None:
+    """Workspace scope for admin audit/stats views (org-admin ⇒ None ⇒ unrestricted)."""
+    from app.services import workspace_service
+
+    try:
+        return workspace_service.admin_workspace_scope(db, user)
+    except workspace_service.WorkspaceAccessDenied:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _apply_audit_filters(
@@ -27,6 +37,7 @@ def _apply_audit_filters(
     start: datetime | None,
     end: datetime | None,
     user_id: str | None,
+    workspace_ids: list[str] | None = None,
 ) -> Any:
     if start:
         q = q.filter(AuditLog.timestamp >= start)
@@ -34,6 +45,8 @@ def _apply_audit_filters(
         q = q.filter(AuditLog.timestamp <= end)
     if user_id:
         q = q.filter(AuditLog.user_id == user_id)
+    if workspace_ids is not None:
+        q = q.filter(AuditLog.workspace_id.in_(workspace_ids))
     return q
 
 
@@ -43,6 +56,7 @@ def _action_types_for_kind(
     start: datetime | None,
     end: datetime | None,
     user_id: str | None,
+    workspace_ids: list[str] | None = None,
 ) -> list[str]:
     """Resolve a UI kind to the raw action_type values present in range.
 
@@ -50,7 +64,7 @@ def _action_types_for_kind(
     distinct action types observed in the range that classify to *kind*.
     """
     distinct_q = _apply_audit_filters(
-        db.query(AuditLog.action_type).distinct(), start, end, user_id
+        db.query(AuditLog.action_type).distinct(), start, end, user_id, workspace_ids
     )
     return [t for (t,) in distinct_q.all() if classify_action_type(t) == kind]
 
@@ -66,7 +80,7 @@ def list_audit_logs(
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     if limit < 1:
         raise HTTPException(status_code=422, detail="limit must be positive")
@@ -74,14 +88,15 @@ def list_audit_logs(
         raise HTTPException(status_code=422, detail="offset cannot be negative")
     if kind is not None and kind not in AUDIT_KINDS:
         raise HTTPException(status_code=422, detail=f"kind must be one of {', '.join(AUDIT_KINDS)}")
+    scope = _resolve_audit_scope(db, current_user)
     q = (
         db.query(AuditLog, User.email)
         .outerjoin(User, AuditLog.user_id == User.id)
         .order_by(AuditLog.timestamp.desc())
     )
-    q = _apply_audit_filters(q, start, end, user_id)
+    q = _apply_audit_filters(q, start, end, user_id, scope)
     if kind is not None:
-        matching_types = _action_types_for_kind(db, kind, start, end, user_id)
+        matching_types = _action_types_for_kind(db, kind, start, end, user_id, scope)
         if not matching_types:
             return []
         q = q.filter(AuditLog.action_type.in_(matching_types))
@@ -119,11 +134,12 @@ def audit_kind_counts(
     end: datetime | None = None,
     user_id: str | None = None,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Event counts per UI kind for the given range — drives the sidebar badges."""
+    scope = _resolve_audit_scope(db, current_user)
     grouped_q = _apply_audit_filters(
-        db.query(AuditLog.action_type, func.count(AuditLog.id)), start, end, user_id
+        db.query(AuditLog.action_type, func.count(AuditLog.id)), start, end, user_id, scope
     ).group_by(AuditLog.action_type)
     counts: dict[str, int] = {k: 0 for k in AUDIT_KINDS}
     total = 0
@@ -140,10 +156,11 @@ def export_audit_logs_csv(
     start: datetime | None = None,
     end: datetime | None = None,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    scope = _resolve_audit_scope(db, current_user)
     q = _apply_audit_filters(
-        db.query(AuditLog).order_by(AuditLog.timestamp.asc()), start, end, None
+        db.query(AuditLog).order_by(AuditLog.timestamp.asc()), start, end, None, scope
     )
     row_stream = q.limit(50_000).yield_per(500)
     fieldnames = [
@@ -192,38 +209,69 @@ def export_audit_logs_csv(
     )
 
 
+@router.get("/admin/workspace-backfill-status")
+@limiter.limit("100/minute")
+def workspace_backfill_status(
+    request: Request,
+    _admin: User = Depends(require_role("admin")),
+) -> dict[str, bool]:
+    """Operator readiness signal for the Qdrant workspace_id backfill.
+
+    While ``complete`` is False, legacy documents are intentionally unsearchable
+    (fail-closed retrieval); the admin UI surfaces a banner. Authenticated and
+    admin-only so it never affects the public liveness probe.
+    """
+    from app.services.workspace_backfill import is_workspace_backfill_complete
+
+    return {"complete": is_workspace_backfill_complete()}
+
+
 @router.get("/admin/stats")
 @limiter.limit("100/minute")
 def get_stats(
     request: Request,
     days: int = 30,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Aggregate pilot stats: queries, latency, fallback rate, cache hit rate."""
     if days < 1 or days > 366:
         raise HTTPException(status_code=422, detail="days must be between 1 and 366")
     cutoff = datetime.now(UTC) - timedelta(days=days)
+    scope = _resolve_audit_scope(db, current_user)
+
+    def _audit(q: Any) -> Any:
+        return q.filter(AuditLog.workspace_id.in_(scope)) if scope is not None else q
+
+    def _agent(q: Any) -> Any:
+        return q.filter(AgentRun.workspace_id.in_(scope)) if scope is not None else q
 
     total_queries = (
-        db.query(func.count(AuditLog.id)).filter(AuditLog.timestamp >= cutoff).scalar() or 0
-    )
-    avg_latency = (
-        db.query(func.avg(AuditLog.latency_ms)).filter(AuditLog.timestamp >= cutoff).scalar()
-    )
-    total_cost = (
-        db.query(func.sum(AgentRun.cost_usd)).filter(AgentRun.started_at >= cutoff).scalar() or 0.0
-    )
-    cache_hits = (
-        db.query(func.count(SemanticCacheHit.id))
-        .filter(SemanticCacheHit.created_at >= cutoff)
-        .scalar()
+        _audit(db.query(func.count(AuditLog.id)).filter(AuditLog.timestamp >= cutoff)).scalar()
         or 0
     )
+    avg_latency = _audit(
+        db.query(func.avg(AuditLog.latency_ms)).filter(AuditLog.timestamp >= cutoff)
+    ).scalar()
+    total_cost = (
+        _agent(db.query(func.sum(AgentRun.cost_usd)).filter(AgentRun.started_at >= cutoff)).scalar()
+        or 0.0
+    )
+    # Cache hits are scoped via their parent SemanticCache.workspace_id.
+    cache_hits_q = db.query(func.count(SemanticCacheHit.id)).filter(
+        SemanticCacheHit.created_at >= cutoff
+    )
+    if scope is not None:
+        cache_hits_q = cache_hits_q.join(
+            SemanticCache, SemanticCache.id == SemanticCacheHit.cache_id
+        ).filter(SemanticCache.workspace_id.in_(scope))
+    cache_hits = cache_hits_q.scalar() or 0
     unique_users = (
-        db.query(func.count(func.distinct(AuditLog.user_id)))
-        .filter(AuditLog.timestamp >= cutoff, AuditLog.user_id.isnot(None))
-        .scalar()
+        _audit(
+            db.query(func.count(func.distinct(AuditLog.user_id))).filter(
+                AuditLog.timestamp >= cutoff, AuditLog.user_id.isnot(None)
+            )
+        ).scalar()
         or 0
     )
 
@@ -244,7 +292,7 @@ def get_stats_timeseries(
     request: Request,
     days: int = 14,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Daily query/user/cost buckets for the last *days* days, zero-filled.
 
@@ -252,11 +300,12 @@ def get_stats_timeseries(
     """
     if days < 1 or days > 90:
         raise HTTPException(status_code=422, detail="days must be between 1 and 90")
+    scope = _resolve_audit_scope(db, current_user)
     today = datetime.now(UTC).date()
     first_day = today - timedelta(days=days - 1)
     cutoff = datetime(first_day.year, first_day.month, first_day.day, tzinfo=UTC)
 
-    audit_rows = (
+    audit_q = (
         db.query(
             func.date(AuditLog.timestamp),
             func.count(AuditLog.id),
@@ -264,14 +313,18 @@ def get_stats_timeseries(
         )
         .filter(AuditLog.timestamp >= cutoff)
         .group_by(func.date(AuditLog.timestamp))
-        .all()
     )
-    cost_rows = (
+    if scope is not None:
+        audit_q = audit_q.filter(AuditLog.workspace_id.in_(scope))
+    audit_rows = audit_q.all()
+    cost_q = (
         db.query(func.date(AgentRun.started_at), func.sum(AgentRun.cost_usd))
         .filter(AgentRun.started_at >= cutoff)
         .group_by(func.date(AgentRun.started_at))
-        .all()
     )
+    if scope is not None:
+        cost_q = cost_q.filter(AgentRun.workspace_id.in_(scope))
+    cost_rows = cost_q.all()
 
     def _day_key(value: Any) -> str:
         # func.date() yields date objects on Postgres and strings on SQLite.
