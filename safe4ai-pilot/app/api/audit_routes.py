@@ -23,20 +23,13 @@ router = APIRouter(tags=["admin"])
 
 
 def _resolve_audit_scope(db: Session, user: User) -> list[str] | None:
-    """Workspace scope for admin audit/stats views.
-
-    Org-admins are unrestricted (``None`` — they also see system rows whose
-    workspace_id is NULL). Workspace-admins are scoped to the workspaces they
-    administer. A user who administers no workspace is not an admin here (403).
-    """
+    """Workspace scope for admin audit/stats views (org-admin ⇒ None ⇒ unrestricted)."""
     from app.services import workspace_service
 
-    if workspace_service.is_org_admin(user):
-        return None
-    admin_ids = workspace_service.list_admin_workspace_ids_for_user(db, user)
-    if not admin_ids:
+    try:
+        return workspace_service.admin_workspace_scope(db, user)
+    except workspace_service.WorkspaceAccessDenied:
         raise HTTPException(status_code=403, detail="Forbidden")
-    return admin_ids
 
 
 def _apply_audit_filters(
